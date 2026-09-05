@@ -261,12 +261,18 @@ describe("the header", () => {
     const headerHeight = (await page.locator("header").boundingBox())?.height ?? 0;
     expect(headerHeight).toBeGreaterThan(54);
 
-    const resting = (await page.locator("thead th").first().boundingBox())?.y ?? 0;
+    // The first *visible* header cell, not the first one in the markup: which columns
+    // the feed shows depends on how wide the panel is, and this test is about sticky
+    // positioning rather than about the column ladder. Selecting `th` blindly made it
+    // fail the moment a threshold moved, reporting a broken header when the truth was
+    // that the Time column had been dropped and had no box to measure.
+    const heading = page.locator("thead th:visible").first();
+    const resting = (await heading.boundingBox())?.y ?? 0;
     expect(resting).toBeGreaterThan(headerHeight);
 
     await page.evaluate(() => scrollTo(0, 600));
     await page.waitForTimeout(120);
-    const stuck = (await page.locator("thead th").first().boundingBox())?.y ?? 0;
+    const stuck = (await heading.boundingBox())?.y ?? 0;
     // Pinned exactly under the header — not at 0, where the header would cover it,
     // and not scrolled away with the rows.
     expect(stuck).toBeCloseTo(headerHeight, 0);
@@ -338,9 +344,26 @@ describe("the page at any width", () => {
       const measured = await page.evaluate(() => {
         const wrap = document.querySelector(".feed-scroll") as HTMLElement;
         const table = wrap.querySelector("table") as HTMLElement;
-        return { fits: table.scrollWidth <= wrap.clientWidth, scrolls: getComputedStyle(wrap).overflowX === "auto" };
+        // The table stretches to fill, so its rendered width says nothing about what it
+        // needs. Ask for the floor directly: below this, a column gets amputated.
+        table.style.width = "min-content";
+        const floor = table.scrollWidth;
+        table.style.width = "";
+        return { floor, room: wrap.clientWidth, scrolls: getComputedStyle(wrap).overflowX === "auto" };
       });
-      expect(measured.fits || measured.scrolls, `at ${width}px the table is clipped`).toBe(true);
+      expect(measured.floor <= measured.room || measured.scrolls, `at ${width}px the table is clipped`).toBe(true);
+
+      /*
+       * And it has to fit with something to spare. This assertion is the one that
+       * matters, because the version without it passed on this machine by nine pixels
+       * and failed on a CI runner whose default face is wider: the columns are sized in
+       * glyphs, so a layout that fits exactly here fits nowhere else. Anything under
+       * this margin is tuned to one font rather than laid out.
+       */
+      if (!measured.scrolls) {
+        const slack = measured.room - measured.floor;
+        expect(slack, `at ${width}px the table fits by only ${slack}px — too close to be true of any font but this one`).toBeGreaterThanOrEqual(16);
+      }
       await page.close();
     }
   });

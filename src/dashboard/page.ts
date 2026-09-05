@@ -341,16 +341,31 @@ main { padding: 18px 20px 64px; max-width: 1680px; margin: 0 auto; }
    The scrollbar is deliberately last and deliberately not permanent: a scroll container
    is the containing block for anything sticky inside it, so the moment it turns on, the
    column headers stop tracking the viewport. A fair trade on a phone and a bad one on a
-   desktop. */
+   desktop.
+
+   The thresholds are in **ch**, and that is the second half of the same lesson. They
+   used to be pixels, which quietly assumed a font: what six columns of request text
+   actually need is set by the width of a glyph — the User-Agent below is capped in ch —
+   and a hard pixel breakpoint is only correct for the font it was measured on. On this
+   machine the six columns needed 951px and the breakpoint sat at 960px, so it passed by
+   nine pixels; on a CI runner with a wider default face the same six columns needed more
+   than the panel had, the query did not fire, and the right-hand columns were clipped on
+   an ordinary 1600px desktop. The five-column rung was already over its own floor by
+   8px and nobody had noticed, because nothing measures a layout that merely looks fine.
+
+   In ch, both sides move together: a wider face makes the content wider and makes the
+   threshold wider by the same proportion. The floors, measured, are 119ch / 111ch /
+   100ch, and each rung sits about 7% above its own floor so that the arithmetic does not
+   have to be exact. */
 .feed-panel { container: feed / inline-size; }
 
-@container feed (max-width: 960px) {
+@container feed (max-width: 128ch) {
   thead th:nth-child(6), tbody td:nth-child(6) { display: none; }
 }
-@container feed (max-width: 880px) {
+@container feed (max-width: 119ch) {
   thead th:nth-child(1), tbody td.when { display: none; }
 }
-@container feed (max-width: 800px) {
+@container feed (max-width: 107ch) {
   .feed-scroll { overflow-x: auto; }
 }
 @media (max-width: 700px) {
