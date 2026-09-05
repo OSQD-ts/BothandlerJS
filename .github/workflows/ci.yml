@@ -1,0 +1,161 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# Least privilege: this workflow only builds and tests, so the token it hands to
+# every step needs nothing beyond reading the checkout.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    name: node ${{ matrix.node }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      # First, and deliberately so: `pretest`, `pretypecheck` and `prebuild` all
+      # regenerate the dashboard's client bundle, so any later step would quietly
+      # repair a stale commit instead of failing on it.
+      - name: The committed dashboard client bundle is current
+        run: npm run client:check
+      - name: Lint
+        run: npm run lint
+      - name: Check documentation links
+        run: npm run docs:check
+      - name: Type-check (src + tests + examples + scripts)
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Verify build output
+        run: |
+          test -f dist/index.js && test -f dist/index.cjs && test -f dist/index.d.ts
+          test -f dist/adapters/index.js && test -f dist/client/index.js
+          test -f dist/cli.js && test -f dist/cli.d.ts
+          ! ls dist | grep -q '\.test\.'
+
+      # The CLI is a published entry point, so a broken launcher is a broken release.
+      - name: Smoke-test the CLI
+        run: |
+          node bin/bothandlerjs.mjs --version
+          node bin/bothandlerjs.mjs detectors | grep -q self-identified
+          node bin/bothandlerjs.mjs robots --preset protect-data | grep -q 'User-agent: GPTBot'
+          printf '%s\n' '1.2.3.4 - - [30/Aug/2026:09:00:00 +0000] "GET / HTTP/1.1" 200 1 "-" "curl/8.4.0"' > /tmp/access.log
+          node bin/bothandlerjs.mjs replay /tmp/access.log --json | grep -q '"confirmed-bot"'
+
+  # What `npm install bothandlerjs` actually does to somebody else's project.
+  # Split out because it is a property of the package rather than of the code, and
+  # because it is the check that would have caught a build tool declared as a runtime
+  # dependency — 123 of them, once.
+  package:
+    runs-on: ubuntu-latest
+    name: package
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: This library depends on nothing
+        run: |
+          count=$(node -p "Object.keys(require('./package.json').dependencies ?? {}).length")
+          echo "declared runtime dependencies: $count"
+          test "$count" -eq 0
+
+      # A dependency-free package cannot inherit an advisory. If this ever fails, it
+      # is because something became a runtime dependency without anyone deciding to.
+      - name: No advisories reach a consumer
+        run: npm audit --omit=dev --audit-level=low
+
+      # Anchored to the start of an import or export statement rather than looking for
+      # the word "from" anywhere, which finds it inside the prose in a string literal.
+      #
+      # Restricted to source files for the same reason. `src/corpus/README.md` documents
+      # the published entry point with `import { runCorpus } from "bothandlerjs/corpus"`,
+      # which is exactly right in prose and is not an import anything executes — an
+      # unfiltered walk of `src` reads it as the package importing itself.
+      - name: "Nothing but node: and relative paths are imported at runtime"
+        run: |
+          if grep -rhoE --include="*.ts" --include="*.mts" --include="*.cts" \
+            --include="*.js" --include="*.mjs" --include="*.cjs" \
+            "^\s*(import|export)[^'\"]*from ['\"][^'\"]+['\"]" src bin \
+            | grep -oE "['\"][^'\"]+['\"]$" | tr -d "\"'" \
+            | grep -vE '^(node:|\.)' | sort -u | grep .; then
+            echo "::error::the above are imported at runtime but are neither node: builtins nor local files"
+            exit 1
+          fi
+
+      - name: Pack, and stay small
+        run: |
+          npm pack --silent
+          size=$(stat -c%s bothandlerjs-*.tgz)
+          echo "tarball: $size bytes"
+          test "$size" -lt 4000000
+
+  # The dashboard's client is a real module now, so the pure half of it — the search,
+  # the outcome classification, the rule drafting — is unit tested in `npm test`. The
+  # rest is DOM work whose job is to behave under a keyboard, a scroll and a narrow
+  # viewport, and none of that can be checked by calling a function. This job installs
+  # a browser and drives the real page.
+  browser:
+    runs-on: ubuntu-latest
+    name: browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Test the dashboard in a browser
+        run: npm run test:browser
+
+  # A coverage ratchet without a performance one leaves the hot path unguarded, and the
+  # hot path is the code every user of this library runs on every request. The budgets
+  # are ratios against a reference loop measured in the same process, so they mean the
+  # same thing on a laptop and on whatever hardware this runner happens to be today.
+  performance:
+    runs-on: ubuntu-latest
+    name: performance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: The hot path is within budget
+        run: npm run bench:guard
+
+  coverage:
+    runs-on: ubuntu-latest
+    name: coverage
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Thresholds are a ratchet, not a target: they sit just under where the suite
+      # stands, so a change that tests less than the code it replaces has to say so.
+      # Raise them when the number rises; never lower them to make a build pass.
+      - name: Test with coverage
+        run: npm run test:coverage

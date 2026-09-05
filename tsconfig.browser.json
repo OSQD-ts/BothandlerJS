@@ -1,0 +1,17 @@
+{
+  // The browser suite only. Its `page.evaluate` callbacks are serialised and run
+  // inside Chromium, so they legitimately speak DOM — but the library targets Node,
+  // and adding `dom` to the main project would let a stray `document` in `src/` pass
+  // a type-check and fail at run time. One extra project is cheaper than that.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "rootDir": ".",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["tests/browser/**/*", "src/**/*"],
+  "exclude": ["dist", "node_modules"]
+}

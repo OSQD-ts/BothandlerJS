@@ -1,0 +1,142 @@
+{
+  "name": "bothandlerjs",
+  "version": "0.2.0",
+  "description": "Bot traffic detection and handling for TypeScript \u2014 evidence-tiered detection that separates proof from suspicion, so blocking never rests on a guess.",
+  "keywords": [
+    "bot-detection",
+    "bot-management",
+    "crawler",
+    "scraper",
+    "anti-bot",
+    "user-agent",
+    "rate-limit",
+    "security",
+    "middleware",
+    "typescript"
+  ],
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OSQD-ts/BothandlerJS.git"
+  },
+  "homepage": "https://github.com/OSQD-ts/BothandlerJS#readme",
+  "bugs": {
+    "url": "https://github.com/OSQD-ts/BothandlerJS/issues"
+  },
+  "author": "Micha\u0142 P\u0142atosz <platosz.michal@gmail.com>",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./adapters": {
+      "types": "./dist/adapters/index.d.ts",
+      "import": "./dist/adapters/index.js",
+      "require": "./dist/adapters/index.cjs"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js",
+      "require": "./dist/client/index.cjs"
+    },
+    "./package.json": "./package.json",
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js",
+      "require": "./dist/cli.cjs"
+    },
+    "./corpus": {
+      "types": "./dist/corpus/index.d.ts",
+      "import": "./dist/corpus/index.js",
+      "require": "./dist/corpus/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "bothandlerjs": "bin/bothandlerjs.mjs"
+  },
+  "directories": {
+    "example": "examples",
+    "test": "tests"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup && tsc --emitDeclarationOnly",
+    "build:watch": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "lint": "biome check .",
+    "docs:check": "node scripts/check-links.mjs",
+    "format": "biome check --write .",
+    "demo": "tsx demo/server.ts",
+    "demo:roles": "tsx demo/roles.ts",
+    "simulate": "tsx scripts/simulate.ts",
+    "simulate:corpus": "tsx scripts/simulate.ts --corpus",
+    "simulate:corpus:human": "tsx scripts/simulate.ts --corpus --audience human",
+    "simulate:list": "tsx scripts/simulate.ts --list",
+    "simulate:human": "tsx scripts/simulate.ts human",
+    "simulate:curl": "tsx scripts/simulate.ts curl",
+    "simulate:python": "tsx scripts/simulate.ts python",
+    "simulate:go": "tsx scripts/simulate.ts go",
+    "simulate:scanner": "tsx scripts/simulate.ts scanner",
+    "simulate:headless": "tsx scripts/simulate.ts headless",
+    "simulate:spoofed-browser": "tsx scripts/simulate.ts spoofed-browser",
+    "simulate:platform-mismatch": "tsx scripts/simulate.ts platform-mismatch",
+    "simulate:fake-googlebot": "tsx scripts/simulate.ts fake-googlebot",
+    "simulate:verified-crawler": "tsx scripts/simulate.ts verified-crawler",
+    "simulate:declared-crawler": "tsx scripts/simulate.ts declared-crawler",
+    "simulate:trap": "tsx scripts/simulate.ts trap",
+    "simulate:trap-field": "tsx scripts/simulate.ts trap-field",
+    "simulate:scraper": "tsx scripts/simulate.ts scraper",
+    "simulate:metronome": "tsx scripts/simulate.ts metronome",
+    "simulate:burst": "tsx scripts/simulate.ts burst",
+    "simulate:credential-stuffing": "tsx scripts/simulate.ts credential-stuffing",
+    "simulate:no-user-agent": "tsx scripts/simulate.ts no-user-agent",
+    "typecheck": "tsc -p tsconfig.typecheck.json && tsc -p tsconfig.browser.json",
+    "bench": "tsx --expose-gc scripts/bench.ts",
+    "corpus": "tsx scripts/corpus.ts",
+    "example": "tsx examples/express-basic.ts",
+    "example:fetch": "tsx examples/fetch-worker.ts",
+    "example:notify": "tsx examples/notifications.ts",
+    "prepublishOnly": "npm run build",
+    "prepack": "npm run build",
+    "client:build": "node scripts/build-client.mjs",
+    "client:check": "node scripts/build-client.mjs --check",
+    "prebuild": "npm run client:build",
+    "pretest": "npm run client:build",
+    "pretypecheck": "npm run client:build",
+    "pretest:browser": "npm run client:build",
+    "bench:guard": "tsx scripts/bench-guard.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.3.0",
+    "@vitest/coverage-v8": "^4.1.11",
+    "axe-core": "^4.13.0",
+    "esbuild": "^0.27.7",
+    "express": "^5.2.1",
+    "playwright": "^1.62.1",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "module": "./dist/index.js",
+  "sideEffects": false
+}
