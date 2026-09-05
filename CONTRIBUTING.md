@@ -120,3 +120,40 @@ there and say why in the commit.
 New behaviour needs a test. Changes to the certainty model, the safety guard, or IP
 parsing need several, including the failure cases — those three are where a bug
 becomes someone's outage or someone's lockout.
+
+## Releasing
+
+```bash
+npm version patch      # or minor / major — bumps package.json, commits, tags
+git push --follow-tags
+```
+
+That is the whole release. Pushing a `v*` tag starts `.github/workflows/publish.yml`,
+which re-runs the full gate against that exact commit, checks the tarball, and publishes
+to npm with provenance.
+
+A push to `main` publishes nothing. npm releases cannot be withdrawn after 72 hours and a
+version number can never be reused, so the trigger is a deliberate act rather than a side
+effect of merging.
+
+Three things it refuses to do, each because the failure is worse than the delay:
+
+- **Publish a tag that disagrees with `package.json`.** The registry would get one number
+  and the history another, and afterwards nobody can tell which commit a version came
+  from.
+- **Publish a version that already exists.** Registry versions are immutable, so this is
+  an error rather than a no-op — and a failed publish reads as a broken pipeline when the
+  truth is that the work was already done. The guard makes a re-run safe.
+- **Publish something that has not just passed.** A tag is a pointer and can be written
+  by hand or moved, so "CI was green on main" is a different statement from "this commit
+  is green". The verify job makes the second one.
+
+Update `CHANGELOG.md` before tagging. Run the workflow by hand from the Actions tab to
+rehearse one — it defaults to a dry run that packs and checks everything and publishes
+nothing.
+
+Publishing needs an `NPM_TOKEN` secret — an npm **automation** token, so that two-factor
+does not block CI — available to this repository at the organisation level. Provenance
+needs nothing but the `id-token: write` permission the workflow already asks for; it
+records in a public log which workflow, in which repository, built the tarball from which
+commit, so somebody installing a bot-detection library can check where it came from.

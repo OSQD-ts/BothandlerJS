@@ -1,0 +1,154 @@
+name: Publish
+
+# Deliberate rather than incidental. A push to main does not publish anything: npm
+# releases cannot be taken back after 72 hours and a version number can never be reused,
+# so the trigger is an explicit act — a tag, or a hand-pressed button — and not the side
+# effect of merging.
+#
+#   npm version patch && git push --follow-tags
+#
+# That is the whole release. `npm version` bumps package.json, commits it and writes the
+# matching tag; pushing the tag is what starts this.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Pack and check everything, publish nothing"
+        type: boolean
+        default: true
+
+# One release at a time. Two runs racing each other would have one of them fail on a
+# version that the other had just taken, which is a confusing way to find out.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Nothing is published that has not just passed everything. The tag is a pointer and
+  # can be moved or written by hand, so "CI was green on main" is not the same statement
+  # as "this commit is green" — this job makes the second one.
+  verify:
+    runs-on: ubuntu-latest
+    name: verify
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: The committed dashboard client bundle is current
+        run: npm run client:check
+      - name: Lint
+        run: npm run lint
+      - name: Check documentation links
+        run: npm run docs:check
+      - name: Type-check
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      - name: This library depends on nothing
+        run: |
+          count=$(node -p "Object.keys(require('./package.json').dependencies ?? {}).length")
+          test "$count" -eq 0
+      - name: No advisories reach a consumer
+        run: npm audit --omit=dev --audit-level=low
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    name: publish
+    # To require a human approval before anything reaches the registry, make a GitHub
+    # Environment with a required reviewer and add `environment: npm` here. Left off so
+    # that this workflow depends on nothing that has to be set up first.
+    permissions:
+      contents: read
+      # Provenance. npm records, in a public transparency log, which workflow in which
+      # repository built this exact tarball from which commit — so somebody installing a
+      # bot-detection library can check that what they got came from here rather than
+      # from whoever borrowed a token. It needs a public repo, which this is.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      # A tag that disagrees with package.json is the classic bad release: the registry
+      # gets one number, the repository history says another, and nobody can tell later
+      # which commit a version came from. Refused rather than reconciled.
+      - name: The tag and package.json agree
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          declared=$(node -p "require('./package.json').version")
+          echo "tag $GITHUB_REF_NAME, package.json $declared"
+          if [ "$tagged" != "$declared" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $declared"
+            exit 1
+          fi
+
+      # Makes a re-run safe. A version already on the registry is immutable, so trying
+      # again is an error rather than a no-op, and a failed publish step reads as a
+      # broken pipeline when the truth is that the work was already done.
+      - name: This version is not already published
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "::error::$name@$version is already on the registry; bump the version"
+            exit 1
+          fi
+          echo "$name@$version is unpublished"
+
+      - name: Build
+        run: npm run build
+
+      # What the tarball actually contains, checked before it is somebody else's problem
+      # rather than after. `files` is an allowlist and the easiest thing in a package to
+      # get wrong in the expensive direction.
+      - name: Inspect the tarball
+        run: |
+          npm pack --silent
+          tarball=$(ls bothandlerjs-*.tgz)
+          echo "$tarball: $(stat -c%s "$tarball") bytes"
+          test "$(stat -c%s "$tarball")" -lt 4000000
+          tar -tzf "$tarball" | sort
+          for required in package/dist/index.js package/dist/index.cjs package/dist/index.d.ts package/bin/bothandlerjs.mjs package/README.md package/LICENSE; do
+            tar -tzf "$tarball" | grep -qx "$required" || { echo "::error::$required missing from the tarball"; exit 1; }
+          done
+          # Nothing that has no business leaving this machine.
+          if tar -tzf "$tarball" | grep -E '(^package/)?(\.env|\.git/|node_modules/|.*\.tsbuildinfo$)'; then
+            echo "::error::the tarball contains something it should not"
+            exit 1
+          fi
+
+      - name: Publish (dry run)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry-run
+        run: npm publish --provenance --access public --dry-run
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish
+        if: github.event_name == 'push' || !inputs.dry-run
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Say what happened
+        if: github.event_name == 'push' || !inputs.dry-run
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          echo "### Published \`$name@$version\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "<https://www.npmjs.com/package/$name/v/$version>" >> "$GITHUB_STEP_SUMMARY"
