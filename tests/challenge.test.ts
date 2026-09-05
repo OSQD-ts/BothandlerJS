@@ -12,6 +12,14 @@ import type { ChallengeClaims, ClearanceClaims } from "../src/challenge/token.js
 const SECRET = "a".repeat(32);
 const OTHER = "b".repeat(32);
 
+/** The lowest counter that does *not* satisfy `nonce` at `difficulty`. See its one caller. */
+function solutionThatMisses(nonce: string, difficulty: number): string {
+  for (let counter = 0; counter < 1000; counter++) {
+    if (!verifyProofOfWork(nonce, String(counter), difficulty)) return String(counter);
+  }
+  throw new Error("no failing solution in 1000 tries, which is impossible unless the verifier is broken");
+}
+
 function service(clock = new ManualClock(1_000_000)) {
   return { service: new ChallengeService({ secrets: [SECRET], store: new MemoryStore({ clock }), clock, difficulty: 8 }), clock };
 }
@@ -117,10 +125,26 @@ describe("ChallengeService", () => {
     expect(replay).toEqual({ ok: false, status: 409, reason: "challenge already solved" });
   });
 
+  /**
+   * The solution is searched for rather than written down, and it has to be.
+   *
+   * This used to submit the literal "1", which is a *wrong* answer to a random nonce
+   * only 255 times in 256: at difficulty 8, one guess in 256 is a valid proof of work
+   * by accident. So the test failed about one run in 271, at random, on a machine
+   * nobody had changed — and it failed saying that a bad solution had been accepted,
+   * which is the most alarming sentence this suite can produce and was not true.
+   *
+   * Asking for a counter that provably misses makes the assertion mean what its name
+   * says whatever nonce comes up. The search ends almost immediately: all but one
+   * counter in 256 is a miss.
+   */
   it("refuses a solution that does not satisfy the challenge", async () => {
     const { service: challenge } = service();
     const token = extractChallenge(challenge.issue("203.0.113.1").body);
-    const outcome = await challenge.verifySolution("203.0.113.1", { challenge: token, solution: "1" });
+    const wrong = solutionThatMisses(readNonce(token), 8);
+    expect(verifyProofOfWork(readNonce(token), wrong, 8)).toBe(false);
+
+    const outcome = await challenge.verifySolution("203.0.113.1", { challenge: token, solution: wrong });
     expect(outcome).toMatchObject({ ok: false, status: 400 });
   });
 

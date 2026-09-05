@@ -456,7 +456,7 @@ for that.
 ### Mounting it on a server you already have
 
 ```ts
-import { createDashboardHandler } from "bothandlerjs";
+import { createDashboardHandler } from "@osqd/bothandlerjs";
 
 const dashboard = createDashboardHandler(botHandler, {
   basePath: "/_bots",

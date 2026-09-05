@@ -123,37 +123,38 @@ becomes someone's outage or someone's lockout.
 
 ## Releasing
 
-```bash
-npm version patch      # or minor / major — bumps package.json, commits, tags
-git push --follow-tags
-```
+There is no release procedure. Merging to `main` is the release.
 
-That is the whole release. Pushing a `v*` tag starts `.github/workflows/publish.yml`,
-which re-runs the full gate against that exact commit, checks the tarball, and publishes
-to npm with provenance.
+`.github/workflows/publish.yml` reads the commits since the last release tag, works out
+what the version should be, and publishes `@osqd/bothandlerjs` to npm with provenance.
+The only thing you have to get right is the commit message:
 
-A push to `main` publishes nothing. npm releases cannot be withdrawn after 72 hours and a
-version number can never be reused, so the trigger is a deliberate act rather than a side
-effect of merging.
+| Commit | Effect |
+| ------ | ------ |
+| `feat: …` | minor |
+| `fix: …` / `perf: …` | patch |
+| `feat!: …`, or a `BREAKING CHANGE:` footer | major — or minor, while the major is 0 |
+| `docs:`, `ci:`, `test:`, `chore:`, `build:`, `refactor:`, `style:` | **nothing is published** |
 
-Three things it refuses to do, each because the failure is worse than the delay:
+That last row is what makes publishing on every push tolerable. A documentation fix
+releases nothing, so the registry does not collect versions whose only difference is a
+reworded comment. `node scripts/next-version.mjs --explain` prints the reasoning for the
+current history, and `tests/next-version.test.ts` pins the rules — a `feat` read as a
+patch would ship a feature as a bug fix, and nobody on a caret range would find out.
 
-- **Publish a tag that disagrees with `package.json`.** The registry would get one number
-  and the history another, and afterwards nobody can tell which commit a version came
-  from.
-- **Publish a version that already exists.** Registry versions are immutable, so this is
-  an error rather than a no-op — and a failed publish reads as a broken pipeline when the
-  truth is that the work was already done. The guard makes a re-run safe.
-- **Publish something that has not just passed.** A tag is a pointer and can be written
-  by hand or moved, so "CI was green on main" is a different statement from "this commit
-  is green". The verify job makes the second one.
+While the major version is 0, a breaking change bumps the **minor**. Reaching 1.0.0 is a
+claim that the API is stable and should be made deliberately, not by a stray `!` in a
+subject line.
 
-Update `CHANGELOG.md` before tagging. Run the workflow by hand from the Actions tab to
-rehearse one — it defaults to a dry run that packs and checks everything and publishes
-nothing.
+What the workflow does, in order: run the whole gate against that commit; work out the
+version and stop if there is nothing to release; refuse a version already on the
+registry, so a re-run is safe; bump `package.json`, commit it as `release: x.y.z [skip
+ci]` and tag it; open the tarball and check every entry that has to be there is; publish.
+Run it by hand from the Actions tab to rehearse — it defaults to a dry run.
 
-Publishing needs an `NPM_TOKEN` secret — an npm **automation** token, so that two-factor
-does not block CI — available to this repository at the organisation level. Provenance
-needs nothing but the `id-token: write` permission the workflow already asks for; it
-records in a public log which workflow, in which repository, built the tarball from which
-commit, so somebody installing a bot-detection library can check where it came from.
+Publishing needs an `NPM_TOKEN` secret at the organisation level: an npm **automation**
+token, so two-factor does not block CI, with publish rights to the `@osqd` scope.
+Provenance needs only the `id-token: write` permission the workflow already requests.
+
+Update `CHANGELOG.md` in the same commit as the change it describes, rather than at
+release time — there is no release time any more.

@@ -76,8 +76,8 @@ power with different consequences.
 ## Check it before it meets anybody
 
 ```bash
-npx bothandlerjs check --preset protect-content --audience human
-npx bothandlerjs replay /var/log/nginx/access.log --preset protect-content
+npx @osqd/bothandlerjs check --preset protect-content --audience human
+npx @osqd/bothandlerjs replay /var/log/nginx/access.log --preset protect-content
 ```
 
 The first is [526 shapes of real traffic](../testing/corpus.md); the second is *yours*. Both
@@ -86,7 +86,7 @@ print every request the policy would have refused, with the evidence.
 For your own configuration rather than a preset:
 
 ```ts
-import { runCorpus } from "bothandlerjs/corpus";
+import { runCorpus } from "@osqd/bothandlerjs/corpus";
 const scorecard = await runCorpus({
   create: ({ resolver, clock }) => new BotHandler({ ...myConfig, resolver, clock }),
   assertActions: false,
@@ -100,7 +100,7 @@ A preset is an array of [rules](../policy/rules.md). Once you have changed one t
 the whole set:
 
 ```ts
-import { protectContent } from "bothandlerjs";
+import { protectContent } from "@osqd/bothandlerjs";
 
 const rules = protectContent()
   .filter((rule) => rule.id !== "http-client-challenge")   // our partners use curl

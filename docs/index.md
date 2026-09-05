@@ -8,8 +8,14 @@
 
 ## Start here
 
+**New to this?** [**The course**](course/index.md) teaches every capability in sixteen
+lessons, in the order that makes each one make sense, with something to run at every step.
+The pages below are the reference: they answer "how does X work?" rather than "what do I do
+next?".
+
 | | |
 | --- | --- |
+| [The course](course/index.md) | Sixteen lessons, one running example, from first assessment to a policy you can defend. |
 | [Installation](start/installation.md) | Install it, and what it needs from your runtime. |
 | [Your first integration](start/first-integration.md) | Ten lines that assess traffic, and what each one does. |
 | [Choosing a policy](start/choosing-a-policy.md) | Pick a preset, prove it against your own traffic, then deploy it. |

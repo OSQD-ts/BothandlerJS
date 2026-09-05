@@ -19,8 +19,8 @@ Getting it into your application: frameworks, the client address, and shared sta
 Three lines in the common case:
 
 ```ts
-import { BotHandler } from "bothandlerjs";
-import { botHandler } from "bothandlerjs/adapters";
+import { BotHandler } from "@osqd/bothandlerjs";
+import { botHandler } from "@osqd/bothandlerjs/adapters";
 
 const detector = new BotHandler({ preset: "protect-content" });
 app.use(botHandler(detector));

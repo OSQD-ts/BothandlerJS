@@ -72,7 +72,7 @@ point: adding a fourth weak signal to three strong ones should barely move a num
 is already near certainty, and adding twenty weak ones must never *reach* it.
 
 ```ts
-import { combineEvidence, noisyOr } from "bothandlerjs";
+import { combineEvidence, noisyOr } from "@osqd/bothandlerjs";
 
 noisyOr([0.6, 0.35, 0.35]);   // 0.831 — not 1.3
 ```

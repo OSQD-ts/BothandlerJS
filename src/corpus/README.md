@@ -165,7 +165,7 @@ mint, and cases needing ranges or lists the demo does not load.
 ## Testing your own configuration
 
 ```ts
-import { runCorpus } from "bothandlerjs/corpus";
+import { runCorpus } from "@osqd/bothandlerjs/corpus";
 
 const scorecard = await runCorpus({
   create: ({ resolver, clock }) => new BotHandler({ ...myProductionConfig, resolver, clock }),

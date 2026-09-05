@@ -1,26 +1,28 @@
 name: Publish
 
-# Deliberate rather than incidental. A push to main does not publish anything: npm
-# releases cannot be taken back after 72 hours and a version number can never be reused,
-# so the trigger is an explicit act — a tag, or a hand-pressed button — and not the side
-# effect of merging.
+# Every push to main. What gets published — and whether anything does — is read from the
+# commits themselves by scripts/next-version.mjs:
 #
-#   npm version patch && git push --follow-tags
+#   feat:            → minor
+#   fix: / perf:     → patch
+#   `!` or BREAKING  → major, or minor while the major is 0
+#   docs/ci/test/…   → nothing at all
 #
-# That is the whole release. `npm version` bumps package.json, commits it and writes the
-# matching tag; pushing the tag is what starts this.
+# That last line is what makes this safe to run on every push. A documentation fix
+# publishes nothing, so the registry does not fill up with versions whose only difference
+# is a typo in a comment.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
     inputs:
       dry-run:
-        description: "Pack and check everything, publish nothing"
+        description: "Work out the version and pack it, publish nothing"
         type: boolean
         default: true
 
-# One release at a time. Two runs racing each other would have one of them fail on a
-# version that the other had just taken, which is a confusing way to find out.
+# One release at a time. Two pushes landing together would otherwise race for the same
+# version number, and one of them would lose in a way that reads as a broken pipeline.
 concurrency:
   group: publish
   cancel-in-progress: false
@@ -29,9 +31,10 @@ permissions:
   contents: read
 
 jobs:
-  # Nothing is published that has not just passed everything. The tag is a pointer and
-  # can be moved or written by hand, so "CI was green on main" is not the same statement
-  # as "this commit is green" — this job makes the second one.
+  # Nothing reaches the registry that has not just passed everything. This duplicates the
+  # CI workflow deliberately: "CI was green on this commit" is a claim about a different
+  # workflow run that may still be in progress, and a publish that starts on that
+  # assumption is a publish that can beat its own tests.
   verify:
     runs-on: ubuntu-latest
     name: verify
@@ -52,6 +55,13 @@ jobs:
         run: npm run typecheck
       - name: Test
         run: npm test
+      # The dashboard is shipped code, and its behaviour under a keyboard, a scroll and a
+      # narrow viewport cannot be checked by calling a function. It costs a browser
+      # download; a release is exactly the moment that is worth paying for.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Test the dashboard in a browser
+        run: npm run test:browser
       - name: This library depends on nothing
         run: |
           count=$(node -p "Object.keys(require('./package.json').dependencies ?? {}).length")
@@ -63,18 +73,22 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     name: publish
-    # To require a human approval before anything reaches the registry, make a GitHub
-    # Environment with a required reviewer and add `environment: npm` here. Left off so
-    # that this workflow depends on nothing that has to be set up first.
     permissions:
-      contents: read
-      # Provenance. npm records, in a public transparency log, which workflow in which
-      # repository built this exact tarball from which commit — so somebody installing a
-      # bot-detection library can check that what they got came from here rather than
-      # from whoever borrowed a token. It needs a public repo, which this is.
+      # The version bump and its tag are committed back to main.
+      contents: write
+      # Provenance: npm records in a public transparency log which workflow, in which
+      # repository, built this exact tarball from which commit. Worth having for a
+      # bot-detection library — somebody installing it can check it came from here and
+      # not from whoever borrowed a token.
       id-token: write
     steps:
+      # The full history, because the version is derived from the commits since the last
+      # release tag. A shallow clone would see one commit and conclude there was nothing
+      # to release.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -83,72 +97,82 @@ jobs:
 
       - run: npm ci
 
-      # A tag that disagrees with package.json is the classic bad release: the registry
-      # gets one number, the repository history says another, and nobody can tell later
-      # which commit a version came from. Refused rather than reconciled.
-      - name: The tag and package.json agree
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Work out the version
+        id: version
         run: |
-          tagged="${GITHUB_REF_NAME#v}"
-          declared=$(node -p "require('./package.json').version")
-          echo "tag $GITHUB_REF_NAME, package.json $declared"
-          if [ "$tagged" != "$declared" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $declared"
-            exit 1
+          next=$(node scripts/next-version.mjs --explain)
+          if [ -z "$next" ]; then
+            echo "Nothing here changes what the library does. No release." >> "$GITHUB_STEP_SUMMARY"
+            echo "release=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=yes" >> "$GITHUB_OUTPUT"
+            echo "version=$next" >> "$GITHUB_OUTPUT"
           fi
 
-      # Makes a re-run safe. A version already on the registry is immutable, so trying
-      # again is an error rather than a no-op, and a failed publish step reads as a
-      # broken pipeline when the truth is that the work was already done.
-      - name: This version is not already published
+      # Makes a re-run safe, and catches a tag deleted by hand. A published version is
+      # immutable, so publishing over one is an error rather than a no-op.
+      - name: That version is not already published
+        if: steps.version.outputs.release == 'yes'
         run: |
           name=$(node -p "require('./package.json').name")
-          version=$(node -p "require('./package.json').version")
-          if npm view "$name@$version" version >/dev/null 2>&1; then
-            echo "::error::$name@$version is already on the registry; bump the version"
+          if npm view "$name@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
+            echo "::error::$name@${{ steps.version.outputs.version }} is already on the registry"
             exit 1
           fi
-          echo "$name@$version is unpublished"
+
+      - name: Bump, commit and tag
+        if: steps.version.outputs.release == 'yes'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # `npm version` writes package.json and package-lock.json, commits both and
+          # tags the commit. `[skip ci]` is belt and braces: a push made with
+          # GITHUB_TOKEN does not trigger workflows, so this cannot loop, but the marker
+          # says so to anyone reading the history.
+          npm version "${{ steps.version.outputs.version }}" -m "release: %s [skip ci]"
+          git push --follow-tags
 
       - name: Build
+        if: steps.version.outputs.release == 'yes'
         run: npm run build
 
-      # What the tarball actually contains, checked before it is somebody else's problem
-      # rather than after. `files` is an allowlist and the easiest thing in a package to
-      # get wrong in the expensive direction.
+      # What the tarball actually contains, checked before it is somebody else's problem.
+      # `files` is an allowlist and the easiest thing in a package to get wrong in the
+      # expensive direction.
       - name: Inspect the tarball
+        if: steps.version.outputs.release == 'yes'
         run: |
           npm pack --silent
-          tarball=$(ls bothandlerjs-*.tgz)
+          tarball=$(ls osqd-bothandlerjs-*.tgz)
           echo "$tarball: $(stat -c%s "$tarball") bytes"
           test "$(stat -c%s "$tarball")" -lt 4000000
           tar -tzf "$tarball" | sort
           for required in package/dist/index.js package/dist/index.cjs package/dist/index.d.ts package/bin/bothandlerjs.mjs package/README.md package/LICENSE; do
             tar -tzf "$tarball" | grep -qx "$required" || { echo "::error::$required missing from the tarball"; exit 1; }
           done
-          # Nothing that has no business leaving this machine.
           if tar -tzf "$tarball" | grep -E '(^package/)?(\.env|\.git/|node_modules/|.*\.tsbuildinfo$)'; then
             echo "::error::the tarball contains something it should not"
             exit 1
           fi
 
       - name: Publish (dry run)
-        if: github.event_name == 'workflow_dispatch' && inputs.dry-run
+        if: steps.version.outputs.release == 'yes' && github.event_name == 'workflow_dispatch' && inputs.dry-run
         run: npm publish --provenance --access public --dry-run
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish
-        if: github.event_name == 'push' || !inputs.dry-run
+        if: steps.version.outputs.release == 'yes' && (github.event_name == 'push' || !inputs.dry-run)
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Say what happened
-        if: github.event_name == 'push' || !inputs.dry-run
+        if: steps.version.outputs.release == 'yes' && (github.event_name == 'push' || !inputs.dry-run)
         run: |
-          name=$(node -p "require('./package.json').name")
-          version=$(node -p "require('./package.json').version")
-          echo "### Published \`$name@$version\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "<https://www.npmjs.com/package/$name/v/$version>" >> "$GITHUB_STEP_SUMMARY"
+          version="${{ steps.version.outputs.version }}"
+          {
+            echo "### Published \`@osqd/bothandlerjs@$version\`"
+            echo ""
+            echo "<https://www.npmjs.com/package/@osqd/bothandlerjs/v/$version>"
+          } >> "$GITHUB_STEP_SUMMARY"

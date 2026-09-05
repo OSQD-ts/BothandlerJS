@@ -63,7 +63,7 @@ whoever has since been handed the address. What it ships is the URL each operato
 publishes.
 
 ```ts
-import { startCrawlerRangeRefresh } from "bothandlerjs";
+import { startCrawlerRangeRefresh } from "@osqd/bothandlerjs";
 
 const stop = startCrawlerRangeRefresh(detector);          // twice a day by default
 ```

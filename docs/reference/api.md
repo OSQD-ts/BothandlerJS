@@ -10,11 +10,11 @@ The methods on `BotHandler`, the entry points, and where each exported name is d
 
 | Import | Contains |
 | ------ | -------- |
-| `bothandlerjs` | the engine, detectors, presets, robots, stores, notifiers, challenge, dashboard |
-| `bothandlerjs/adapters` | [Express, Fastify, Koa, Fetch](../integration/adapters.md) |
-| `bothandlerjs/client` | the browser-side [client signals](../detection/client-signals.md) script |
-| `bothandlerjs/corpus` | [`runCorpus`](../testing/corpus.md) and the cases |
-| `bothandlerjs/cli` | the [command line](../testing/cli.md) entry point |
+| `@osqd/bothandlerjs` | the engine, detectors, presets, robots, stores, notifiers, challenge, dashboard |
+| `@osqd/bothandlerjs/adapters` | [Express, Fastify, Koa, Fetch](../integration/adapters.md) |
+| `@osqd/bothandlerjs/client` | the browser-side [client signals](../detection/client-signals.md) script |
+| `@osqd/bothandlerjs/corpus` | [`runCorpus`](../testing/corpus.md) and the cases |
+| `@osqd/bothandlerjs/cli` | the [command line](../testing/cli.md) entry point |
 
 Zero runtime dependencies, ESM and CJS, types included.
 

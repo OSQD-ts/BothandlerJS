@@ -13,7 +13,7 @@
  * at best — the {@link clientSignalsDetector} does exactly that, and deliberately
  * gives you no way to make it stronger.
  *
- * This module is published separately (`bothandlerjs/client`) so that a page can
+ * This module is published separately (`@osqd/bothandlerjs/client`) so that a page can
  * embed the script without pulling the server engine into a browser bundle.
  */
 

@@ -120,7 +120,7 @@ passing a challenge cannot change a proven verdict, so re-issuing would loop for
 Your own handler, registered by name.
 
 ```ts
-import { defineHandler } from "bothandlerjs";
+import { defineHandler } from "@osqd/bothandlerjs";
 
 const shadowBan = defineHandler({
   id: "shadow-ban",

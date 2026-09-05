@@ -123,7 +123,7 @@ duplicate ids, a rule shadowed by a broader one above it, an action whose parame
 missing. Warnings go to `onWarning` and to the dashboard's notices.
 
 ```ts
-import { validateRules } from "bothandlerjs";
+import { validateRules } from "@osqd/bothandlerjs";
 validateRules(myRules);   // string[] — empty is good
 ```
 

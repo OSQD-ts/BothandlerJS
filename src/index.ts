@@ -10,8 +10,8 @@
  * shut the door.
  *
  * ```ts
- * import { BotHandler } from "bothandlerjs";
- * import { botHandler } from "bothandlerjs/adapters";
+ * import { BotHandler } from "@osqd/bothandlerjs";
+ * import { botHandler } from "@osqd/bothandlerjs/adapters";
  *
  * const detector = new BotHandler({ preset: "protect-content" });
  * app.use(botHandler(detector));

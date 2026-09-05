@@ -10,7 +10,7 @@ A bot policy is a claim about *your* traffic. The only honest way to check it be
 starts turning people away is to run it over traffic you already have.
 
 ```bash
-npx bothandlerjs replay /var/log/nginx/access.log --preset protect-content
+npx @osqd/bothandlerjs replay /var/log/nginx/access.log --preset protect-content
 ```
 
 ```

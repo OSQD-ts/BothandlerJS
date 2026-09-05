@@ -93,7 +93,7 @@ translations: {
 tested by calling it:
 
 ```ts
-import { parseAcceptLanguage, pickTranslation } from "bothandlerjs";
+import { parseAcceptLanguage, pickTranslation } from "@osqd/bothandlerjs";
 
 pickTranslation(translations, parseAcceptLanguage("pt-BR,pt;q=0.9,en;q=0.5"));
 // → { tag: "pt-BR", copy: { title: "Verificando seu navegador" } }

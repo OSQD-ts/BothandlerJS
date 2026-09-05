@@ -73,7 +73,7 @@ ranges do not merely describe a crawler, they verify one.
 ### Keeping them fresh automatically
 
 ```ts
-import { startCrawlerRangeRefresh } from "bothandlerjs";
+import { startCrawlerRangeRefresh } from "@osqd/bothandlerjs";
 const stop = startCrawlerRangeRefresh(botHandler);   // twice a day, by default
 ```
 

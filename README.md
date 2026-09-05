@@ -16,7 +16,7 @@ just cannot shut the door. Only deterministic evidence can, and every piece of
 deterministic evidence has to explain in writing why it admits no benign explanation.
 
 ```bash
-npm install bothandlerjs
+npm install @osqd/bothandlerjs
 ```
 
 No runtime dependencies. The library imports nothing but `node:` builtins, and CI
@@ -36,6 +36,7 @@ explaining why a thing exists as well as how to use it.
 
 | | |
 | --- | --- |
+| **[The course](docs/course/index.md)** | Sixteen lessons that build one integration, from a first assessment to a policy you can defend. Start here if the library is new to you. |
 | **[Start here](docs/index.md)** | [Installation](docs/start/installation.md) · [Your first integration](docs/start/first-integration.md) · [Choosing a policy](docs/start/choosing-a-policy.md) · [Upgrading](docs/start/upgrading.md) |
 | **Concepts** | [Evidence and certainty](docs/concepts/evidence.md) · [Verdicts and scores](docs/concepts/verdicts.md) · [The safety guard](docs/concepts/the-guard.md) · [Actors](docs/concepts/actors.md) · [Threat model](docs/concepts/threat-model.md) |
 | **[Detection](docs/detection/index.md)** | [The 20 detectors](docs/detection/detectors.md) · [Signatures](docs/detection/signatures.md) · [Verification](docs/detection/verification.md) · [Browser signals](docs/detection/client-signals.md) · [Writing a detector](docs/detection/writing-a-detector.md) |
@@ -82,8 +83,8 @@ explicit, greppable setting.
 ## Quick start
 
 ```ts
-import { BotHandler } from "bothandlerjs";
-import { botHandler } from "bothandlerjs/adapters";
+import { BotHandler } from "@osqd/bothandlerjs";
+import { botHandler } from "@osqd/bothandlerjs/adapters";
 
 const detector = new BotHandler({
   preset: "protect-content",
@@ -258,9 +259,9 @@ npm run bench     # hot-path benchmark, median of several rounds
 npm run corpus    # 526 shapes of real traffic against your policy
 npm run example   # a minimal Express integration on :3000
 
-npx bothandlerjs replay access.log     # what your policy would have done
-npx bothandlerjs check                 # your policy against 526 shapes of real traffic
-npx bothandlerjs explain "curl/8.4.0"  # one request, and the evidence behind the verdict
+npx @osqd/bothandlerjs replay access.log     # what your policy would have done
+npx @osqd/bothandlerjs check                 # your policy against 526 shapes of real traffic
+npx @osqd/bothandlerjs explain "curl/8.4.0"  # one request, and the evidence behind the verdict
 ```
 
 Project layout:

@@ -34,7 +34,7 @@ see [design decisions](../design/decisions.md).
 Three pieces: render the script, receive the report, attach it to the request.
 
 ```ts
-import { renderClientScript, parseClientSignals } from "bothandlerjs";
+import { renderClientScript, parseClientSignals } from "@osqd/bothandlerjs/client";
 
 // 1. On any page you want signals from. The nonce matches your CSP.
 app.get("/", (req, res) =>

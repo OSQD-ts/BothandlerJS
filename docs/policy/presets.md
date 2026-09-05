@@ -11,7 +11,7 @@ write — exported from `src/policy/presets.ts`, each carrying an `id` and a `re
 one, change one line, keep the rest:
 
 ```ts
-import { BotHandler, protectContent } from "bothandlerjs";
+import { BotHandler, protectContent } from "@osqd/bothandlerjs";
 
 new BotHandler({
   rules: protectContent().filter((rule) => rule.id !== "http-client-challenge"),
@@ -94,7 +94,7 @@ a rule that blocks a crawler nobody told is load with no compliance. Generate th
 the policy and publish it — see [robots.txt](robots.md):
 
 ```ts
-import { declineAiTraining, robotsFromRules } from "bothandlerjs";
+import { declineAiTraining, robotsFromRules } from "@osqd/bothandlerjs";
 const { robotsTxt } = robotsFromRules(declineAiTraining(), { sitemap: "https://example.com/sitemap.xml" });
 ```
 
@@ -172,7 +172,7 @@ switch it on, not during the incident when you notice.
 By name, for config-driven setups:
 
 ```ts
-import { PRESETS, type PresetName } from "bothandlerjs";
+import { PRESETS, type PresetName } from "@osqd/bothandlerjs";
 const rules = PRESETS[process.env.BOT_PRESET as PresetName]();
 ```
 
@@ -180,7 +180,7 @@ Whichever you pick, run it against the corpus before it reaches production — t
 you which of your own traffic the policy refuses:
 
 ```bash
-npx bothandlerjs check --preset protect-auth
+npx @osqd/bothandlerjs check --preset protect-auth
 ```
 
 ## Related

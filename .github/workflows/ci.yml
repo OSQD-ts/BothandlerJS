@@ -100,11 +100,15 @@ jobs:
             exit 1
           fi
 
+      # The glob follows the package name: a scoped package packs as
+      # `osqd-bothandlerjs-<version>.tgz`, and a stale glob here matches nothing, so
+      # `stat` fails on a literal asterisk rather than saying the tarball moved.
       - name: Pack, and stay small
         run: |
           npm pack --silent
-          size=$(stat -c%s bothandlerjs-*.tgz)
-          echo "tarball: $size bytes"
+          tarball=$(ls osqd-bothandlerjs-*.tgz)
+          size=$(stat -c%s "$tarball")
+          echo "$tarball: $size bytes"
           test "$size" -lt 4000000
 
   # The dashboard's client is a real module now, so the pure half of it — the search,

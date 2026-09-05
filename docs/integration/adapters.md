@@ -7,7 +7,7 @@ Four adapters, six frameworks, and how to write a fifth.
 ---
 
 ```ts
-import { botHandler, fastifyBotHandler, koaBotHandler, withBotHandler } from "bothandlerjs/adapters";
+import { botHandler, fastifyBotHandler, koaBotHandler, withBotHandler } from "@osqd/bothandlerjs/adapters";
 
 app.use(botHandler(detector));                                  // Express / Connect / node:http
 fastify.addHook("onRequest", fastifyBotHandler(detector));
@@ -81,7 +81,7 @@ somewhere this library cannot see, and the forms worth protecting are POSTs.
 `enrich` is the hand-over:
 
 ```ts
-import { TRAP_FIELD_SOURCE, defaultDetectors, trapDetector } from "bothandlerjs";
+import { TRAP_FIELD_SOURCE, defaultDetectors, trapDetector } from "@osqd/bothandlerjs";
 
 const detector = new BotHandler({
   detectors: defaultDetectors().map((d) => (d.id === "trap" ? trapDetector({ formFields: ["company_url"] }) : d)),

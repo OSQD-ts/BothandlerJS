@@ -9,8 +9,8 @@ Working in five minutes, safe in one week.
 ## The five minutes
 
 ```ts
-import { BotHandler } from "bothandlerjs";
-import { botHandler } from "bothandlerjs/adapters";
+import { BotHandler } from "@osqd/bothandlerjs";
+import { botHandler } from "@osqd/bothandlerjs/adapters";
 
 const detector = new BotHandler({
   preset: "monitor-only",               // watch first; enforce later
@@ -57,8 +57,8 @@ reading twice.
 ### 3. Check the policy you are about to enable
 
 ```bash
-npx bothandlerjs check --preset protect-content
-npx bothandlerjs replay /var/log/nginx/access.log --preset protect-content
+npx @osqd/bothandlerjs check --preset protect-content
+npx @osqd/bothandlerjs replay /var/log/nginx/access.log --preset protect-content
 ```
 
 The first runs your policy against [526 shapes of real traffic](../testing/corpus.md); the

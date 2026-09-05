@@ -99,7 +99,7 @@ from a person has stopped being technical, and what defeats it is cost — a
 It is a published entry point, not a test fixture:
 
 ```ts
-import { runCorpus } from "bothandlerjs/corpus";
+import { runCorpus } from "@osqd/bothandlerjs/corpus";
 
 const scorecard = await runCorpus({
   create: ({ resolver, clock }) => new BotHandler({ ...myProductionConfig, resolver, clock }),

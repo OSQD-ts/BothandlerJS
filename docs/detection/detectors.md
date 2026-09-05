@@ -17,7 +17,7 @@ conclude is as important as what it looks at, so every entry below names its cei
   somebody their access; see [the guard](../concepts/the-guard.md).
 
 ```ts
-import { defaultDetectors } from "bothandlerjs";
+import { defaultDetectors } from "@osqd/bothandlerjs";
 
 new BotHandler({ detectors: defaultDetectors() });        // the default set
 new BotHandler({ extraDetectors: [myDetector()] });       // add to it
@@ -219,7 +219,7 @@ A path no link points at, a form field no rendered browser shows, a header only 
 would echo. Reaching one requires reading the page as data rather than as a page.
 
 ```ts
-import { renderTrapLink, trapRobotsEntries, DEFAULT_TRAP_PATHS } from "bothandlerjs";
+import { renderTrapLink, trapRobotsEntries, DEFAULT_TRAP_PATHS } from "@osqd/bothandlerjs";
 
 app.get("/", (_req, res) => res.send(page + renderTrapLink()));
 ```

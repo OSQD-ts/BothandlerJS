@@ -27,7 +27,7 @@ References: [RFC 9309](https://www.rfc-editor.org/rfc/rfc9309.html) is the stand
 The useful entry point. It reads your rules and writes the file that matches them:
 
 ```ts
-import { declineAiTraining, robotsFromRules } from "bothandlerjs";
+import { declineAiTraining, robotsFromRules } from "@osqd/bothandlerjs";
 
 const { robotsTxt, declined, served, unreadable } = robotsFromRules(declineAiTraining(), {
   disallowPaths: ["/internal/", "/admin-console"],   // your trap paths belong here
@@ -74,7 +74,7 @@ crawlers they are welcome where they are not.
 When you want a file that is not derived from a policy:
 
 ```ts
-import { generateRobotsTxt } from "bothandlerjs";
+import { generateRobotsTxt } from "@osqd/bothandlerjs";
 
 generateRobotsTxt({
   header: ["# Automated collection is declined. Contact abuse@example.com."],
@@ -116,7 +116,7 @@ crawlers pick their group by specificity, not by position.
 ## From the command line
 
 ```bash
-npx bothandlerjs robots --preset decline-ai-training --sitemap https://example.com/sitemap.xml
+npx @osqd/bothandlerjs robots --preset decline-ai-training --sitemap https://example.com/sitemap.xml
 ```
 
 See [the CLI](../testing/cli.md).

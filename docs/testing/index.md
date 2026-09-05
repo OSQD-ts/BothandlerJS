@@ -37,7 +37,7 @@ Step 4 is not optional and the other three do not replace it.
 The corpus is a published entry point:
 
 ```ts
-import { runCorpus } from "bothandlerjs/corpus";
+import { runCorpus } from "@osqd/bothandlerjs/corpus";
 
 const scorecard = await runCorpus({
   create: ({ resolver, clock }) => new BotHandler({ ...myProductionConfig, resolver, clock }),

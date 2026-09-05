@@ -187,7 +187,7 @@ type checker catches something.
 
 ## The corpus is a published entry point, not a test fixture
 
-**The decision.** `bothandlerjs/corpus` ships `runCorpus` and all 526 cases.
+**The decision.** `@osqd/bothandlerjs/corpus` ships `runCorpus` and all 526 cases.
 
 **Why.** The claims in this documentation are only worth anything if you can check them
 against *your* configuration. A corpus locked inside the test suite proves things about the

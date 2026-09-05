@@ -16,6 +16,13 @@ import { UNWANTED_BOT_CASES } from "./unwanted.js";
 import type { Audience, TrafficCase } from "./schema.js";
 
 export * from "./schema.js";
+// The runner, which is the entire point of publishing this entry point: "point it at your
+// own BotHandler and it tells you how *your* policy behaves". It was missing here — every
+// internal caller imports `./runner.js` directly, so nothing exercised the path the
+// documentation tells other people to use, and `import { runCorpus } from
+// "@osqd/bothandlerjs/corpus"` failed for everyone outside this repository.
+export { runCorpus } from "./runner.js";
+export type { CaseResult, RunnerOptions, Scorecard, AudienceTally } from "./runner.js";
 export * from "./headers.js";
 export * from "./ranges.js";
 export { HUMAN_CASES } from "./humans.js";

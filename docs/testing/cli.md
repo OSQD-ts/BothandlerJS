@@ -39,7 +39,7 @@ this look like as a first request* — which is what a ticket is asking anyway.
 The CI step.
 
 ```bash
-npx bothandlerjs check --preset protect-content
+npx @osqd/bothandlerjs check --preset protect-content
 ```
 
 ```
@@ -78,7 +78,7 @@ Your policy against your own traffic. See [log replay](replay.md) — including 
 JSON Lines is much better than CLF.
 
 ```bash
-npx bothandlerjs replay /var/log/nginx/access.log --preset protect-content
+npx @osqd/bothandlerjs replay /var/log/nginx/access.log --preset protect-content
 ```
 
 | Option | |

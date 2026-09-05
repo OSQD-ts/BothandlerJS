@@ -11,7 +11,7 @@ What has to be shared across replicas, what deliberately is not, and why.
 An in-memory store. Correct for a single process, and honest about what it is not.
 
 ```ts
-import { RedisStore } from "bothandlerjs";
+import { RedisStore } from "@osqd/bothandlerjs";
 new BotHandler({ store: new RedisStore(redis) });   // ioredis or node-redis; no dependency added
 ```
 

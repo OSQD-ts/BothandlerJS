@@ -11,7 +11,7 @@ with what it found, and that is deliberate: the same observation is worth a tag 
 documentation site and a challenge on a checkout.
 
 ```ts
-import type { Detector, Evidence } from "bothandlerjs";
+import type { Detector, Evidence } from "@osqd/bothandlerjs";
 
 export function checkoutVelocity(): Detector {
   return {
@@ -116,7 +116,7 @@ family the engine takes the strongest observation rather than compounding them â
 configured version is a `map`:
 
 ```ts
-import { defaultDetectors, probeSignatureDetector } from "bothandlerjs";
+import { defaultDetectors, probeSignatureDetector } from "@osqd/bothandlerjs";
 
 new BotHandler({
   detectors: defaultDetectors().map((d) =>
@@ -133,7 +133,7 @@ scores three points on every Safari user is not, and only the corpus will tell y
 you wrote.
 
 ```ts
-import { runCorpus } from "bothandlerjs/corpus";
+import { runCorpus } from "@osqd/bothandlerjs/corpus";
 
 const scorecard = await runCorpus({
   create: ({ resolver, clock }) => new BotHandler({ extraDetectors: [mine()], resolver, clock }),

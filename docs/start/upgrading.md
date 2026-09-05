@@ -22,15 +22,15 @@ hold still.
 Run your own configuration against the corpus and compare:
 
 ```bash
-npx bothandlerjs check --preset protect-content --json > before.json
-npm install bothandlerjs@latest
-npx bothandlerjs check --preset protect-content --json > after.json
+npx @osqd/bothandlerjs check --preset protect-content --json > before.json
+npm install @osqd/bothandlerjs@latest
+npx @osqd/bothandlerjs check --preset protect-content --json > after.json
 ```
 
 Or, for a configuration that is not a preset:
 
 ```ts
-import { runCorpus } from "bothandlerjs/corpus";
+import { runCorpus } from "@osqd/bothandlerjs/corpus";
 const scorecard = await runCorpus({
   create: ({ resolver, clock }) => new BotHandler({ ...myConfig, resolver, clock }),
   assertActions: false,
@@ -50,7 +50,7 @@ stable and are what everything else is built on; the surfaces most likely to cha
 Pin an exact version if you depend on either:
 
 ```json
-{ "dependencies": { "bothandlerjs": "0.2.0" } }
+{ "dependencies": { "@osqd/bothandlerjs": "0.2.0" } }
 ```
 
 ## When a signature changes hands
@@ -59,7 +59,7 @@ Not a library upgrade, but the same class of problem: a crawler's published rang
 and a stale list turns a verified crawler into an accused impersonator.
 
 ```ts
-import { startCrawlerRangeRefresh } from "bothandlerjs";
+import { startCrawlerRangeRefresh } from "@osqd/bothandlerjs";
 const stop = startCrawlerRangeRefresh(botHandler);   // twice a day
 ```
 

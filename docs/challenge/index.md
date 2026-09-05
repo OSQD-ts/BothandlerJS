@@ -32,7 +32,7 @@ own and carry on.
 One thing is required and has no default:
 
 ```ts
-import { BotHandler } from "bothandlerjs";
+import { BotHandler } from "@osqd/bothandlerjs";
 
 const detector = new BotHandler({
   preset: "protect-content",

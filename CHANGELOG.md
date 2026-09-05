@@ -58,7 +58,7 @@ Nothing yet.
 
 - **123 build-tool packages were declared as runtime dependencies.** `vite`,
   `rollup`, `esbuild`, `chai`, `express` and the rest of the flattened dev tree
-  were listed under `dependencies`, so `npm install bothandlerjs` pulled roughly
+  were listed under `dependencies`, so `npm install @osqd/bothandlerjs` pulled roughly
   134 MB into somebody else's project and handed them an esbuild advisory
   (GHSA-g7r4-m6w7-qqqr) as a *production* vulnerability in a library that does
   not use esbuild. The library imports nothing but `node:` builtins; the
@@ -131,7 +131,7 @@ Nothing yet.
   marked `human` is denied service, which is what makes it a CI step rather than a
   report. DNS is controlled and the clock is manual, so it is reproducible and offline.
 
-- **The corpus is a published entry point — `bothandlerjs/corpus`.** Its own schema has
+- **The corpus is a published entry point — `@osqd/bothandlerjs/corpus`.** Its own schema has
   always said "point the runner at *your* `BotHandler`", and until now only this
   repository could. It is a separate entry, so importing the library never loads a case
   of it.

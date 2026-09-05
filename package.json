@@ -1,6 +1,9 @@
 {
-  "name": "bothandlerjs",
+  "name": "@osqd/bothandlerjs",
   "version": "0.2.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "Bot traffic detection and handling for TypeScript \u2014 evidence-tiered detection that separates proof from suspicion, so blocking never rests on a guess.",
   "keywords": [
     "bot-detection",
