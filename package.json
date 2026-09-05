@@ -1,10 +1,10 @@
 {
   "name": "@osqd/bothandlerjs",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publishConfig": {
     "access": "public"
   },
-  "description": "Bot traffic detection and handling for TypeScript \u2014 evidence-tiered detection that separates proof from suspicion, so blocking never rests on a guess.",
+  "description": "Bot traffic detection and handling for TypeScript — evidence-tiered detection that separates proof from suspicion, so blocking never rests on a guess.",
   "keywords": [
     "bot-detection",
     "bot-management",
@@ -26,7 +26,7 @@
   "bugs": {
     "url": "https://github.com/OSQD-ts/BothandlerJS/issues"
   },
-  "author": "Micha\u0142 P\u0142atosz <platosz.michal@gmail.com>",
+  "author": "Michał Płatosz <platosz.michal@gmail.com>",
   "type": "module",
   "exports": {
     ".": {
