@@ -368,16 +368,37 @@ describe("the page at any width", () => {
     }
   });
 
+  /**
+   * On a phone, in the terms that matter to somebody holding one: every row is reachable
+   * and openable.
+   *
+   * This used to assert `overflow-x: auto`, which is a mechanism rather than a
+   * requirement — and asserting the mechanism made it wrong the moment a cheaper one
+   * arrived. Wrapping the User-Agent line takes the table's floor from about 860px to
+   * about 500px, so at 700px there is now nothing to scroll and nothing cut off, and the
+   * old assertion failed a page that had got better. The scrollbar is still there
+   * underneath, where it is genuinely needed.
+   *
+   * Clicking a row is the part worth keeping. A horizontal scroll container makes a row
+   * wider than the box it sits in, and a row wider than its box is one a pointer cannot
+   * reliably land on — which is how a stray scrollbar at 1440px stopped a click from
+   * working at all rather than merely looking untidy.
+   */
   it("lets the feed be reached rather than clipping it", async () => {
     for (const width of [420, 560, 700]) {
       const page = await open(width);
       const reach = await page.evaluate(() => {
         const wrap = document.querySelector(".feed-scroll") as HTMLElement;
-        const table = document.querySelector("table") as HTMLElement;
-        return { scrollable: getComputedStyle(wrap).overflowX === "auto", covered: wrap.scrollWidth >= table.scrollWidth };
+        const table = wrap.querySelector("table") as HTMLElement;
+        table.style.width = "min-content";
+        const floor = table.scrollWidth;
+        table.style.width = "";
+        return { floor, room: wrap.clientWidth, scrolls: getComputedStyle(wrap).overflowX === "auto" };
       });
-      expect(reach.scrollable, `the feed cannot be scrolled at ${width}px`).toBe(true);
-      expect(reach.covered, `the feed is clipped at ${width}px`).toBe(true);
+      expect(reach.floor <= reach.room || reach.scrolls, `the feed is clipped at ${width}px`).toBe(true);
+
+      await page.locator("tbody tr.row").first().click({ timeout: 5000 });
+      await expect.poll(() => page.locator("tbody tr.row.open").count()).toBeGreaterThan(0);
       await page.close();
     }
   });

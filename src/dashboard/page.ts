@@ -332,16 +332,23 @@ main { padding: 18px 20px 64px; max-width: 1680px; margin: 0 auto; }
    media query was measuring the wrong box the whole time. It only appeared to work
    because five columns happened to fit.
 
-   Three things happen on the way down, in the order that costs least. First the
+   Four things happen on the way down, in the order that costs least. First the
    duration goes: it is the column people narrow a window least to read and it is still
    in the row detail. Then the timestamp, which is also still in the row detail and is
-   implied by the order while the stream is live. Then, once even that will not fit, the
-   table gets a scrollbar of its own.
+   implied by the order while the stream is live. Then the User-Agent line stops
+   ellipsing and wraps, which is what actually buys the room — it takes the table's floor
+   from about 100ch to about 56ch, because the cap on that one line is most of what the
+   table cannot go below. Only under *that* does the table get a scrollbar of its own.
 
-   The scrollbar is deliberately last and deliberately not permanent: a scroll container
-   is the containing block for anything sticky inside it, so the moment it turns on, the
-   column headers stop tracking the viewport. A fair trade on a phone and a bad one on a
-   desktop.
+   The scrollbar is deliberately last and deliberately rare, and it is worth being
+   precise about why, because it is the rung that gets set too high. A scroll container
+   is the containing block for anything sticky inside it, so the moment it turns on the
+   column headers stop tracking the viewport — and a row becomes wider than the box it
+   sits in, which is enough to make it hard to click and, for a keyboard or a pointer
+   being driven by a test, hard to reach at all. It cost both when it fired at 1440px on
+   a wider face: the headers scrolled away with the rows and a click on a row never
+   landed. Wrapping costs a line of height and nothing else, so it goes first and this
+   goes last.
 
    The thresholds are in **ch**, and that is the second half of the same lesson. They
    used to be pixels, which quietly assumed a font: what six columns of request text
@@ -355,21 +362,19 @@ main { padding: 18px 20px 64px; max-width: 1680px; margin: 0 auto; }
 
    In ch, both sides move together: a wider face makes the content wider and makes the
    threshold wider by the same proportion. The floors, measured, are 119ch / 111ch /
-   100ch, and each rung sits about 7% above its own floor so that the arithmetic does not
-   have to be exact. */
+   100ch ellipsing and 56ch wrapped, and each rung sits above its own floor with room to
+   spare so that the arithmetic does not have to be exact. */
 .feed-panel { container: feed / inline-size; }
 
-@container feed (max-width: 128ch) {
-  thead th:nth-child(6), tbody td:nth-child(6) { display: none; }
-}
-@container feed (max-width: 119ch) {
-  thead th:nth-child(1), tbody td.when { display: none; }
-}
-@container feed (max-width: 107ch) {
-  .feed-scroll { overflow-x: auto; }
-}
+/* The rungs themselves are further down, immediately after the table's own rules, and
+   they have to be: a container query adds no specificity, so an override written above
+   the declaration it overrides simply loses on source order and does nothing. The wrap
+   rung sat here for exactly that reason and was dead the whole time — the table never
+   wrapped, its floor never dropped, and nothing said so. See "the column ladder" below. */
+
+/* The header's own subtitle, which is a viewport thing rather than a panel thing: it
+   sits in the page header and has no container to be measured against. */
 @media (max-width: 700px) {
-  .req .ua { white-space: normal; max-width: none; }
   .sub { white-space: normal; max-width: none; }
 }
 
@@ -420,6 +425,22 @@ tr.a-guard td.edge { border-left-color: var(--warn-text); }
 .req .ua a { color: inherit; text-decoration: none; border-bottom: 1px dotted color-mix(in srgb, var(--muted) 60%, transparent); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .req .ua a:hover { color: var(--ink); border-bottom-color: var(--ink); }
 .num { text-align: right; }
+
+/* The column ladder. Read the note beside .feed-panel above for what it is for and why
+   the thresholds are in ch; this is where it has to live, below every declaration it
+   overrides. */
+@container feed (max-width: 128ch) {
+  thead th:nth-child(6), tbody td:nth-child(6) { display: none; }
+}
+@container feed (max-width: 119ch) {
+  thead th:nth-child(1), tbody td.when { display: none; }
+}
+@container feed (max-width: 107ch) {
+  .req .ua { white-space: normal; max-width: none; }
+}
+@container feed (max-width: 62ch) {
+  .feed-scroll { overflow-x: auto; }
+}
 
 .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; border: 1px solid transparent; }
 .b-proven { background: color-mix(in srgb, var(--proven-text) 14%, transparent); color: var(--proven-text); }
