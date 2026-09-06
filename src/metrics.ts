@@ -60,6 +60,18 @@ export interface MetricsSnapshot {
   detectorTimings: Record<string, { count: number; totalMs: number; maxMs: number }>;
   challenges: { issued: number; solved: number; rejected: number };
   /**
+   * Clearance granted, by level, and why the rest were turned down.
+   *
+   * Without these an operator running the interaction challenge is tuning blind. The
+   * split between `pow` and `interaction` says how many clients are clearing the higher
+   * bar; the rejection reasons say whether a rise is bots or a population whose browsers
+   * cannot answer a probe — and those call for opposite responses.
+   */
+  clearances: Record<string, number>;
+  challengeRejections: Record<string, number>;
+  /** Interaction scores, in ten buckets of 0.1. The distribution `interactionAt` sits in. */
+  interactionScores: number[];
+  /**
    * How suspicion is distributed across the traffic that was scored.
    *
    * The counters behind the one chart that answers "how close does ordinary traffic
@@ -112,6 +124,9 @@ export class Metrics {
   private challengesIssued = 0;
   private challengesSolved = 0;
   private challengesRejected = 0;
+  private readonly clearances = new Map<string, number>();
+  private readonly challengeRejections = new Map<string, number>();
+  private readonly interactionScores = new Array<number>(10).fill(0);
   private scoreCount = 0;
   private scoreTotal = 0;
   private readonly scoreBuckets = new Float64Array(SCORE_BUCKETS.length);
@@ -188,6 +203,41 @@ export class Metrics {
     else this.challengesRejected++;
   }
 
+  /** Which clearance a solve earned. */
+  recordClearance(level: string): void {
+    this.clearances.set(level, (this.clearances.get(level) ?? 0) + 1);
+  }
+
+  /**
+   * Why a challenge was turned down, bucketed by cause.
+   *
+   * Bucketed rather than recorded verbatim: the reason string carries measured numbers
+   * ("answered in 120ms"), and a counter keyed on those would grow without bound on a
+   * label an attacker controls the shape of.
+   */
+  recordChallengeRejection(reason: string): void {
+    const bucket = /not a trusted event/.test(reason)
+      ? "untrusted-event"
+      : /sooner than a person/.test(reason)
+        ? "too-fast"
+        : /longer than the challenge/.test(reason)
+          ? "impossible-timing"
+          : /did not behave like one/.test(reason)
+            ? "not-a-browser"
+            : /no interaction/.test(reason)
+              ? "no-interaction"
+              : /already solved/.test(reason)
+                ? "replay"
+                : "other";
+    this.challengeRejections.set(bucket, (this.challengeRejections.get(bucket) ?? 0) + 1);
+  }
+
+  /** The interaction score a solve was graded on, into ten buckets of 0.1. */
+  recordInteractionScore(score: number): void {
+    const index = Math.min(9, Math.max(0, Math.floor(score * 10)));
+    this.interactionScores[index] = (this.interactionScores[index] ?? 0) + 1;
+  }
+
   snapshot(actorsTracked: number): MetricsSnapshot {
     return {
       requests: this.requests,
@@ -201,6 +251,9 @@ export class Metrics {
       detectorFailures: Object.fromEntries(this.detectorFailures),
       detectorTimings: Object.fromEntries([...this.detectorTimings].map(([id, timing]) => [id, { ...timing }])),
       challenges: { issued: this.challengesIssued, solved: this.challengesSolved, rejected: this.challengesRejected },
+      clearances: Object.fromEntries(this.clearances),
+      challengeRejections: Object.fromEntries(this.challengeRejections),
+      interactionScores: [...this.interactionScores],
       scores: { count: this.scoreCount, totalScore: this.scoreTotal, buckets: cumulate(this.scoreBuckets) },
       duration: { count: this.durationCount, totalMs: this.durationTotal, maxMs: this.durationMax, buckets: cumulate(this.durationBuckets) },
       actorsTracked,
@@ -259,6 +312,13 @@ export function toPrometheus(snapshot: MetricsSnapshot, options: PrometheusOptio
     counter("detector_duration_ms_count", "Detector invocations timed.", timings.map(([detector, timing]) => [`{detector="${escapeLabel(detector)}"}`, timing.count]));
   }
   counter("challenges_total", "Challenge lifecycle events.", Object.entries(snapshot.challenges).map(([event, value]) => [`{event="${event}"}`, value]));
+  counter("clearances_total", "Clearance granted, by level.", Object.entries(snapshot.clearances).map(([level, value]) => [`{level="${level}"}`, value]));
+  counter("challenge_rejections_total", "Challenges turned down, by cause.", Object.entries(snapshot.challengeRejections).map(([cause, value]) => [`{cause="${cause}"}`, value]));
+  counter(
+    "interaction_score_bucket",
+    "Interaction scores, in tenths. The distribution the interactionAt threshold sits in.",
+    snapshot.interactionScores.map((value, index) => [`{le="${((index + 1) / 10).toFixed(1)}"}`, value]),
+  );
 
   lines.push(
     `# HELP ${prefix}_score Distribution of probabilistic scores. Proven assessments carry no score and are counted by ${prefix}_proven_total.`,

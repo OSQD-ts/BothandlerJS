@@ -3,6 +3,8 @@ import { parseAcceptLanguage, pickTranslation } from "./language.js";
 import type { ChallengeCopy } from "./language.js";
 import { clampDifficulty, verifyProofOfWork, DEFAULT_DIFFICULTY } from "./pow.js";
 import { issueToken, newChallenge, newClearance, verifyToken } from "./token.js";
+import { DEFAULT_INTERACTION_SETTINGS, parseInteractionReport, probeShapeFor, verifyInteraction } from "./interaction.js";
+import type { InteractionSettings } from "./interaction.js";
 import { serializeCookie } from "../internal/http.js";
 import { shortHash } from "../internal/crypto.js";
 import { systemClock } from "../internal/clock.js";
@@ -82,6 +84,16 @@ export interface ChallengeOptions {
    * write rather than by a heuristic here.
    */
   translations?: Record<string, ChallengeCopy>;
+  /**
+   * Ask for a deliberate gesture as well as the proof of work, and measure what the
+   * browser can actually do while waiting for it.
+   *
+   * `true` uses {@link DEFAULT_INTERACTION_SETTINGS}. Solving the puzzle alone no longer
+   * grants clearance when this is on: the gesture is required. Read
+   * `src/challenge/interaction.ts` before turning it on — in particular the part about
+   * what is and is not verifiable — because it changes who can get through your site.
+   */
+  interaction?: boolean | Partial<InteractionSettings>;
   store?: BotHandlerStore;
   clock?: Clock;
 }
@@ -93,8 +105,8 @@ export interface ChallengeResponse {
 }
 
 export type SolutionOutcome =
-  | { ok: true; setCookie: string; level: ClearanceLevel }
-  | { ok: false; status: number; reason: string };
+  | { ok: true; setCookie: string; level: ClearanceLevel; interactionScore?: number; notes?: readonly string[] }
+  | { ok: false; status: number; reason: string; interactionScore?: number | undefined };
 
 /**
  * Issues challenges, verifies solutions and grants clearance.
@@ -111,6 +123,8 @@ export class ChallengeService {
   private readonly challengeTtlMs: number;
   private readonly clock: Clock;
   private readonly store: BotHandlerStore | undefined;
+  /** Resolved interaction settings, or `undefined` when the gesture is not asked for. */
+  private readonly interaction: InteractionSettings | undefined;
   readonly verifyPath: string;
   readonly cookieName: string;
   /**
@@ -128,12 +142,26 @@ export class ChallengeService {
     }
     this.secrets = options.secrets;
     this.difficulty = clampDifficulty(options.difficulty ?? DEFAULT_DIFFICULTY);
-    this.challengeTtlMs = options.challengeTtlMs ?? 120_000;
+    const wantsGesture = options.interaction !== undefined && options.interaction !== false;
+    // Two minutes is the right budget for a puzzle a machine solves in milliseconds. It
+    // is the wrong one for a page that stops and waits for a person to read it and act:
+    // somebody using a screen reader that announces the whole page, on a slow device
+    // where the proof of work itself takes twenty seconds, or simply interrupted, runs
+    // out and is told to reload — having done nothing wrong and with no idea why.
+    this.challengeTtlMs = options.challengeTtlMs ?? (wantsGesture ? 600_000 : 120_000);
     this.clearanceTtlMs = options.clearanceTtlMs ?? 3_600_000;
     this.verifyPath = options.verifyPath ?? "/__bothandler/verify";
     this.cookieName = options.cookieName ?? "__bh_clearance";
     this.clock = options.clock ?? systemClock;
     this.store = options.store;
+    this.interaction = !wantsGesture
+      ? undefined
+      : { ...DEFAULT_INTERACTION_SETTINGS, ...(options.interaction === true ? {} : options.interaction) };
+  }
+
+  /** Whether this service asks for a gesture as well as the puzzle. */
+  get wantsInteraction(): boolean {
+    return this.interaction !== undefined;
   }
 
   /**
@@ -194,6 +222,7 @@ export class ChallengeService {
       ...(message !== undefined ? { message } : {}),
       ...(contactHtml !== undefined ? { contactHtml } : {}),
       ...(lang !== undefined ? { lang } : {}),
+      ...(this.interaction !== undefined ? { interaction: true, probe: probeShapeFor(claims.nonce, this.secrets[0] as string) } : {}),
     });
 
     return {
@@ -243,6 +272,28 @@ export class ChallengeService {
       return { ok: false, status: 400, reason: "solution does not satisfy the challenge" };
     }
 
+    // The gesture, when one was asked for. Deliberately after the proof of work and
+    // before the replay claim: a submission that has not solved the puzzle has not
+    // earned the CPU this costs, and one that fails here should not burn its nonce.
+    let level: ClearanceLevel = "pow";
+    let interactionScore: number | undefined;
+    let notes: readonly string[] | undefined;
+
+    if (this.interaction !== undefined) {
+      const report = parseInteractionReport((payload as { interaction?: unknown }).interaction);
+      // Measured here rather than taken from the report: `iat` is inside the signed
+      // token, so this is real time that passed on this server, and it is the one thing
+      // in the whole exchange the client cannot lie about.
+      const elapsedMs = this.clock.now() - verified.payload.iat;
+      const outcome = verifyInteraction(report, elapsedMs, this.interaction, probeShapeFor(verified.payload.nonce, this.secrets[0] as string));
+      if (!outcome.ok) {
+        return { ok: false, status: 400, reason: outcome.reason, ...(outcome.score === undefined ? {} : { interactionScore: outcome.score }) };
+      }
+      level = outcome.level;
+      interactionScore = outcome.score;
+      notes = outcome.notes;
+    }
+
     if (this.store) {
       let claimed: boolean;
       try {
@@ -256,7 +307,13 @@ export class ChallengeService {
       if (!claimed) return { ok: false, status: 409, reason: "challenge already solved" };
     }
 
-    return { ok: true, level: "pow", setCookie: this.grant(actorKey, "pow") };
+    return {
+      ok: true,
+      level,
+      setCookie: this.grant(actorKey, level),
+      ...(interactionScore === undefined ? {} : { interactionScore }),
+      ...(notes === undefined ? {} : { notes }),
+    };
   }
 
   /**

@@ -81,6 +81,28 @@ export const REPUTATION_CASES: TrafficCase[] = [
     requests: [browser("chromeWindows")],
     expect: { verdict: "human", certain: true, detectors: ["clearance"], action: ["allow", "log", "tag"] },
   }),
+  human({
+    id: "cleared-by-interaction",
+    title: "A person who ticked the box on the interaction challenge",
+    category: "clearance",
+    provenance: "A signed clearance cookie granted after a trusted activation on a browser that passed the capability probes",
+    notes:
+      "`strong` human evidence rather than `certain`, and the gap is the whole point. A trusted gesture in a rendering browser is a real cost imposed and it is still not proof of a person: a browser driven through the DevTools protocol dispatches genuine input events and renders genuine CSS. It outranks a bare proof of work because it costs more, and it stops short of `operator` because that assertion comes from the application and this one comes from the client.",
+    clearance: "interaction",
+    requests: [browser("chromeWindows")],
+    expect: { detectors: ["clearance"], neverAction: ["block", "drop", "redirect"] },
+  }),
+  human({
+    id: "cleared-by-interaction-on-a-phone",
+    title: "A person who tapped the box on a phone",
+    category: "clearance",
+    provenance: "A tap emits almost no pointermove, so the report carries no path at all",
+    notes:
+      "Kept because the absence of a pointer path used to be scored as a mark against the client, which graded every phone — and every screen reader, switch and voice-control user — down to the weaker clearance for the way they use a computer. A tap is reported as touch and graded on its capabilities.",
+    clearance: "interaction",
+    requests: [browser("safariIos")],
+    expect: { detectors: ["clearance"], neverAction: ["block", "drop", "redirect"] },
+  }),
   bot({
     id: "cleared-but-proven-bot",
     title: "A proven bot presenting a valid clearance token",

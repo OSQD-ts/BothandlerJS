@@ -146,6 +146,7 @@ and rules can read it:
 
 ## Related
 
+- [The interaction challenge](interaction.md) — asking for a gesture, and probing the browser
 - [Localisation](localisation.md) — showing the page in a language the visitor reads
 - [Actions](../policy/actions.md) — where `challenge` sits on the ladder
 - [The guard](../concepts/the-guard.md) — why it is the ceiling for unproven verdicts

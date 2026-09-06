@@ -6,7 +6,102 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **An interaction challenge.** `challenge.interaction` asks the interstitial for a
+  deliberate gesture as well as the proof of work, and probes what the browser can
+  actually do while it waits. Six probes read back things only a rendering engine
+  produces — a computed style that requires the cascade to have run, a laid-out box,
+  font metrics that differ between two families, a frame loop, a media query, an element
+  that `display: none` actually hid. One of them is different for every challenge: the
+  box count and box height of the layout probe are drawn from the nonce under the
+  signing secret, so the client cannot compute the answer and can only measure it.
+
+  When it is on, solving the puzzle alone no longer grants clearance: the gesture is
+  required, and passing grants the `interaction` clearance level, which the `clearance`
+  detector has always known how to read and which nothing until now ever granted.
+  `challengeTtlMs` defaults to ten minutes rather than two, because the page now stops
+  and waits for a person to read it.
+
+  The gesture is a checkbox, and that is the whole accessibility argument: it is the one
+  interactive control that a pointer, a touch screen, the space bar, a screen reader,
+  switch access and voice control can all operate. A tap and a keypress are reported as
+  what they are and never marked down for producing no pointer path, and a pointer path
+  too short to measure is treated as no evidence rather than bad evidence.
+
+  **Be clear about the ceiling, which is measured rather than assumed.** A client that
+  replays a report captured from a real browser gets nowhere, and one that hardcodes a
+  formula for the layout probe gets nowhere — but one that *parses the served HTML and
+  CSS each time* passes every check, because both numbers have to reach the browser to
+  be rendered. Against an adversary who writes a parser for your challenge page this
+  adds nothing over the plain proof of work beyond the server-verified elapsed-time
+  floor, and no client-side probe can. What it defeats is every scraper that does not
+  bother. Nothing here is proof of humanity and none of it is ever `certain`.
+
+- **Counters for the challenge that were not there.** `bothandler_clearances_total` by
+  level, `bothandler_challenge_rejections_total` by cause, and
+  `bothandler_interaction_score_bucket` in tenths, fed by refusals as well as successes
+  so the distribution is not censored at the threshold it exists to inform. The
+  `challenge` event carries `level`, `score` and `reason` to match.
+
+  `MetricsSnapshot` gains three fields, so anything constructing one by hand needs them.
+
+- **A test that parses the interstitial's own inline script.** The page is built inside
+  a template literal, where one backtick — in a comment, a string, a regular
+  expression — ends the literal early and turns the rest into markup.
+  `tests/challenge-page.test.ts` parses the rendered script with `node:vm`, including
+  with operator-supplied copy that contains a backtick.
+
+
+## [0.3.0] — 2026-09-06
+
+### Changed
+
+- **The package is now `@osqd/bothandlerjs`.** Every import moves with it —
+  `@osqd/bothandlerjs`, `/adapters`, `/client`, `/corpus`, `/cli` — and
+  `npm install bothandlerjs` becomes `npm install @osqd/bothandlerjs`. The CLI command
+  is unchanged: a `bin` name is independent of the package name, so `bothandlerjs check`
+  still works once installed, and `npx @osqd/bothandlerjs` installs it.
+
+  npm refuses capital letters in a new package name, so the spelling is
+  `@osqd/bothandlerjs` rather than `@osqd/BotHandlerJS`. `publishConfig.access` is set
+  to public, without which a scoped package publishes private on the first attempt, and
+  the tarball is now `osqd-bothandlerjs-<version>.tgz`.
+
+### Added
+
+- **Releases are cut from `main`.** `scripts/next-version.mjs` reads the commits since
+  the last release tag and works out the version — `feat:` minor, `fix:`/`perf:` patch,
+  a `!` or a `BREAKING CHANGE:` footer major (or minor while the major is 0), and
+  everything else nothing at all. That last rule is what makes publishing on every push
+  tolerable: a documentation fix releases nothing.
+  `.github/workflows/publish.yml` runs the full gate against the commit, refuses a
+  version already on the registry, bumps and tags, inspects the tarball, and publishes
+  with provenance.
+
+- **A sixteen-lesson course**, in `docs/course/`, that builds one integration from a
+  first assessment to a policy you can defend. Every checkpoint in it is real output
+  from running the code.
+- **A test for the published entry points.** `tests/entry-points.test.ts` asserts the
+  surface of all four, which is the actual fix for the two entries below: every module
+  in the repository imports its neighbours by path, so nothing exercised the paths the
+  documentation tells other people to use.
+
+### Fixed
+
+- **`@osqd/bothandlerjs/corpus` did not export `runCorpus`.** That is the entire point
+  of publishing the entry point, and the README, the changelog, the design notes and
+  three documentation pages all told people to import it. It would have failed for
+  everyone outside this repository, and no test could have noticed because every
+  internal caller reaches past the entry point to `./runner.js`.
+
+- **`renderClientScript` and `parseClientSignals` were documented on the root export.**
+  They live behind `/client`, and the example omitted the required `endpoint` argument.
+
+- **A challenge test failed about one run in 271, claiming a bad proof of work had been
+  accepted.** It submitted the fixed solution `"1"` against a random nonce at difficulty
+  8, where one guess in 256 is a valid proof by accident. It searches for a counter that
+  provably misses now, and asserts that it misses before submitting it.
 
 ## [0.2.0]
 

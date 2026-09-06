@@ -1044,6 +1044,19 @@ describe("the challenge interstitial", () => {
   const axeSource = readFileSync(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8");
   let challengeUrl: string;
   let challengeServer: ReturnType<typeof createServer>;
+  let gestureUrl: string;
+  let gestureServer: ReturnType<typeof createServer>;
+  /** What the page last posted to the verification endpoint. */
+  interface PostedInteraction {
+    via?: string;
+    path?: Array<[number, number, number]>;
+    layoutHeight?: number;
+  }
+  let lastPostedInteraction: PostedInteraction | undefined;
+  // Read through a function: assigning `undefined` at the top of a test narrows the
+  // variable for the rest of it, and the value arrives from a socket the checker cannot
+  // see.
+  const posted = (): PostedInteraction | undefined => lastPostedInteraction;
 
   beforeAll(async () => {
     const service = new ChallengeService({ secrets: ["a-secret-long-enough-for-the-service"] });
@@ -1054,10 +1067,40 @@ describe("the challenge interstitial", () => {
     });
     await new Promise<void>((resolve) => challengeServer.listen(0, "127.0.0.1", () => resolve()));
     challengeUrl = `http://127.0.0.1:${(challengeServer.address() as { port: number }).port}/`;
+
+    // The same page with the interaction challenge switched on. It adds the only
+    // interactive control this library ever shows the public, so it gets its own audit.
+    const withGesture = new ChallengeService({ secrets: ["a-secret-long-enough-for-the-service"], interaction: true });
+    gestureServer = createServer((request, response) => {
+      // The verification endpoint, so a test can read what the page actually posted
+      // rather than inferring it from the page's own state.
+      if (request.method === "POST") {
+        let body = "";
+        request.on("data", (chunk) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          try {
+            lastPostedInteraction = JSON.parse(body).interaction as PostedInteraction;
+          } catch {
+            lastPostedInteraction = undefined;
+          }
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end("{}");
+        });
+        return;
+      }
+      const issued = withGesture.issue("203.0.113.9");
+      response.writeHead(issued.status, issued.headers);
+      response.end(issued.body);
+    });
+    await new Promise<void>((resolve) => gestureServer.listen(0, "127.0.0.1", () => resolve()));
+    gestureUrl = `http://127.0.0.1:${(gestureServer.address() as { port: number }).port}/`;
   });
 
   afterAll(() => {
     challengeServer?.close();
+    gestureServer?.close();
   });
 
   for (const scheme of ["light", "dark"] as const) {
@@ -1074,6 +1117,205 @@ describe("the challenge interstitial", () => {
       await page.close();
     });
   }
+
+  /**
+   * The interaction challenge, which is the only control this library asks a member of
+   * the public to operate. A checkbox was chosen over a slider, a puzzle or a
+   * press-and-hold precisely because every way of using a computer can work one — so
+   * these tests are the claim, and without them it is only an intention.
+   */
+  for (const scheme of ["light", "dark"] as const) {
+    it(`has nothing for axe to report with the gesture asked for, in ${scheme}`, async () => {
+      const page = await browser.newPage({ viewport: { width: 1200, height: 800 }, colorScheme: scheme });
+      await page.goto(gestureUrl);
+      await page.waitForTimeout(400);
+      await page.evaluate(axeSource);
+      const result = (await page.evaluate(async () => {
+        const axe = (globalThis as unknown as { axe: { run: (context: unknown, options: unknown) => Promise<unknown> } }).axe;
+        return await axe.run(document, { resultTypes: ["violations"] });
+      })) as { violations: Array<{ id: string; impact: string | null; nodes: Array<{ target: string[] }> }> };
+      expect(result.violations.map((violation) => `${violation.id} (${violation.impact}) at ${violation.nodes[0]?.target.join(" ")}`).join("\n")).toBe("");
+      await page.close();
+    });
+  }
+
+  it("can be completed with the keyboard alone", async () => {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await page.goto(gestureUrl);
+    await page.waitForSelector("#confirm");
+
+    // The page moves focus to the control once the puzzle is done, so somebody who
+    // cannot use a pointer is put on the one thing left to do rather than having to go
+    // looking for it. Asserted rather than assumed: the first draft of this test pressed
+    // Tab first and moved focus *off* the control, which is what a person would do if
+    // the page had not already placed it.
+    await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("confirm");
+
+    // No pointer is used anywhere in this test. Space is how a screen reader, switch
+    // access and voice control all reach a checkbox, and if it does not work here the
+    // page is a wall for them.
+    await page.keyboard.press("Space");
+    await expect.poll(() => page.locator("#confirm").isChecked()).toBe(true);
+    await page.close();
+  });
+
+  it("keeps the control in the tab order rather than only focusable by script", () => {
+    // Asserted as a property rather than by pressing Tab: after a blur, Chromium keeps
+    // the sequential-navigation starting point where it was, so a synthetic Tab steps
+    // *past* the control and proves nothing. What matters is that the element is a real
+    // tabbable control, which is what somebody arriving by keyboard depends on.
+    return (async () => {
+      const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+      await page.goto(gestureUrl);
+      await page.waitForSelector("#confirm");
+      const control = await page.evaluate(() => {
+        const box = document.getElementById("confirm") as HTMLInputElement | null;
+        return { tag: box?.tagName, type: box?.type, tabIndex: box?.tabIndex, disabled: box?.disabled, hidden: box?.hidden };
+      });
+      expect(control).toEqual({ tag: "INPUT", type: "checkbox", tabIndex: 0, disabled: false, hidden: false });
+      await page.close();
+    })();
+  });
+
+  /**
+   * The instruction beside the control, actually attached to it.
+   *
+   * Without aria-describedby a screen reader announces "I am a person, checkbox" and
+   * never reads the sentence sitting next to it — which is the sentence explaining that
+   * the space bar works.
+   */
+  it("attaches the instruction to the control", async () => {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await page.goto(gestureUrl);
+    const described = await page.evaluate(() => {
+      const box = document.getElementById("confirm");
+      const id = box?.getAttribute("aria-describedby") ?? "";
+      return { id, text: document.getElementById(id)?.textContent?.trim() ?? "" };
+    });
+    expect(described.id).not.toBe("");
+    expect(described.text.length).toBeGreaterThan(0);
+    // And it must not tell people to press Tab: the page focuses the control itself as
+    // soon as the puzzle finishes, so Tab moves focus away from it again.
+    expect(described.text).not.toMatch(/\bTab\b/);
+    await page.close();
+  });
+
+  /**
+   * The window of movement kept is the most recent, not the earliest.
+   *
+   * Capping the buffer by refusing to push once full kept the *first* 128 samples and
+   * discarded everything after, so for anybody who moved the mouse while reading the page
+   * the analysis measured their idle wandering and never saw the approach to the control —
+   * which is the movement it exists to recognise.
+   */
+  it("keeps the movement leading up to the click, not the movement at page load", async () => {
+    lastPostedInteraction = undefined;
+    const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
+    await page.goto(gestureUrl);
+    await page.waitForSelector("#confirm");
+
+    // Overfill the buffer with wandering in one band, then approach the control in steps
+    // an order of magnitude smaller. Which movement survives is then unambiguous.
+    for (let index = 0; index < 200; index++) await page.mouse.move(100 + (index % 40) * 6, 60 + (index % 15) * 6);
+    const box = await page.locator("#confirm").boundingBox();
+    for (let index = 1; index <= 30; index++) {
+      await page.mouse.move(300 + ((box as { x: number }).x - 300) * (index / 30), 500 + ((box as { y: number }).y - 500) * (index / 30));
+    }
+    await page.locator("#confirm").click();
+    await expect.poll(() => posted() !== undefined, { timeout: 5000 }).toBe(true);
+
+    const path = posted()?.path ?? [];
+    expect(path.length).toBeLessThanOrEqual(128);
+    expect(path.length).toBeGreaterThan(20);
+
+    // The approach steps are small; the wandering steps are large. If the window kept the
+    // earliest samples, the tail of the path would be wandering.
+    const tail = path.slice(-10).map(([dx, dy]: [number, number, number]) => Math.hypot(dx, dy));
+    expect(Math.max(...tail)).toBeLessThan(20);
+    await page.close();
+  });
+
+  it("reports the activation device it actually saw", async () => {
+    lastPostedInteraction = undefined;
+    const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
+    await page.goto(gestureUrl);
+    await page.waitForSelector("#confirm");
+    // Wait for the page to finish the puzzle and focus the control; pressing Space before
+    // that lands on the document and does nothing.
+    await expect.poll(() => page.evaluate(() => document.activeElement?.id), { timeout: 15_000 }).toBe("confirm");
+    await page.keyboard.press("Space");
+    await expect.poll(() => posted() !== undefined, { timeout: 5000 }).toBe(true);
+
+    expect(posted()?.via).toBe("keyboard");
+    expect(posted()?.layoutHeight).toBeGreaterThan(0);
+    await page.close();
+  });
+
+  /**
+   * The nonce-bound probe, answered by a browser that really did lay the block out.
+   *
+   * The expected value is derived under the signing secret, so this test cannot compute
+   * it — which is the property being demonstrated. What it can check is that the page
+   * renders a real block and measures it, rather than reporting a number it worked out.
+   */
+  it("measures the layout probe rather than computing it", async () => {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await page.goto(gestureUrl);
+    await page.waitForSelector("#probe-boxes i");
+    const measured = await page.evaluate(() => {
+      const boxes = document.getElementById("probe-boxes");
+      const items = boxes?.querySelectorAll("i") ?? [];
+      const one = items[0]?.getBoundingClientRect().height ?? 0;
+      return { count: items.length, one, total: boxes?.getBoundingClientRect().height ?? 0 };
+    });
+    // Rendered server-side: the elements are in the markup, not built by the script.
+    expect(measured.count).toBeGreaterThanOrEqual(4);
+    expect(measured.one).toBeGreaterThanOrEqual(3);
+    // And the whole is the sum of its parts, which is what the server checks.
+    expect(measured.total).toBeCloseTo(measured.count * measured.one, 1);
+    await page.close();
+  });
+
+  it("gives the control a name a screen reader can announce", async () => {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await page.goto(gestureUrl);
+    const named = await page.evaluate(() => {
+      const box = document.getElementById("confirm");
+      const label = box === null ? null : document.querySelector('label[for="confirm"]');
+      return { hasLabel: label !== null, text: label?.textContent?.trim() ?? "" };
+    });
+    expect(named.hasLabel).toBe(true);
+    expect(named.text.length).toBeGreaterThan(0);
+    await page.close();
+  });
+
+  /**
+   * The capability probes, run against a browser that genuinely has the capabilities.
+   * If these report false in real Chromium they would refuse real people, which is the
+   * expensive direction for this feature to be wrong in.
+   */
+  it("reports the browser capabilities truthfully in a real browser", async () => {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await page.goto(gestureUrl);
+    await page.waitForTimeout(300);
+    const probes = await page.evaluate(() => {
+      const css = document.getElementById("probe-css");
+      const hidden = document.getElementById("probe-hidden");
+      const a = document.getElementById("probe-a");
+      const b = document.getElementById("probe-b");
+      const main = document.querySelector("main");
+      return {
+        cssApplied: css !== null && getComputedStyle(css).letterSpacing === "3px",
+        layout: main !== null && main.getBoundingClientRect().width > 0,
+        hiddenIsHidden: hidden !== null && hidden.getBoundingClientRect().width === 0,
+        fontMetrics:
+          a !== null && b !== null && Math.abs(a.getBoundingClientRect().width - b.getBoundingClientRect().width) > 0.5,
+        mediaQuery: window.matchMedia("(min-width: 1px)").matches,
+      };
+    });
+    expect(probes).toEqual({ cssApplied: true, layout: true, hiddenIsHidden: true, fontMetrics: true, mediaQuery: true });
+    await page.close();
+  });
 
   it("fits a phone without scrolling sideways", async () => {
     const page = await browser.newPage({ viewport: { width: 360, height: 720 } });

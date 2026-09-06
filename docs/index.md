@@ -59,6 +59,7 @@ Read these once and everything else follows from them. They are short.
 | | |
 | --- | --- |
 | [The challenge](challenge/index.md) | Proof of work, clearance, and exactly what it buys. |
+| [The interaction challenge](challenge/interaction.md) | A gesture and a browser examination, and exactly what they are worth. |
 | [Languages](challenge/localisation.md) | Writing the interstitial in a language the visitor reads. |
 
 ## Running it

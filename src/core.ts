@@ -65,7 +65,25 @@ export interface BotHandlerEvents extends Record<string, unknown> {
   /** The guard replaced a terminal action with something recoverable. */
   downgrade: { assessment: Assessment; decision: Decision };
   /** A challenge was issued, solved or rejected. */
-  challenge: { phase: "issued" | "solved" | "rejected"; actorKey?: string | undefined };
+  /**
+   * A challenge was issued, solved or turned down.
+   *
+   * `level`, `score` and `reason` are present only when the interaction challenge is on,
+   * and they are the whole basis for tuning it: without the score distribution an
+   * operator moving `interactionAt` is guessing, and without the reason a rise in
+   * rejections says nothing about whether the cause is bots or a browser that cannot
+   * run a probe.
+   */
+  challenge: {
+    phase: "issued" | "solved" | "rejected";
+    actorKey?: string | undefined;
+    /** Clearance granted, on a solve. */
+    level?: "pow" | "interaction" | "operator" | undefined;
+    /** Interaction score, 0â€“1, when one was computed. */
+    score?: number | undefined;
+    /** Why it was turned down. */
+    reason?: string | undefined;
+  };
   /**
    * A detector threw or timed out.
    *
@@ -814,10 +832,20 @@ export class BotHandler {
     const actorKey = this.actorKeyFor(facts);
     const outcome = await this.challenge.verifySolution(actorKey, body);
     this.meter?.recordChallenge(outcome.ok ? "solved" : "rejected");
+    if (outcome.ok) this.meter?.recordClearance(outcome.level);
+    else this.meter?.recordChallengeRejection(outcome.reason);
+    // Recorded whether or not it passed: a distribution with the refusals cut out of it
+    // is the wrong shape for the one decision it exists to inform.
+    if (outcome.interactionScore !== undefined) this.meter?.recordInteractionScore(outcome.interactionScore);
     // A solve lands on a *later* request than the challenge that prompted it, so the
     // audit has to be told rather than being able to derive it from decisions.
     if (outcome.ok) this.audit?.recordChallengeSolved(this.config.clock.now());
-    this.events.emit("challenge", { phase: outcome.ok ? "solved" : "rejected", actorKey });
+    this.events.emit("challenge", {
+      phase: outcome.ok ? "solved" : "rejected",
+      actorKey,
+      ...(outcome.ok ? { level: outcome.level } : { reason: outcome.reason }),
+      ...(outcome.interactionScore === undefined ? {} : { score: outcome.interactionScore }),
+    });
     if (outcome.ok) {
       // Solving one clears the lot. The count is meant to say "has been asked and never
       // answers", and somebody who answers has answered — carrying their earlier

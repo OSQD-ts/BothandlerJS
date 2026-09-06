@@ -287,6 +287,7 @@ describe("metrics", () => {
       actions: { allow: 1, tag: 0, log: 0, delay: 0, "rate-limit": 0, challenge: 0, redirect: 0, block: 0, drop: 0, custom: 0 },
       downgrades: 0, proven: 0, detectorFirings: { 'we"ird': 3 }, detectorFailures: {}, detectorTimings: {},
       challenges: { issued: 0, solved: 0, rejected: 0 },
+      clearances: {}, challengeRejections: {}, interactionScores: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
       scores: { count: 1, totalScore: 12, buckets: [0, 1, 1, 1, 1, 1, 1, 1, 1, 1] },
       duration: { count: 1, totalMs: 1, maxMs: 1, buckets: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] },
       actorsTracked: 1,

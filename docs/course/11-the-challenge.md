@@ -133,6 +133,41 @@ Passing a challenge cannot change a proven verdict, so re-issuing would loop for
 **Challenging on an API** breaks your customers' integrations and stops nobody — see
 `protect-api` in [lesson 10](10-actions-and-presets.md).
 
+## Asking for a gesture as well
+
+The proof of work shows a JavaScript engine ran. One option asks for two more things — a
+deliberate gesture, and evidence that a *browser* rendered the page:
+
+```js
+challenge: {
+  secrets: [process.env.SERIF_CHALLENGE_SECRET],
+  contactHtml: "<p>…</p>",
+  interaction: true,
+}
+```
+
+The interstitial grows a checkbox, and six probes read back things only a rendering engine
+produces — a computed style that needs the cascade to have run, a laid-out box, font
+metrics, a frame loop. **Solving the puzzle alone no longer grants clearance**: the gesture
+is required, and passing grants the stronger `interaction` clearance rather than `pow`.
+
+The control is a checkbox rather than a slider or a puzzle for one reason: it is the only
+interactive element every way of using a computer can operate — pointer, touch, the space
+bar, a screen reader, switch access, voice control.
+
+**Be clear about what it buys.** It does not prove a person. What it does is move a scraper
+from `fetch()` in a loop to running a browser engine and rendering CSS per request, which
+is three or four orders of magnitude more expensive. Exactly one signal in the exchange is
+server-verified and cannot be faked: the elapsed time between issuing the challenge and
+receiving the answer, taken from the signed token.
+
+Watch it with the counters it emits — `bothandler_clearances_total{level=…}`,
+`bothandler_challenge_rejections_total{cause=…}` and `bothandler_interaction_score_bucket`.
+Without the score distribution, moving the threshold is guessing.
+
+See [the interaction challenge](../challenge/interaction.md) for the full account,
+including where its movement analysis stops working.
+
 ## Unsolved challenges as a signal
 
 Every issued-and-never-solved challenge is counted on the [actor](07-actors.md):
@@ -221,7 +256,7 @@ browser" over an English "email us" is half a fix.
 
 ## Reference
 
-- [The challenge](../challenge/index.md) · [Localisation](../challenge/localisation.md)
+- [The challenge](../challenge/index.md) · [The interaction challenge](../challenge/interaction.md) · [Localisation](../challenge/localisation.md)
 - [Actions](../policy/actions.md) — where `challenge` sits
 
 Next: [Going live](12-going-live.md).

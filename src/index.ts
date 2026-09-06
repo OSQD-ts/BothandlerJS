@@ -77,6 +77,8 @@ export * from "./challenge/index.js";
 export { ChallengeService } from "./challenge/index.js";
 export type { ChallengeCopy, ChallengeOptions, ChallengeResponse, SolutionOutcome } from "./challenge/index.js";
 export { parseAcceptLanguage, pickTranslation } from "./challenge/index.js";
+export { analyseMovement, scoreMovement, scoreCapabilities, verifyInteraction, parseInteractionReport, probeShapeFor, CAPABILITY_WEIGHTS, DEFAULT_INTERACTION_SETTINGS } from "./challenge/interaction.js";
+export type { InteractionReport, InteractionOutcome, InteractionSettings, MovementAnalysis, PointerSample, ProbeShape } from "./challenge/interaction.js";
 
 // Utilities that are genuinely useful outside the library: address handling that is
 // not fooled by alternative spellings, and the multi-pattern matcher.
