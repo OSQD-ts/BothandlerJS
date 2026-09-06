@@ -125,7 +125,7 @@
     "prebuild": "npm run client:build",
     "pretest": "npm run client:build",
     "pretypecheck": "npm run client:build",
-    "pretest:browser": "npm run client:build",
+    "pretest:browser": "npm run client:build && tsup",
     "bench:guard": "tsx scripts/bench-guard.ts"
   },
   "devDependencies": {

@@ -1051,6 +1051,14 @@ describe("accessibility", () => {
  * to break is the seam between them.
  */
 describe("the embeddable element", () => {
+  // The built bundle, not the source: what a page loads is what should be tested, and it
+  // is served to the browser below as `/element.js`.
+  //
+  // `pretest:browser` runs `tsup` for exactly this reason. It used to run only
+  // `client:build`, which meant the suite passed on any machine that happened to have a
+  // `dist/` lying around from an earlier build and failed on CI, where the browser job is
+  // separate from the one that builds and starts from a clean checkout. The error was an
+  // ENOENT on this line, thirty lines from anything that explains it.
   const bundle = readFileSync(new URL("../../dist/element/index.js", import.meta.url), "utf8");
   let embedUrl: string;
   let embedServer: ReturnType<typeof createServer>;
