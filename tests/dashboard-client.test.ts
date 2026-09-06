@@ -4,6 +4,7 @@ import { corpusCase, replayFile, replayLine } from "../src/dashboard/client/repl
 import { draftRule } from "../src/dashboard/client/draft.js";
 import { matchesFilter, matchesQuery, parseQuery, searchableText } from "../src/dashboard/client/query.js";
 import { actionKind, outcome, verdictBadge } from "../src/dashboard/client/outcome.js";
+import { clearFeed, state } from "../src/dashboard/client/store.js";
 import { n, pct, rangeLabel, uptime, windowLabel } from "../src/dashboard/client/format.js";
 import type { DashboardEntry } from "../src/dashboard/types.js";
 
@@ -328,5 +329,31 @@ describe("reading a pasted request", () => {
 
   it("refuses an empty paste rather than assessing an empty request", () => {
     expect(() => parseRequest("   ")).toThrow(/Nothing to test/);
+  });
+});
+
+/**
+ * Clearing the feed, and what has to go with it.
+ *
+ * The "N not streamed" badge adds two counts: the rate cap's, which lives on the server
+ * and is reset by `FeedRing.clear()`, and this connection's lagged drops, which live here.
+ * Only one of them was being reset, so after a Reset — or after the replace-sync that
+ * follows a dropped stream, which is the *likelier* of the two, since a viewer dropped for
+ * lagging reconnects with a stale cursor — the badge went on reporting a gap in a feed
+ * that no longer contained it, under a tooltip promising those entries were still in the
+ * window.
+ */
+describe("clearing the feed", () => {
+  it("drops the lag count along with the rows it described", () => {
+    state.rows = [{ entry: { requestId: "a" } } as never];
+    state.bufferedWhilePaused = 4;
+    state.laggedDrops = 53;
+
+    clearFeed();
+
+    expect(state.rows).toEqual([]);
+    expect(state.bufferedWhilePaused).toBe(0);
+    // The badge's other half is reset on the server; this is the half that was not.
+    expect(state.laggedDrops).toBe(0);
   });
 });

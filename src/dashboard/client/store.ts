@@ -1,9 +1,8 @@
 import { matchesFilter, matchesQuery, parseQuery, searchableText } from "./query.js";
 import { outcome } from "./outcome.js";
-import type { ActorRow } from "./registry.js";
 import type { EditorRule } from "./draft.js";
 import type { FilterName, Term } from "./query.js";
-import type { DashboardEntry, Policy, Row, Snapshot, TabName } from "./types.js";
+import type { ActorRow, DashboardEntry, Policy, Row, Snapshot, TabName } from "./types.js";
 
 /** Requests the page keeps. The server's ring is smaller; this is the ceiling, not the target. */
 const MAX_ROWS = 1000;
@@ -97,6 +96,15 @@ export function clearFeed(): void {
   state.open.clear();
   state.actor = undefined;
   state.bufferedWhilePaused = 0;
+  // The lag count goes with them. It is half of the "N not streamed" badge — the server's
+  // own `skipped` is the other half, and `FeedRing.clear()` resets that — so leaving this
+  // one behind made the badge disagree with itself: a number that survived the feed it
+  // described, under a tooltip promising the entries were "still in the window, the
+  // preview and the export" when the window had just been replaced. Both ways a feed is
+  // cleared lead here, and the second is the one that matters: a viewer whose stream was
+  // dropped for lagging reconnects with a stale cursor and is sent a fresh backlog, so the
+  // gap this counted is exactly what has just been filled in.
+  state.laggedDrops = 0;
 }
 
 export function setSearch(value: string): void {

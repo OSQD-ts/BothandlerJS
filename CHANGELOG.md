@@ -53,6 +53,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with operator-supplied copy that contains a backtick.
 
 
+### Fixed
+
+- **The "N not streamed" badge outlived the feed it described.** The badge adds two
+  counts: the server's rate-cap `skipped`, which `FeedRing.clear()` resets, and the
+  connection's lagged drops, which nothing did. After a Reset — or after the replace-sync
+  that follows a dropped stream, which is the likelier path, since a viewer dropped for
+  lagging reconnects with a stale cursor and is sent a fresh backlog — the number went on
+  reporting a gap in a window that had just been replaced, under a tooltip promising those
+  entries were still in it.
+
 ## [0.3.0] — 2026-09-06
 
 ### Changed
