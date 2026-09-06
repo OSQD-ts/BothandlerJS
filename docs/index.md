@@ -68,6 +68,7 @@ Read these once and everything else follows from them. They are short.
 | --- | --- |
 | [Operations overview](operations/index.md) | What to watch, and what to do when it moves. |
 | [The dashboard](operations/dashboard.md) | What it shows, what it refuses to do, and every option it takes. |
+| [Embedding it](operations/embedding.md) | `<bot-dashboard>` in a page you already have: screens, themes, panels of your own. |
 | [Metrics](operations/metrics.md) | Counters, histograms and the Prometheus exposition. |
 | [The traffic audit](operations/audit.md) | Watching the shape of your traffic rather than any one request. |
 | [Notifications](operations/notifications.md) | Getting told, without being told a thousand times. |

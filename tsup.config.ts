@@ -11,7 +11,7 @@ import { defineConfig } from "tsup";
 // *your* configuration rather than at ours — but it is its own entry so that
 // importing the library never loads a single case of it.
 export default defineConfig({
-  entry: ["src/index.ts", "src/adapters/index.ts", "src/client/index.ts", "src/corpus/index.ts", "src/cli.ts"],
+  entry: ["src/index.ts", "src/adapters/index.ts", "src/client/index.ts", "src/element/index.ts", "src/corpus/index.ts", "src/cli.ts"],
   format: ["esm", "cjs"],
   dts: false,
   sourcemap: true,

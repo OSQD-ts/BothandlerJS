@@ -42,3 +42,26 @@ export type TabName = "live" | "actors" | "stats" | "policy";
 export interface Preview extends PolicyPreview {}
 export interface Policy extends PolicyDocument {}
 export interface Snapshot extends DashboardSnapshot {}
+
+/**
+ * One row of the Actors screen.
+ *
+ * Here rather than in `registry.ts`, which renders it: this is plain data, and the store
+ * holds a list of it. A pure module importing a type from a module that speaks DOM pulls
+ * that module into every program the pure one appears in — which is how a Node-side test
+ * of the store came to fail on `HTMLInputElement`.
+ */
+export interface ActorRow {
+  key: string;
+  requests: number;
+  recentRate: number;
+  distinctPaths: number;
+  distinctUserAgents: number;
+  cadenceCv: number | undefined;
+  priorConfirmations: number;
+  unsolvedChallenges: number;
+  cleared: boolean;
+  firstSeen: number;
+  lastSeen: number;
+}
+

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer } from "node:http";
 import { BotHandler, ChallengeService, createFacts } from "../../src/index.js";
+import { createDashboardHandler } from "../../src/dashboard/index.js";
 import type { Browser, Page } from "playwright";
 import type { DashboardServer } from "../../src/index.js";
 
@@ -29,6 +30,8 @@ let dashboard: DashboardServer;
 let analyst: DashboardServer;
 let handler: BotHandler;
 let url: string;
+/** axe, read once and evaluated into whichever page is being audited. */
+const axeSource = readFileSync(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8");
 
 const CLIENTS: ReadonlyArray<readonly [string, string, string]> = [
   ["curl/8.4.0", "203.0.113.10", "/api/items"],
@@ -862,7 +865,6 @@ describe("runtime changes on the timeline", () => {
  * and "nothing" is a much easier line to hold than "nothing important".
  */
 describe("accessibility", () => {
-  const axeSource = readFileSync(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8");
 
   interface AxeResult {
     violations: Array<{ id: string; impact: string | null; help: string; nodes: Array<{ target: string[] }> }>;
@@ -1040,8 +1042,1377 @@ describe("accessibility", () => {
  * exists to protect. It is served here through the real `ChallengeService`, with the
  * headers and the strict CSP the action sets, rather than pasted into a blank page.
  */
+/**
+ * `<bot-dashboard>` in somebody else's page.
+ *
+ * Everything the element does that is worth asserting only exists in a browser: a shadow
+ * root, a custom-element upgrade, tokens inheriting across a shadow boundary. It is
+ * driven here against the real handler rather than a stub, because the thing most likely
+ * to break is the seam between them.
+ */
+describe("the embeddable element", () => {
+  const bundle = readFileSync(new URL("../../dist/element/index.js", import.meta.url), "utf8");
+  let embedUrl: string;
+  let embedServer: ReturnType<typeof createServer>;
+  let embedHandler: BotHandler;
+  let embedStreams = 0;
+  let editableUrl: string;
+  let editableHandler: BotHandler;
+  let editableServer: ReturnType<typeof createServer>;
+
+  beforeAll(async () => {
+    embedHandler = new BotHandler({ preset: "protect-content" });
+    const mounted = createDashboardHandler(embedHandler, { basePath: "/_bots", auth: false, title: "shop.example" });
+    // A second listener over the same handler with less to show, so the element can be
+    // checked against server-side `sections` and `redact` rather than only its own config.
+    const analystMounted = createDashboardHandler(embedHandler, { basePath: "/_analyst", auth: false, sections: { evidence: false, policy: false }, redact: { maskIp: true } });
+    const hostPage = `<!doctype html><html lang="en"><head><title>Admin</title></head><body>
+<header><h1 id="ours">Our admin page</h1></header>
+<main><div id="slot"><bot-dashboard id="d" src="/_bots"></bot-dashboard></div></main>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+document.getElementById("d").config = {
+  tabs: [{ id: "stats", label: "Overview" }, { id: "live", label: "Traffic" }],
+  theme: { scheme: "light", density: "compact", tokens: { accent: "#7c3aed" } },
+  panels: [{ id: "extra", screen: "stats", title: "Checkout health", source: () => ({ rows: [{ label: "Orders", value: 42 }] }) }],
+};
+defineBotDashboard();
+</script></body></html>`;
+    const strictPage = hostPage.replace("</body>", "</body>");
+    embedServer = createServer((request, response) => {
+      const path = (request.url ?? "").split("?")[0];
+      if (path === "/_bots/api/stream") {
+        embedStreams++;
+        response.on("close", () => {
+          embedStreams--;
+        });
+      }
+      if (path === "/strict") {
+        // An external module script, so the policy under test is purely about styles.
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'" });
+        response.end(strictPage.replace(/<script type="module">[\s\S]*?<\/script>/, '<script type="module" src="/boot.js"></script>'));
+        return;
+      }
+      if (path === "/boot.js") {
+        response.writeHead(200, { "content-type": "text/javascript" });
+        response.end('import { defineBotDashboard } from "/element.js"; defineBotDashboard();');
+        return;
+      }
+      if (path === "/nosrc") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end('<!doctype html><html><body><bot-dashboard id="d"></bot-dashboard><script type="module" src="/boot.js"></script></body></html>');
+        return;
+      }
+      if (path === "/analyst") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end('<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_analyst"></bot-dashboard><script type="module" src="/boot.js"></script></body></html>');
+        return;
+      }
+      if (path === "/crossorigin") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end('<!doctype html><html lang="en"><body><bot-dashboard id="d" src="http://127.0.0.1:1/_bots"></bot-dashboard><script type="module" src="/boot.js"></script></body></html>');
+        return;
+      }
+      if (path === "/strictmode") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><div id="slot"></div>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+defineBotDashboard();
+const slot = document.getElementById("slot");
+const make = () => { const node = document.createElement("bot-dashboard"); node.id = "d"; node.setAttribute("src", "/_bots"); return node; };
+const first = make();
+slot.append(first);
+first.remove();
+slot.append(make());
+</script></body></html>`);
+        return;
+      }
+      if (path === "/two") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="a" src="/_bots"></bot-dashboard><bot-dashboard id="b" src="/_bots"></bot-dashboard>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+defineBotDashboard();
+globalThis.handOver = () => {
+  const b = document.getElementById("b");
+  document.getElementById("a").remove();
+  b.remove();
+  document.body.append(b);
+};
+</script></body></html>`);
+        return;
+      }
+      if (path === "/customname") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end('<!doctype html><html lang="en"><body><ops-dash id="b" src="/_bots"></ops-dash><script type="module">import { defineBotDashboard } from "/element.js"; defineBotDashboard(); defineBotDashboard("ops-dash");</script></body></html>');
+        return;
+      }
+      if (path === "/narrow") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end('<!doctype html><html lang="en"><body><div style="width:320px"><bot-dashboard id="d" src="/_bots"></bot-dashboard></div><script type="module" src="/boot.js"></script></body></html>');
+        return;
+      }
+      if (path === "/ticker") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><div id="slot"><bot-dashboard id="d" src="/_bots"></bot-dashboard></div>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+let n = 0;
+const config = { panels: [{ id: "t", screen: "live", title: "Ticker", refreshMs: 1000, source: () => ({ rows: [{ label: "tick", value: ++n }] }) }] };
+document.getElementById("d").config = config;
+defineBotDashboard();
+globalThis.remount = () => { const slot = document.getElementById("slot"); slot.innerHTML = ""; const fresh = document.createElement("bot-dashboard"); fresh.id = "d"; fresh.setAttribute("src", "/_bots"); fresh.config = config; slot.append(fresh); };
+</script></body></html>`);
+        return;
+      }
+      // Two ways of being framed. `localhost` and `127.0.0.1` reach this same server and
+      // are nonetheless different origins, which is exactly the distinction the element
+      // has to draw: an admin app framing its own pages is ordinary, another site framing
+      // them is the clickjacking setup.
+      if (path === "/framed-same" || path === "/framed-cross") {
+        const inner = path === "/framed-cross" ? embedUrl.replace("127.0.0.1", "localhost") : embedUrl;
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><iframe src="${inner}" width="900" height="600"></iframe></body></html>`);
+        return;
+      }
+      if (path === "/vocab" || path === "/vocab-tab" || path === "/vocab-ok") {
+        const config =
+          path === "/vocab" ? '{ hide: { live: true } }' : path === "/vocab-tab" ? '{ tabs: [{ id: "stats", label: "Overview" }, { id: "stat", label: "Typo" }] }' : '{ hide: { feed: true } }';
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_bots"></bot-dashboard>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+document.getElementById("d").config = ${config};
+defineBotDashboard();
+</script></body></html>`);
+        return;
+      }
+      if (path === "/theming") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_bots"></bot-dashboard>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+const node = document.getElementById("d");
+node.config = { theme: { scheme: "dark", tokens: { "--accent": "rgb(1, 2, 3)", "--bg": "rgb(4, 5, 6)" } } };
+defineBotDashboard();
+globalThis.dropToken = () => { node.config = { theme: { scheme: "dark", tokens: { "--accent": "rgb(1, 2, 3)" } } }; };
+globalThis.badScheme = () => { for (let i = 0; i < 4; i++) node.config = { theme: { scheme: "Dark" } }; };
+globalThis.badDensity = () => { node.config = { theme: { density: "cozy" } }; };
+globalThis.goodDensity = () => { node.config = { theme: { density: "compact" } }; };
+</script></body></html>`);
+        return;
+      }
+      if (path === "/adopt") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><div id="slot"></div>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+defineBotDashboard();
+const slot = document.getElementById("slot");
+const mount = (id, panelId, screen) => {
+  const node = document.createElement("bot-dashboard");
+  node.id = id;
+  node.setAttribute("src", "/_bots");
+  node.config = { panels: [{ id: panelId, screen, title: panelId, source: () => ({ rows: [{ label: panelId, value: 1 }] }) }] };
+  slot.append(node);
+};
+mount("a", "alpha", "live");
+globalThis.swap = () => { document.getElementById("a").remove(); mount("b", "beta", "live"); };
+globalThis.moveScreen = () => { document.getElementById("b").remove(); mount("c", "beta", "stats"); };
+</script></body></html>`);
+        return;
+      }
+      if (path === "/rerender") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_bots"></bot-dashboard>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+const make = () => ({ theme: { scheme: "dark" }, panels: [{ id: "p", screen: "live", title: "P", source: () => ({ rows: [{ label: "a", value: 1 }] }) }] });
+document.getElementById("d").config = make();
+defineBotDashboard();
+globalThis.rerender = () => { document.getElementById("d").config = make(); };
+globalThis.retheme = () => { document.getElementById("d").config = { ...make(), theme: { scheme: "light" } }; };
+globalThis.addPanel = () => {
+  const next = make();
+  next.panels.push({ id: "q", screen: "live", title: "Q", source: () => ({ rows: [] }) });
+  document.getElementById("d").config = next;
+};
+</script></body></html>`);
+        return;
+      }
+      if (path === "/withheld" || path === "/withheld-hidden") {
+        // The analyst mount has `sections: { policy: false }` on the server. Asking for the
+        // policy screen anyway is the case; asking for it while also hiding it is the case
+        // that must stay quiet.
+        const config = path === "/withheld"
+          ? '{ tabs: [{ id: "live", label: "T" }, { id: "policy", label: "R" }] }'
+          : '{ tabs: [{ id: "live", label: "T" }, { id: "policy", label: "R" }], hide: { policy: true } }';
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_analyst"></bot-dashboard>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+document.getElementById("d").config = ${config};
+defineBotDashboard();
+</script></body></html>`);
+        return;
+      }
+      if (path === "/srcquery" || path === "/srcfragment") {
+        const src = path === "/srcquery" ? "/_bots?token=abc" : "/_bots#top";
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="d" src="${src}"></bot-dashboard>
+<script type="module">import { defineBotDashboard } from "/element.js"; defineBotDashboard();</script></body></html>`);
+        return;
+      }
+      if (path === "/panel-json") {
+        response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        response.end(JSON.stringify({ rows: [{ label: "Pending", value: 7, note: "queue" }] }));
+        return;
+      }
+      if (path === "/panel-missing") {
+        response.writeHead(404, { "content-type": "text/plain" });
+        response.end("nope");
+        return;
+      }
+      if (path === "/stringsource") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_bots"></bot-dashboard>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+document.getElementById("d").config = { panels: [
+  { id: "ok", screen: "live", title: "Checkout", source: "/panel-json" },
+  { id: "missing", screen: "live", title: "Missing", source: "/panel-missing" }
+]};
+defineBotDashboard();
+</script></body></html>`);
+        return;
+      }
+      if (path === "/nameclash") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_bots"></bot-dashboard>
+<script type="module">
+customElements.define("bot-dashboard", class extends HTMLElement {});
+import("/element.js").then((mod) => { mod.defineBotDashboard(); mod.defineBotDashboard(); });
+</script></body></html>`);
+        return;
+      }
+      if (path === "/duplicate") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_bots"></bot-dashboard>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+document.getElementById("d").config = { panels: [
+  { id: "p", screen: "live", title: "First", refreshMs: 1000, source: () => ({ rows: [{ label: "first", value: 1 }] }) },
+  { id: "p", screen: "live", title: "Second", refreshMs: 1000, source: () => ({ rows: [{ label: "second", value: 2 }] }) }
+]};
+defineBotDashboard();
+</script></body></html>`);
+        return;
+      }
+      if (path === "/panelids") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_bots"></bot-dashboard>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+globalThis.ready = false;
+document.getElementById("d").addEventListener("bot-dashboard-ready", () => { globalThis.ready = true; });
+document.getElementById("d").config = { panels: [
+  { id: 'we"ird', screen: "live", title: "Quoted id", source: () => ({ rows: [{ label: "a", value: 1 }] }) },
+  { id: "after", screen: "live", title: "After it", source: () => ({ rows: [{ label: "b", value: 2 }] }) },
+  { id: "typo", screen: "nosuchscreen", title: "Typo", source: () => ({ rows: [{ label: "c", value: 3 }] }) },
+]};
+defineBotDashboard();
+</script></body></html>`);
+        return;
+      }
+      if (path === "/panels") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_bots"></bot-dashboard>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+document.getElementById("d").config = { panels: [
+  { id: "a", screen: "live", title: "Null", source: () => null },
+  { id: "b", screen: "live", title: "String rows", source: () => ({ rows: "nope" }) },
+  { id: "c", screen: "live", title: "Missing fields", source: () => ({ rows: [{}, { label: "ok", value: 1 }] }) },
+  { id: "d", screen: "live", title: "Throws", source: () => { throw new Error("boom"); } },
+  { id: "e", screen: "live", title: "Object value", source: () => ({ rows: [{ label: "x", value: { deep: 1 } }] }) },
+  { id: "f", screen: "live", title: "Markup", source: () => ({ rows: [{ label: "l", value: "<img src=x onerror=alert(1)>" }] }) },
+]};
+defineBotDashboard();
+</script></body></html>`);
+        return;
+      }
+      if (path === "/huge") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html><body><bot-dashboard id="d" src="/_bots"></bot-dashboard>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+document.getElementById("d").config = { panels: [{ id: "big", screen: "live", title: "Huge", source: () => ({ rows: Array.from({ length: 50000 }, (_, i) => ({ label: "row " + i, value: i })) }) }] };
+defineBotDashboard();
+</script></body></html>`);
+        return;
+      }
+      if (path === "/element.js") {
+        response.writeHead(200, { "content-type": "text/javascript" });
+        response.end(bundle);
+        return;
+      }
+      if ((request.url ?? "").startsWith("/_analyst")) {
+        void analystMounted(request, response);
+        return;
+      }
+      if ((request.url ?? "").startsWith("/_bots")) {
+        void mounted(request, response);
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(hostPage);
+    });
+    await new Promise<void>((resolve) => embedServer.listen(0, "127.0.0.1", () => resolve()));
+    embedUrl = `http://127.0.0.1:${(embedServer.address() as { port: number }).port}/`;
+
+    // Its own handler and listener, because this one can rewrite a live policy and the
+    // other tests read the feed it would be changing underneath them.
+    editableHandler = new BotHandler({ preset: "protect-content" });
+    const editable = createDashboardHandler(editableHandler, {
+      basePath: "/_bots",
+      auth: { username: "ops", password: "a-long-enough-password-here" },
+      controls: { editPolicy: true },
+    });
+    editableServer = createServer((request, response) => {
+      const path = (request.url ?? "").split("?")[0];
+      if (path === "/element.js") {
+        response.writeHead(200, { "content-type": "text/javascript" });
+        response.end(bundle);
+        return;
+      }
+      if (path === "/boot.js") {
+        response.writeHead(200, { "content-type": "text/javascript" });
+        response.end('import { defineBotDashboard } from "/element.js"; defineBotDashboard();');
+        return;
+      }
+      if ((request.url ?? "").startsWith("/_bots")) {
+        void editable(request, response);
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end('<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_bots"></bot-dashboard><script type="module" src="/boot.js"></script></body></html>');
+    });
+    await new Promise<void>((resolve) => editableServer.listen(0, "127.0.0.1", () => resolve()));
+    editableUrl = `http://127.0.0.1:${(editableServer.address() as { port: number }).port}/`;
+  });
+
+  afterAll(() => {
+    embedServer?.close();
+    editableServer?.close();
+  });
+
+  async function openEmbed(): Promise<Page> {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
+    await page.goto(embedUrl);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector("#rows") != null, undefined, { timeout: 15_000 });
+    return page;
+  }
+
+  it("renders the whole dashboard into a shadow root inside the host page", async () => {
+    const page = await openEmbed();
+    const state = await page.evaluate(() => {
+      const host = document.getElementById("d") as HTMLElement;
+      const shadow = host.shadowRoot as ShadowRoot;
+      return {
+        brand: shadow.querySelector(".brand")?.textContent?.trim(),
+        placeholders: /__[A-Z_]+__/.test(shadow.innerHTML),
+        // The host document must be untouched: no stray table, no stray panel, and its
+        // own heading still its own.
+        leaked: document.querySelectorAll("table, .panel, .tabs").length,
+        hostHeading: document.getElementById("ours")?.textContent,
+      };
+    });
+    expect(state.brand).toContain("shop.example");
+    // The title is the one placeholder the markup carries and the element substitutes it;
+    // without that the header read "__TITLE__" to everyone.
+    expect(state.placeholders).toBe(false);
+    expect(state.leaked).toBe(0);
+    expect(state.hostHeading).toBe("Our admin page");
+    await page.close();
+  });
+
+  it("shows the tabs it was configured with, relabelled and reordered", async () => {
+    const page = await openEmbed();
+    const tabs = await page.evaluate(() =>
+      Array.from(((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelectorAll(".tab:not([hidden])")).map((tab) => tab.textContent?.trim()),
+    );
+    expect(tabs).toEqual(["Overview", "Traffic"]);
+    await page.close();
+  });
+
+  /**
+   * Custom properties set on the host inherit into the shadow tree, which is the whole
+   * reason the token blocks name `:host`. Without that the element renders unthemed.
+   */
+  it("takes its theme from the host element", async () => {
+    const page = await openEmbed();
+    const theme = await page.evaluate(() => {
+      const host = document.getElementById("d") as HTMLElement;
+      const panel = (host.shadowRoot as ShadowRoot).querySelector(".panel") as HTMLElement;
+      return {
+        accent: getComputedStyle(host).getPropertyValue("--accent").trim(),
+        density: host.getAttribute("data-density"),
+        scheme: host.getAttribute("data-theme"),
+        panelPainted: getComputedStyle(panel).backgroundColor,
+      };
+    });
+    expect(theme.accent).toBe("#7c3aed");
+    expect(theme.density).toBe("compact");
+    expect(theme.scheme).toBe("light");
+    expect(theme.panelPainted).not.toBe("rgba(0, 0, 0, 0)");
+    await page.close();
+  });
+
+  it("renders a developer's own panel as text", async () => {
+    const page = await openEmbed();
+    const rows = await page.evaluate(() =>
+      Array.from(((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelectorAll(".bd-extra .row")).map((row) => row.textContent?.replace(/\s+/g, " ").trim()),
+    );
+    expect(rows).toEqual(["Orders42"]);
+    await page.close();
+  });
+
+  /**
+   * Everything below is about being a guest in somebody else's document. The dashboard
+   * was written to own a page, and each of these was it still behaving as though it did.
+   */
+  it("leaves the host page's keyboard alone", async () => {
+    const page = await openEmbed();
+    const selected = (): Promise<string | undefined> =>
+      page.evaluate(() =>
+        Array.from(((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelectorAll(".tab"))
+          .find((tab) => tab.getAttribute("aria-selected") === "true")
+          ?.textContent?.trim(),
+      );
+    const before = await selected();
+    // A digit pressed while the host page has focus switched a tab in here, which is
+    // somebody else's keyboard being taken.
+    await page.locator("#ours").click();
+    await page.keyboard.press("3");
+    await page.waitForTimeout(200);
+    expect(await selected()).toBe(before);
+    await page.close();
+  });
+
+  it("leaves the host page's URL alone", async () => {
+    const page = await openEmbed();
+    // The standalone page writes its tab and filter into the hash so a link lands on a
+    // view. Embedded, that is the host's address bar, and its back button would walk
+    // through somebody's tab changes on the way out.
+    await page.evaluate(() => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      (shadow.querySelector("#tab-stats") as HTMLElement).click();
+    });
+    await page.waitForTimeout(200);
+    expect(await page.evaluate(() => location.hash)).toBe("");
+    await page.close();
+  });
+
+  it("gives a keyboard a way past the header, which a fragment cannot do here", async () => {
+    const page = await openEmbed();
+    // `href="#view-live"` is inert inside a shadow root: fragment navigation does not
+    // cross the boundary, so the one affordance that skips the header did nothing.
+    const focused = await page.evaluate(async () => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      (shadow.querySelector("a.skip") as HTMLAnchorElement).click();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return { id: (shadow.activeElement as HTMLElement | null)?.id, hash: location.hash };
+    });
+    expect(focused.id).toBe("view-live");
+    expect(focused.hash).toBe("");
+    await page.close();
+  });
+
+  /**
+   * What a router does on every navigation. The first version refused the second mount
+   * outright, which made the element unusable in React, Vue or anything else with one.
+   */
+  it("survives being unmounted and mounted again, with its history", async () => {
+    const page = await openEmbed();
+    await embedHandler.handle(
+      createFacts({ method: "GET", url: "/products", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.71" }),
+    );
+    await expect
+      .poll(() => page.evaluate(() => ((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelectorAll("tbody tr.row").length), { timeout: 10_000 })
+      .toBeGreaterThan(0);
+
+    await page.evaluate(() => {
+      const slot = document.getElementById("d")?.parentElement as HTMLElement;
+      slot.innerHTML = "";
+      const fresh = document.createElement("bot-dashboard");
+      fresh.id = "d";
+      fresh.setAttribute("src", "/_bots");
+      slot.append(fresh);
+    });
+    await page.waitForTimeout(1200);
+
+    const after = await page.evaluate(() => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      return {
+        refused: shadow.textContent?.includes("already running") === true,
+        rows: shadow.querySelectorAll("tbody tr.row").length,
+        tiles: shadow.querySelectorAll(".tile").length,
+      };
+    });
+    expect(after.refused).toBe(false);
+    expect(after.tiles).toBeGreaterThan(0);
+    // The feed it had built is still there rather than starting empty.
+    expect(after.rows).toBeGreaterThan(0);
+
+    // And it is still live, not a corpse of the previous mount.
+    await embedHandler.handle(
+      createFacts({ method: "GET", url: "/products", headers: { host: "shop.test", "user-agent": "python-requests/2.32.3", accept: "*/*" }, ip: "203.0.113.72" }),
+    );
+    await expect
+      .poll(() => page.evaluate(() => ((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelectorAll("tbody tr.row").length), { timeout: 10_000 })
+      .toBeGreaterThan(after.rows);
+    await page.close();
+  });
+
+  /**
+   * A host page with a strict Content-Security-Policy, which is what an admin page ought
+   * to have — and therefore the page this element is most likely to be mounted on.
+   *
+   * An injected `<style>` element is inline style, so `style-src 'self'` blocks it and the
+   * dashboard renders with no colours, no radii and no layout at all. A constructable
+   * stylesheet built by script that has already satisfied `script-src` is not inline style
+   * and is not blocked.
+   */
+  it("styles itself under a strict style-src", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const violations: string[] = [];
+    page.on("console", (message) => {
+      if (/Content Security Policy|Refused/.test(message.text())) violations.push(message.text());
+    });
+    await page.goto(`${embedUrl}strict`);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector(".panel") != null, undefined, { timeout: 15_000 });
+    const painted = await page.evaluate(() => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      const panel = shadow.querySelector(".panel") as HTMLElement;
+      return { radius: getComputedStyle(panel).borderRadius, background: getComputedStyle(panel).backgroundColor, adopted: shadow.adoptedStyleSheets.length };
+    });
+    expect(painted.adopted).toBeGreaterThan(0);
+    expect(painted.radius).not.toBe("0px");
+    expect(painted.background).not.toBe("rgba(0, 0, 0, 0)");
+    expect(violations).toEqual([]);
+    await page.close();
+  });
+
+  it("closes its stream when it is removed, and picks it up again", async () => {
+    const page = await openEmbed();
+    await expect.poll(() => embedStreams, { timeout: 10_000 }).toBe(1);
+
+    await page.evaluate(() => {
+      (document.getElementById("d")?.parentElement as HTMLElement).innerHTML = "";
+    });
+    // Left open it holds a server connection and keeps drawing into a tree nobody can
+    // see, for as long as the page lives.
+    await expect.poll(() => embedStreams, { timeout: 10_000 }).toBe(0);
+
+    // Traffic while it is away, which resuming should collect rather than miss.
+    await embedHandler.handle(
+      createFacts({ method: "GET", url: "/products", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.81" }),
+    );
+    await page.evaluate(() => {
+      const slot = document.getElementById("slot") as HTMLElement;
+      const fresh = document.createElement("bot-dashboard");
+      fresh.id = "d";
+      fresh.setAttribute("src", "/_bots");
+      slot.append(fresh);
+    });
+    await expect.poll(() => embedStreams, { timeout: 10_000 }).toBe(1);
+    await expect
+      .poll(() => page.evaluate(() => ((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelectorAll("tbody tr.row").length), { timeout: 10_000 })
+      .toBeGreaterThan(0);
+    await page.close();
+  });
+
+  it("bounds what a panel can put on the page", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(`${embedUrl}huge`);
+    await page.waitForFunction(() => ((document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelectorAll(".bd-extra .row").length ?? 0) > 0, undefined, { timeout: 15_000 });
+    const rows = await page.evaluate(() => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      const all = Array.from(shadow.querySelectorAll(".bd-extra .row"));
+      return { count: all.length, last: all.at(-1)?.textContent?.trim() };
+    });
+    // A panel is a summary. Laying out fifty thousand rows locks up somebody's admin page.
+    expect(rows.count).toBeLessThan(300);
+    expect(rows.last).toContain("more not shown");
+    await page.close();
+  });
+
+  it("says what is wrong when it has nowhere to fetch from", async () => {
+    const page = await browser.newPage();
+    await page.goto(`${embedUrl}nosrc`);
+    await page.waitForFunction(() => ((document.getElementById("d") as HTMLElement | null)?.shadowRoot?.textContent ?? "").length > 0, undefined, { timeout: 15_000 });
+    const shown = await page.evaluate(() => ((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).textContent ?? "");
+    // Without `src` it asks its own origin, is handed the host page's HTML, and the
+    // parser's account of that — "Unexpected token '<'" — tells a developer nothing about
+    // the attribute they forgot.
+    expect(shown).toContain("src");
+    expect(shown).not.toContain("Unexpected token");
+    await page.close();
+  });
+
+  /**
+   * The element is a second rendering context and had never been audited as one. Three
+   * things only went wrong inside a shadow root:
+   *
+   * - A shadow root has no `body`, so nothing set the base colour or type and everything
+   *   inherited the host page's. On a white page that passed for correct; in dark mode it
+   *   was near-black text on a near-black surface.
+   * - The page's own `<main>` is a landmark, and a second one inside a host page that
+   *   already has one gives a screen reader user two "main" landmarks to choose between.
+   * - Re-roling that `<main>` to a region silences those and earns `aria-allowed-role`
+   *   instead, because `<main>` permits no role but its own.
+   */
+  for (const scheme of ["light", "dark"] as const) {
+    it(`has nothing for axe to report inside a host page, in ${scheme}`, async () => {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 950 }, colorScheme: scheme });
+      await page.goto(embedUrl);
+      await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector(".panel") != null, undefined, { timeout: 15_000 });
+      await page.evaluate(axeSource);
+      const result = (await page.evaluate(async () => {
+        const axe = (globalThis as unknown as { axe: { run: (context: unknown, options: unknown) => Promise<unknown> } }).axe;
+        return await axe.run(document, { resultTypes: ["violations"] });
+      })) as { violations: Array<{ id: string; impact: string | null; nodes: Array<{ target: unknown[] }> }> };
+      expect(result.violations.map((violation) => `${violation.id} (${violation.impact})`).join("\n")).toBe("");
+      await page.close();
+    });
+  }
+
+  it("paints its own ink and surface rather than inheriting the page's", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 950 }, colorScheme: "dark" });
+    await page.goto(embedUrl);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector(".panel") != null, undefined, { timeout: 15_000 });
+    const painted = await page.evaluate(() => {
+      const host = document.getElementById("d") as HTMLElement;
+      const panel = (host.shadowRoot as ShadowRoot).querySelector(".panel") as HTMLElement;
+      return { surface: getComputedStyle(host).backgroundColor, ink: getComputedStyle(panel).color };
+    });
+    // In dark mode the inherited value was black, on a near-black surface.
+    expect(painted.ink).not.toBe("rgb(0, 0, 0)");
+    expect(painted.surface).not.toBe("rgba(0, 0, 0, 0)");
+    await page.close();
+  });
+
+  it("does not add a second main landmark to the host page", async () => {
+    const page = await openEmbed();
+    const landmarks = await page.evaluate(() => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      return {
+        inShadow: shadow.querySelectorAll("main").length,
+        region: shadow.querySelector('[role="region"]')?.getAttribute("aria-label"),
+      };
+    });
+    expect(landmarks.inShadow).toBe(0);
+    expect(landmarks.region).toContain("bot dashboard");
+    await page.close();
+  });
+
+  /**
+   * A panel's source is somebody else's endpoint, so what it returns is data rather than a
+   * contract. Each of these was drawn as-is before it was checked — `{ rows: "nope" }`
+   * most memorably, because a string is iterable and it rendered one row per character,
+   * every one of them reading "undefined".
+   */
+  it("survives whatever a panel source returns", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const dialogs: string[] = [];
+    page.on("dialog", (dialog) => {
+      dialogs.push(dialog.message());
+      void dialog.dismiss();
+    });
+    await page.goto(`${embedUrl}panels`);
+    await page.waitForFunction(() => ((document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelectorAll("[data-bd-panel]").length ?? 0) >= 5, undefined, { timeout: 15_000 });
+    await page.waitForTimeout(600);
+
+    const panels = await page.evaluate(() => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      const read = (id: string): { rows: number; text: string } => {
+        const section = shadow.querySelector(`[data-bd-panel="${id}"]`) as HTMLElement;
+        return { rows: section.querySelectorAll(".bd-extra .row").length, text: (section.querySelector(".bd-extra") as HTMLElement).textContent ?? "" };
+      };
+      return { a: read("a"), b: read("b"), c: read("c"), d: read("d"), e: read("e") };
+    });
+
+    expect(panels.a.text).toContain("no rows");        // null
+    expect(panels.b.rows).toBe(0);                     // rows is a string, not an array
+    expect(panels.b.text).not.toContain("undefined");
+    expect(panels.c.rows).toBe(1);                     // one row was unusable, one was not
+    expect(panels.c.text).not.toContain("undefined");
+    expect(panels.d.text).toContain("Could not load"); // the source threw
+    expect(panels.e.text).toContain('{"deep":1}');     // an object, said rather than "[object Object]"
+
+    // And markup in a value stays a value.
+    const injected = await page.evaluate(() => {
+      const section = ((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelector('[data-bd-panel="f"]') as HTMLElement;
+      return { images: section.querySelectorAll("img").length, text: section.textContent ?? "" };
+    });
+    expect(injected.images).toBe(0);
+    expect(injected.text).toContain("<img src=x");
+    expect(dialogs).toEqual([]);
+    await page.close();
+  });
+
+  /**
+   * The two-column grid used to ask the *viewport* how much room it had, which is the
+   * same wrong-box mistake the feed table's own breakpoints made one level down. Embedded
+   * in a 320px sidebar on a 1280px screen the media query never fired, the right-hand
+   * column held its 280px minimum, and the feed was squeezed to twenty-two pixels.
+   */
+  it("lays out against its container, not the window", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(`${embedUrl}narrow`);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector("#rows") != null, undefined, { timeout: 15_000 });
+    const measured = await page.evaluate(() => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      const wrap = shadow.querySelector(".feed-scroll") as HTMLElement;
+      return { host: (document.getElementById("d") as HTMLElement).clientWidth, feed: wrap.clientWidth };
+    });
+    expect(measured.host).toBeLessThan(400);
+    // The feed gets essentially the whole column rather than what is left after a
+    // second one it has no room for.
+    expect(measured.feed).toBeGreaterThan(measured.host * 0.8);
+    await page.close();
+  });
+
+  it("keeps a refreshing panel refreshing after a route change", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(`${embedUrl}ticker`);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector('[data-bd-panel="t"] .bd-extra b') != null, undefined, { timeout: 15_000 });
+    const tick = async (): Promise<number> =>
+      Number(await page.evaluate(() => ((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelector('[data-bd-panel="t"] .bd-extra b')?.textContent ?? "0"));
+
+    await page.evaluate(() => (globalThis as unknown as { remount: () => void }).remount());
+    await page.waitForTimeout(600);
+    const afterRemount = await tick();
+    // `disconnectedCallback` clears the interval, and the remount path reused the existing
+    // section without re-arming it — so the panel froze on whatever it last drew.
+    await expect.poll(() => tick(), { timeout: 10_000 }).toBeGreaterThan(afterRemount);
+    await page.close();
+  });
+
+  /**
+   * What React 18 in development does to every component: mount, unmount, mount again,
+   * synchronously. A custom element that assumes its first connect is its only one breaks
+   * here, and breaks only for people running a dev build.
+   */
+  it("survives a synchronous mount, unmount, mount", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const failures: string[] = [];
+    page.on("pageerror", (error) => failures.push(String(error)));
+    await page.goto(`${embedUrl}strictmode`);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector("#rows") != null, undefined, { timeout: 15_000 });
+    const state = await page.evaluate(() => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      return { elements: document.querySelectorAll("bot-dashboard").length, refused: shadow.textContent?.includes("already running") === true, panels: shadow.querySelectorAll(".panel").length };
+    });
+    expect(state.elements).toBe(1);
+    expect(state.refused).toBe(false);
+    expect(state.panels).toBeGreaterThan(0);
+    expect(failures).toEqual([]);
+    await page.close();
+  });
+
+  /**
+   * Two on one page: the second says so rather than fighting the first for the client's
+   * module state. But the refusal is about the moment, not about the element — a router
+   * that mounts the replacement before unmounting the old one produces exactly this race,
+   * and the loser has to be able to take over once it is alone. It could not: the refusal
+   * latched, so the survivor stayed dead for the life of the instance.
+   */
+  it("refuses the second of two, and hands over when the first leaves", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const failures: string[] = [];
+    page.on("pageerror", (error) => failures.push(String(error)));
+    await page.goto(`${embedUrl}two`);
+    const state = (id: string): Promise<{ running: boolean; refused: boolean }> =>
+      page.evaluate((which) => {
+        const shadow = (document.getElementById(which) as HTMLElement | null)?.shadowRoot;
+        return {
+          running: shadow?.querySelector("#rows") != null,
+          refused: shadow?.textContent?.includes("already running") === true,
+        };
+      }, id);
+    await expect.poll(async () => (await state("a")).running, { timeout: 15_000 }).toBe(true);
+    expect(await state("b")).toEqual({ running: false, refused: true });
+
+    await page.evaluate(() => (globalThis as unknown as { handOver: () => void }).handOver());
+    // The one that lost the race now owns the page, and the message from the attempt it
+    // lost is gone rather than sitting above a working dashboard.
+    await expect.poll(async () => (await state("b")).running, { timeout: 15_000 }).toBe(true);
+    expect((await state("b")).refused).toBe(false);
+    expect(failures).toEqual([]);
+    await page.close();
+  });
+
+  /**
+   * Panel ids and screens are strings from somebody's config, and both were interpolated
+   * into selectors. An id with a quote in it threw `SyntaxError` out of `querySelector`
+   * from outside the per-panel guard, so no panel was built at all, the ready event never
+   * fired, and the only trace was a complaint about a selector nobody had written. A typo
+   * in `screen` was the opposite failure: perfectly silent.
+   */
+  it("survives an awkward panel id, and says so when a screen does not exist", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const failures: string[] = [];
+    const warnings: string[] = [];
+    page.on("pageerror", (error) => failures.push(String(error)));
+    page.on("console", (message) => {
+      if (message.type() === "error") failures.push(message.text());
+      if (message.type() === "warning") warnings.push(message.text());
+    });
+    await page.goto(`${embedUrl}panelids`);
+    await page.waitForFunction(() => (globalThis as unknown as { ready: boolean }).ready === true, undefined, { timeout: 15_000 });
+
+    const panels = await page.evaluate(() =>
+      Array.from(((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelectorAll("[data-bd-panel]")).map((node) => node.getAttribute("data-bd-panel")),
+    );
+    // The quoted id renders, and — the part that was actually broken — so does the panel
+    // declared after it.
+    expect(panels).toContain('we"ird');
+    expect(panels).toContain("after");
+    expect(failures).toEqual([]);
+    // And the one pointing at a screen that does not exist names the ones that do, rather
+    // than disappearing.
+    expect(warnings.join(" ")).toContain("nosuchscreen");
+    expect(warnings.join(" ")).toContain("live");
+    await page.close();
+  });
+
+  /**
+   * A framework re-renders by assigning `config` again, with a freshly built object every
+   * time. `theme` is meant to take effect; `tabs` and `panels` are read once and are meant
+   * to say so rather than doing nothing quietly, the way `src` already did. Both halves
+   * have a way to be wrong, and both were: nothing was said about panels at all, and the
+   * first attempt at saying it fired on the ordinary mount — because `connectedCallback`
+   * replays a pre-upgrade config through the setter, which looked exactly like a change.
+   */
+  it("takes a theme change on re-render, and warns only when the panels really differ", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const warnings: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "warning") warnings.push(message.text());
+    });
+    await page.goto(`${embedUrl}rerender`);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector("#rows") != null, undefined, { timeout: 15_000 });
+    expect(warnings).toEqual([]);
+
+    for (let i = 0; i < 5; i++) await page.evaluate(() => (globalThis as unknown as { rerender: () => void }).rerender());
+    expect(warnings).toEqual([]);
+
+    await page.evaluate(() => (globalThis as unknown as { retheme: () => void }).retheme());
+    expect(await page.evaluate(() => (document.getElementById("d") as HTMLElement).getAttribute("data-theme"))).toBe("light");
+    expect(warnings).toEqual([]);
+
+    await page.evaluate(() => (globalThis as unknown as { addPanel: () => void }).addPanel());
+    expect(warnings.join(" ")).toContain("read once");
+    await page.close();
+  });
+
+  /**
+   * The rendered tree outlives the element that built it — that is what makes a remount
+   * keep its history — but on a route change it is adopted by a *different* element with a
+   * different config. Without a sweep the new dashboard drew the old one's panels next to
+   * its own, and drew them frozen, because the timer feeding them died with the element
+   * that registered it.
+   */
+  it("does not inherit the panels of the element it replaced", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const failures: string[] = [];
+    page.on("pageerror", (error) => failures.push(String(error)));
+    await page.goto(`${embedUrl}adopt`);
+    await page.waitForFunction(() => (document.getElementById("a") as HTMLElement | null)?.shadowRoot?.querySelector("#rows") != null, undefined, { timeout: 15_000 });
+
+    const panelsOf = (id: string): Promise<string[]> =>
+      page.evaluate((which) => {
+        const shadow = (document.getElementById(which) as HTMLElement | null)?.shadowRoot;
+        const found: string[] = [];
+        shadow?.querySelectorAll("[data-bd-panel]").forEach((node) => found.push(`${node.getAttribute("data-bd-panel")}@${node.getAttribute("data-bd-screen")}`));
+        return found;
+      }, id);
+
+    await page.evaluate(() => (globalThis as unknown as { swap: () => void }).swap());
+    await expect.poll(() => panelsOf("b"), { timeout: 15_000 }).toEqual(["beta@live"]);
+
+    // And a panel that moved to another screen is on the new one only, rather than drawn
+    // in both because the reuse lookup is scoped per screen.
+    await page.evaluate(() => (globalThis as unknown as { moveScreen: () => void }).moveScreen());
+    await expect.poll(() => panelsOf("c"), { timeout: 15_000 }).toEqual(["beta@stats"]);
+    expect(failures).toEqual([]);
+    await page.close();
+  });
+
+  /**
+   * The standalone dashboard is served by this package and refuses to be framed —
+   * `frame-ancestors 'none'` is on its response. The element renders into a document this
+   * package does not serve and cannot put a header on, so that protection simply does not
+   * come along, and an operator can be shown a control they cannot see. It cannot be fixed
+   * from here; it can stop being silent.
+   */
+  it("says so when the page it is embedded in is framed by another origin", async () => {
+    const framingWarnings = async (path: string): Promise<string[]> => {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      const warnings: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "warning" && message.text().includes("framed")) warnings.push(message.text());
+      });
+      await page.goto(`${embedUrl}${path}`);
+      // The warning is raised by the dashboard inside the frame, once it has drawn.
+      await page.waitForTimeout(3000);
+      await page.close();
+      return warnings;
+    };
+
+    // An admin app framing its own pages is legitimate and stays quiet.
+    expect(await framingWarnings("framed-same")).toEqual([]);
+
+    const crossOrigin = await framingWarnings("framed-cross");
+    expect(crossOrigin.length).toBe(1);
+    expect(crossOrigin[0]).toContain("frame-ancestors");
+  });
+
+  /**
+   * Three ways a theme could be wrong in silence. A token dropped from the config stayed
+   * painted on the element for ever, so switching themes accumulated the union of every
+   * theme ever set. A mis-typed `scheme` did nothing. A mis-typed `density` was worse than
+   * nothing: it was written on as `data-density="cozy"`, matched no rule, and looked like
+   * an element ignoring its own configuration.
+   */
+  it("drops tokens the theme stopped asking for, and refuses values it does not have", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const warnings: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "warning") warnings.push(message.text());
+    });
+    await page.goto(`${embedUrl}theming`);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector("#rows") != null, undefined, { timeout: 15_000 });
+
+    const style = (): Promise<string> => page.evaluate(() => (document.getElementById("d") as HTMLElement).getAttribute("style") ?? "");
+    expect(await style()).toContain("--bg");
+
+    await page.evaluate(() => (globalThis as unknown as { dropToken: () => void }).dropToken());
+    const after = await style();
+    expect(after).not.toContain("--bg");
+    // The token it still asks for stays, and so does the one the client set for itself —
+    // removal is by name rather than by clearing the attribute, which would take the
+    // sticky header's measured height with it.
+    expect(after).toContain("--accent");
+    expect(after).toContain("--header-h");
+
+    await page.evaluate(() => (globalThis as unknown as { badScheme: () => void }).badScheme());
+    // Four assignments, one warning: `applyTheme` runs on every re-render, and a typo
+    // repeated a hundred times is a typo the console has stopped conveying.
+    expect(warnings.filter((line) => line.includes("scheme")).length).toBe(1);
+
+    await page.evaluate(() => (globalThis as unknown as { badDensity: () => void }).badDensity());
+    expect(await page.evaluate(() => (document.getElementById("d") as HTMLElement).getAttribute("data-density"))).toBeNull();
+    expect(warnings.filter((line) => line.includes("density")).length).toBe(1);
+
+    await page.evaluate(() => (globalThis as unknown as { goodDensity: () => void }).goodDensity());
+    expect(await page.evaluate(() => (document.getElementById("d") as HTMLElement).getAttribute("data-density"))).toBe("compact");
+    await page.close();
+  });
+
+  /**
+   * `tabs` names screens and `hide` names sections, and the two lists are not the same
+   * words — the live feed is the `live` tab and the `feed` section. TypeScript refuses the
+   * wrong one; plain JavaScript did not, and `hide: { live: true }` — the obvious thing to
+   * write after reading about `tabs` — hid nothing at all and said nothing about it. A
+   * screen listed in `tabs` under a name that does not exist was dropped just as quietly,
+   * so asking for two screens and getting one looked like the element deciding for itself.
+   */
+  it("says which of `tabs` and `hide` a misplaced name belongs to", async () => {
+    const visit = async (path: string): Promise<{ tabs: string[]; warnings: string[] }> => {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      const warnings: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "warning") warnings.push(message.text());
+      });
+      await page.goto(`${embedUrl}${path}`);
+      await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector('[role="tab"]') != null, undefined, { timeout: 15_000 });
+      const tabs = await page.evaluate(() => {
+        const found: string[] = [];
+        (document.getElementById("d") as HTMLElement).shadowRoot?.querySelectorAll('[role="tab"]').forEach((node) => {
+          if ((node as HTMLElement).getClientRects().length > 0) found.push(node.id.replace("tab-", ""));
+        });
+        return found;
+      });
+      await page.close();
+      return { tabs, warnings };
+    };
+
+    // A tab name in `hide` hides nothing, and is told which section name to use instead.
+    const wrongList = await visit("vocab");
+    expect(wrongList.tabs).toContain("live");
+    expect(wrongList.warnings.join(" ")).toContain("hide.feed");
+
+    // A screen name that does not exist at all, in `tabs`.
+    const typo = await visit("vocab-tab");
+    expect(typo.tabs).toEqual(["stats"]);
+    expect(typo.warnings.join(" ")).toContain('"stat"');
+
+    // And the name that is actually right stays silent and works.
+    const right = await visit("vocab-ok");
+    expect(right.tabs).not.toContain("live");
+    expect(right.warnings).toEqual([]);
+  });
+
+  /**
+   * Windows High Contrast and the rest. The browser repaints text, backgrounds and borders
+   * from the user's palette and leaves SVG fill and stroke alone — which is what keeps the
+   * two series tellable apart rather than collapsing them into one system colour — but it
+   * also leaves the gridlines in `--grid`, a colour chosen to recede against this
+   * dashboard's own background. Against a forced black one it recedes to 1.4:1, measured,
+   * which is not recessive; it is gone, and the charts lose the frame they are read
+   * against.
+   */
+  it("keeps the chart gridlines visible under forced colours", async () => {
+    const contrast = (a: string, b: string): number => {
+      const channel = (colour: string): number[] => (colour.match(/\d+(\.\d+)?/g) ?? ["0", "0", "0"]).map(Number);
+      const luminance = (colour: string): number => {
+        const [r = 0, g = 0, blue = 0] = channel(colour).map((value) => {
+          const scaled = value / 255;
+          return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * blue;
+      };
+      const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+      return (high + 0.05) / (low + 0.05);
+    };
+
+    const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, forcedColors: "active", colorScheme: "dark" });
+    const page = await context.newPage();
+    await embedHandler.handle(
+      createFacts({ method: "GET", url: "/x", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.88" }),
+    );
+    await page.goto(embedUrl);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector("#rows tr") != null, undefined, { timeout: 15_000 });
+    // Explicitly dark, because that is the half of the problem. The light palette's
+    // gridline is a pale grey and lands on the forced black background at 18:1 by luck —
+    // asserting against it passes whatever the stylesheet says. The dark palette's is
+    // near-black, which is the combination that disappeared.
+    await page.evaluate(() => (document.getElementById("d") as HTMLElement).setAttribute("scheme", "dark"));
+    await page.evaluate(() => ((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelector<HTMLElement>("#tab-stats")?.click());
+
+    await expect
+      .poll(() => page.evaluate(() => ((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelectorAll("svg .gridline").length), { timeout: 15_000 })
+      .toBeGreaterThan(0);
+
+    const measured = await page.evaluate(() => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      const background = (node: Element): string => {
+        let walk: Element | null = node;
+        while (walk !== null) {
+          const colour = getComputedStyle(walk).backgroundColor;
+          if (colour !== "rgba(0, 0, 0, 0)" && colour !== "transparent") return colour;
+          walk = walk.parentElement;
+        }
+        return "rgb(255, 255, 255)";
+      };
+      const lines = Array.from(shadow.querySelectorAll("svg .gridline"));
+      const svg = shadow.querySelector("svg") as SVGElement;
+      return { strokes: Array.from(new Set(lines.map((line) => getComputedStyle(line).stroke))), background: background(svg) };
+    });
+
+    expect(measured.strokes.length).toBeGreaterThan(0);
+    for (const stroke of measured.strokes) {
+      expect(contrast(stroke, measured.background)).toBeGreaterThan(3);
+    }
+    await context.close();
+  });
+
+  /**
+   * An id identifies a panel, and two panels claiming one landed on a single section: the
+   * first built it, the second painted over it, and then both refresh timers wrote into
+   * the same body once a second. The section kept the first panel's heading while showing
+   * the second one's rows, so the screen described itself wrongly and then changed its mind
+   * every second.
+   */
+  it("ignores a second panel claiming an id that is already taken", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const warnings: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "warning") warnings.push(message.text());
+    });
+    await page.goto(`${embedUrl}duplicate`);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector('[data-bd-panel="p"] .bd-extra') != null, undefined, { timeout: 15_000 });
+
+    const read = (): Promise<{ count: number; title: string; body: string }> =>
+      page.evaluate(() => {
+        const sections = Array.from(((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelectorAll('[data-bd-panel="p"]'));
+        return {
+          count: sections.length,
+          title: sections[0]?.querySelector("h2")?.textContent ?? "",
+          body: (sections[0]?.querySelector(".bd-extra")?.textContent ?? "").trim(),
+        };
+      });
+
+    const first = await read();
+    expect(first.count).toBe(1);
+    // The heading and the rows come from the same panel.
+    expect(first.title).toBe("First");
+    expect(first.body).toContain("first");
+
+    // And it stays that way rather than alternating with the other panel's timer.
+    await page.waitForTimeout(2600);
+    expect(await read()).toEqual(first);
+    expect(warnings.join(" ")).toContain("share the id");
+    await page.close();
+  });
+
+  /**
+   * Somebody else's element already holds the name. `customElements.define` would throw,
+   * so the guard returned early — and returned early in silence, which meant the call did
+   * nothing, every `<bot-dashboard>` on the page belonged to the other library, and the
+   * blank space where the dashboard should be said nothing about why. Calling this
+   * function twice is ordinary and still says nothing; a name held by something else is
+   * not.
+   */
+  it("says when its element name is already taken by something else", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const warnings: string[] = [];
+    const failures: string[] = [];
+    page.on("pageerror", (error) => failures.push(String(error)));
+    page.on("console", (message) => {
+      if (message.type() === "warning") warnings.push(message.text());
+    });
+    await page.goto(`${embedUrl}nameclash`);
+    await page.waitForTimeout(2500);
+
+    // No dashboard, because the name is not ours — but a reason for it.
+    expect(await page.evaluate(() => (document.getElementById("d") as HTMLElement).shadowRoot?.querySelector("#rows") != null)).toBe(false);
+    const clash = warnings.filter((line) => line.includes("already registered"));
+    // Said once, though `defineBotDashboard` was called twice.
+    expect(clash.length).toBe(1);
+    expect(clash[0]).toContain("defineBotDashboard(");
+    expect(failures).toEqual([]);
+    await page.close();
+  });
+
+  /**
+   * A screen can be missing for two different reasons, and only one of them is on this
+   * page. `sections` on the handler withholds the data itself — that is the point of it,
+   * and the element neither can nor should override it. But the developer configuring
+   * `tabs` sees one screen where they asked for two, and the file to go and fix is a
+   * different one on the server, which nothing said.
+   */
+  it("names the server as the reason a listed screen is missing", async () => {
+    const visit = async (path: string): Promise<{ tabs: string[]; warnings: string[] }> => {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      const warnings: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "warning") warnings.push(message.text());
+      });
+      await page.goto(`${embedUrl}${path}`);
+      await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector('[role="tab"]') != null, undefined, { timeout: 15_000 });
+      const tabs = await page.evaluate(() => {
+        const found: string[] = [];
+        (document.getElementById("d") as HTMLElement).shadowRoot?.querySelectorAll('[role="tab"]').forEach((node) => {
+          if ((node as HTMLElement).getClientRects().length > 0) found.push(node.id.replace("tab-", ""));
+        });
+        return found;
+      });
+      await page.close();
+      return { tabs, warnings };
+    };
+
+    const asked = await visit("withheld");
+    expect(asked.tabs).not.toContain("policy");
+    expect(asked.warnings.join(" ")).toContain("sections");
+    expect(asked.warnings.join(" ")).toContain("createDashboardHandler");
+
+    // Hidden on purpose as well: they already know, so nothing is said.
+    const deliberate = await visit("withheld-hidden");
+    expect(deliberate.tabs).not.toContain("policy");
+    expect(deliberate.warnings).toEqual([]);
+  });
+
+  /**
+   * The element asks for `<src>/api/bootstrap`, so a query string or fragment on `src`
+   * cannot survive the concatenation and never could. Left on, it produced "it answered
+   * text/html — is createDashboardHandler mounted at /_bots?token=abc?", which sends
+   * somebody off to check the one part of their setup that was correct.
+   */
+  it("ignores a query or fragment on src, and says it did", async () => {
+    for (const [path, what] of [["srcquery", "query string"], ["srcfragment", "fragment"]] as const) {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      const warnings: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "warning") warnings.push(message.text());
+      });
+      await page.goto(`${embedUrl}${path}`);
+      // It works rather than failing — the path was always the meaningful part.
+      await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector("#rows") != null, undefined, { timeout: 15_000 });
+      expect(warnings.join(" ")).toContain(what);
+      await page.close();
+    }
+  });
+
+  /**
+   * A panel `source` may be a URL rather than a function — it is the first example in the
+   * documentation, and it had no test at all. Both halves matter: the endpoint that answers
+   * with rows, and the one that does not, which has to say so in the panel rather than
+   * leaving an empty box that reads as "nothing to report".
+   */
+  it("draws a panel whose source is a URL, and reports one that fails", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const failures: string[] = [];
+    page.on("pageerror", (error) => failures.push(String(error)));
+    await page.goto(`${embedUrl}stringsource`);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector('[data-bd-panel="ok"] .bd-extra') != null, undefined, { timeout: 15_000 });
+
+    const read = (id: string): Promise<string> =>
+      page.evaluate(
+        (which) => (((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelector(`[data-bd-panel="${which}"] .bd-extra`)?.textContent ?? "").trim(),
+        id,
+      );
+
+    await expect.poll(() => read("ok"), { timeout: 10_000 }).toContain("Pending");
+    expect(await read("ok")).toContain("queue");
+    await expect.poll(() => read("missing"), { timeout: 10_000 }).toContain("Could not load");
+    expect(failures).toEqual([]);
+    await page.close();
+  });
+
+  it("can be registered under a name of your own", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const failures: string[] = [];
+    page.on("pageerror", (error) => failures.push(String(error)));
+    await page.goto(`${embedUrl}customname`);
+    await page.waitForFunction(() => (document.getElementById("b") as HTMLElement | null)?.shadowRoot?.querySelector("#rows") != null, undefined, { timeout: 15_000 });
+    // A constructor may be registered once per registry, so a second name needs a fresh
+    // subclass — otherwise `define` throws NotSupportedError out of the one function whose
+    // job is to register a name.
+    expect(failures).toEqual([]);
+    await page.close();
+  });
+
+  /**
+   * The whole point of `controls.editPolicy`, exercised through the element rather than
+   * assumed to survive the move. The write path is guarded by a same-origin check that
+   * reads `Sec-Fetch-Site`, and embedded the request now originates from the host page —
+   * so whether it still passes is a question rather than a given.
+   */
+  it("can still change the live policy from inside the host page", async () => {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, httpCredentials: { username: "ops", password: "a-long-enough-password-here" } });
+    const writes: string[] = [];
+    page.on("response", (response) => {
+      if (response.request().method() === "POST") writes.push(`${response.status()} ${new URL(response.url()).pathname}`);
+    });
+    await page.goto(`${editableUrl}`);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector("#rows") != null, undefined, { timeout: 15_000 });
+
+    const before = editableHandler.policy.rules.length;
+    await page.locator("#tab-policy").click();
+    await page.waitForTimeout(900);
+    await page.locator("#view-policy button", { hasText: /^Remove$/ }).last().click();
+    await page.waitForTimeout(300);
+    await page.locator("#policy-preview").click();
+    await page.waitForTimeout(700);
+    await page.locator("#policy-apply").click();
+    await page.waitForTimeout(600);
+    const confirm = page.locator("#view-policy button.danger");
+    if ((await confirm.count()) > 0) {
+      await confirm.first().click();
+      await page.waitForTimeout(900);
+    }
+
+    expect(writes.some((entry) => entry.startsWith("200") && entry.endsWith("/api/policy/apply"))).toBe(true);
+    expect(editableHandler.policy.rules.length).toBe(before - 1);
+    await page.close();
+  });
+
+  it("honours what the server withheld, and its redaction", async () => {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+    await page.goto(`${embedUrl}analyst`);
+    await page.waitForFunction(() => ((document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelectorAll("tbody tr.row").length ?? 0) > 0, undefined, { timeout: 15_000 });
+    const state = await page.evaluate(() => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      return {
+        tabs: Array.from(shadow.querySelectorAll(".tab:not([hidden])")).map((tab) => tab.textContent?.trim()),
+        row: shadow.querySelector("tbody tr.row")?.textContent ?? "",
+      };
+    });
+    // `sections` and `redact` are server-side, and the element is a different renderer
+    // rather than a different dashboard — both have to survive the move.
+    expect(state.tabs).not.toContain("Policy");
+    expect(state.row).toContain("203.0.113.0/24");
+    expect(state.row).not.toContain("203.0.113.88");
+    await page.close();
+  });
+
+  it("says why a cross-origin src cannot work", async () => {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await page.goto(`${embedUrl}crossorigin`);
+    await page.waitForFunction(() => ((document.getElementById("d") as HTMLElement | null)?.shadowRoot?.textContent ?? "").length > 0, undefined, { timeout: 15_000 });
+    const shown = await page.evaluate(() => ((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).textContent ?? "");
+    // Correct behaviour — the dashboard sends no CORS headers, which is what stops another
+    // site reading your traffic through a logged-in browser. "Failed to fetch" does not
+    // say that to whoever configured it.
+    expect(shown).toContain("same-origin");
+    expect(shown).not.toContain("Failed to fetch");
+    await page.close();
+  });
+
+  /**
+   * A boot can fail for reasons that stop being true: the handler had not finished
+   * starting, the `src` was wrong and someone corrected it. The element has to be able to
+   * try again, and the first version could not — every early exit released ownership but
+   * left the internal `booted` latch set, so `connectedCallback` returned immediately ever
+   * after and the remount drew the old error over a handler that now works.
+   */
+  it("boots on a later mount after a failed one, and drops the old error", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(`${embedUrl}crossorigin`);
+    await page.waitForFunction(() => (((document.getElementById("d") as HTMLElement | null)?.shadowRoot?.textContent ?? "").length > 0), undefined, { timeout: 15_000 });
+
+    await page.evaluate(() => {
+      const node = document.getElementById("d") as HTMLElement;
+      node.remove();
+      node.setAttribute("src", "/_bots");
+      document.body.append(node);
+    });
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector("#rows") != null, undefined, { timeout: 15_000 });
+
+    const text = await page.evaluate(() => ((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).textContent ?? "");
+    expect(text).not.toContain("could not start");
+    await page.close();
+  });
+
+  it("draws traffic that arrives after it is watching", async () => {
+    const page = await openEmbed();
+    // A marker of its own, and asserted as *present* rather than first: these tests share
+    // one handler and one feed, so whichever ran last owns the top row. Asserting the
+    // position made this fail the moment a later test sent a request of its own, which is
+    // a fact about the suite rather than about the dashboard.
+    await embedHandler.handle(
+      createFacts({ method: "GET", url: "/products", headers: { host: "shop.test", "user-agent": "sqlmap/1.7.2#embedtest", accept: "*/*" }, ip: "203.0.113.44" }),
+    );
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() =>
+            Array.from(((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).querySelectorAll("tbody tr.row")).some((row) =>
+              (row.textContent ?? "").includes("sqlmap/1.7.2#embedtest"),
+            ),
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+    await page.close();
+  });
+});
+
 describe("the challenge interstitial", () => {
-  const axeSource = readFileSync(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8");
   let challengeUrl: string;
   let challengeServer: ReturnType<typeof createServer>;
   let gestureUrl: string;
@@ -1149,7 +2520,10 @@ describe("the challenge interstitial", () => {
     // looking for it. Asserted rather than assumed: the first draft of this test pressed
     // Tab first and moved focus *off* the control, which is what a person would do if
     // the page had not already placed it.
-    await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("confirm");
+    // Generous, because the proof of work runs at the shipped difficulty and this machine
+    // may be building a bundle at the same time. The default poll timeout was not enough
+    // under load, and a focus race is not what this test is about.
+    await expect.poll(() => page.evaluate(() => document.activeElement?.id), { timeout: 15_000 }).toBe("confirm");
 
     // No pointer is used anywhere in this test. Space is how a screen reader, switch
     // access and voice control all reach a checkbox, and if it does not work here the

@@ -37,6 +37,20 @@ export default defineConfig({
         "src/challenge/page.ts",
         "src/dashboard/client.generated.ts",
         "src/dashboard/client/**",
+        // `src/element/` is the same case as the client directory above and excluded for
+        // the same reason rather than a new one: it is the embeddable dashboard, it needs
+        // a document and a custom-element registry to do anything at all, and it is
+        // exercised by the browser suite. Counting it here would report a number about
+        // which runner was used rather than about the code — and the alternative, moving
+        // the thresholds down until it fits, is the thing the note below rules out.
+        //
+        // And the same second half applies, which for a while it did not. `element/config.ts`
+        // is the pure half — which screens a config leaves standing, what a status code
+        // means, where a `src` points — and it is unit-tested in `element.test.ts` like the
+        // client's pure modules are. Excluding a directory says where its coverage is
+        // measured; it does not say the logic inside goes untested, and reading it that way
+        // is how two bugs in the section resolution came to be found in a browser instead.
+        "src/element/**",
         // The corpus is data and a harness for it. `corpus.test.ts` runs every case
         // through every preset; counting the fixture files as covered lines would say
         // nothing about anything.

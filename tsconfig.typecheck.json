@@ -8,5 +8,9 @@
     "noUnusedParameters": true
   },
   "include": ["src/**/*", "tests/**/*", "examples/**/*", "scripts/**/*", "demo/**/*"],
-  "exclude": ["dist", "node_modules", "tests/browser", "src/dashboard/client"]
+  // `src/element` speaks DOM for the same reason `src/dashboard/client` does: it runs in
+  // a browser, not in Node. Both are type-checked by tsconfig.browser.json, which has the
+  // DOM lib; keeping them out of here is what stops a stray `document` in the rest of
+  // `src/` type-checking and then failing at run time.
+  "exclude": ["dist", "node_modules", "tests/browser", "src/dashboard/client", "src/element"]
 }

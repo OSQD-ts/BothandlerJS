@@ -26,5 +26,5 @@
   // The browser half of the dashboard is bundled by esbuild, not emitted to dist,
   // and it speaks DOM — which the library deliberately does not. It is type-checked by
   // tsconfig.browser.json instead.
-  "exclude": ["dist", "node_modules", "**/*.test.ts", "src/dashboard/client"]
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "src/dashboard/client", "src/element"]
 }

@@ -10,6 +10,7 @@ Knowing what the library is doing to your traffic, and changing it without a dep
 | ---- | --- |
 | **This page** — events and hooks | wiring the engine into your own logging, paging and queues |
 | [The dashboard](dashboard.md) | seeing individual requests and the evidence behind them |
+| [Embedding it](embedding.md) | dropping it into a page you already have |
 | [Metrics](metrics.md) | counters, histograms, Prometheus |
 | [The audit](audit.md) | noticing that the traffic changed *shape* |
 | [Notifications](notifications.md) | webhooks, Slack, batching and redaction |

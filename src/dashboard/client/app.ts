@@ -1,4 +1,4 @@
-import { el } from "./dom.js";
+import { el, rootNode } from "./dom.js";
 import type { TabName } from "./types.js";
 
 /**
@@ -39,7 +39,7 @@ export function toast(kind: "ok" | "bad" | "warn", title: string, detail = ""): 
   const node = el("div", `toast ${kind}`);
   node.appendChild(el("b", null, title));
   if (detail !== "") node.appendChild(el("span", null, detail));
-  const host = document.getElementById("toasts");
+  const host = rootNode().querySelector<HTMLElement>("#toasts");
   if (host === null) return;
   host.appendChild(node);
   setTimeout(() => node.remove(), 6000);

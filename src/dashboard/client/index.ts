@@ -1,4 +1,4 @@
-import { $, byId, el } from "./dom.js";
+import { $, byId, el, eventTarget, isEmbedded, rootNode, themeElement } from "./dom.js";
 import { API, BOOT, SECTIONS } from "./boot.js";
 import { app, toast } from "./app.js";
 import { clearFeed, setSearch, state } from "./store.js";
@@ -36,6 +36,26 @@ function isTab(value: string): value is TabName {
 
 // ---- header ----------------------------------------------------------------
 
+/**
+ * The skip link, which is a plain fragment anchor and therefore inert inside a shadow
+ * root: fragment navigation does not cross the boundary, so the one affordance that lets
+ * a keyboard past the header did nothing at all when embedded. Given the same behaviour
+ * by hand.
+ */
+function initSkipLink(): void {
+  if (!isEmbedded()) return;
+  const skip = rootNode().querySelector<HTMLAnchorElement>("a.skip");
+  if (skip === null) return;
+  skip.addEventListener("click", (event) => {
+    event.preventDefault();
+    const target = rootNode().querySelector<HTMLElement>(`#view-${state.tab}`) ?? rootNode().querySelector<HTMLElement>("#view-live");
+    if (target === null) return;
+    target.tabIndex = -1;
+    target.focus();
+    target.scrollIntoView({ block: "start" });
+  });
+}
+
 function initHeader(): void {
   const box = $("links");
   for (const link of BOOT.links) {
@@ -51,12 +71,12 @@ function initHeader(): void {
   } catch {
     stored = null;
   }
-  if (stored === "dark" || stored === "light") document.documentElement.setAttribute("data-theme", stored);
+  if (stored === "dark" || stored === "light") themeElement().setAttribute("data-theme", stored);
   $("theme").addEventListener("click", () => {
-    let current = document.documentElement.getAttribute("data-theme");
+    let current = themeElement().getAttribute("data-theme");
     if (current === null) current = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
     const next = current === "dark" ? "light" : "dark";
-    document.documentElement.setAttribute("data-theme", next);
+    themeElement().setAttribute("data-theme", next);
     try {
       localStorage.setItem("bothandler-dashboard-theme", next);
     } catch {
@@ -110,10 +130,10 @@ function initHeader(): void {
    * is not a fixed height: the chip row wraps on a narrow window and grows. Measure it,
    * and let the CSS read the measurement.
    */
-  const header = document.querySelector("header");
+  const header = rootNode().querySelector("header");
   if (header !== null) {
     const apply = (): void => {
-      document.documentElement.style.setProperty("--header-h", `${header.getBoundingClientRect().height}px`);
+      themeElement().style.setProperty("--header-h", `${header.getBoundingClientRect().height}px`);
     };
     apply();
     if (typeof ResizeObserver === "function") new ResizeObserver(apply).observe(header);
@@ -133,6 +153,10 @@ function initHeader(): void {
  * backwards through every keystroke is not a back button.
  */
 function syncUrl(replace = true): void {
+  // Embedded, the URL belongs to the page around us. Writing a tab into it rewrites
+  // somebody else's address bar and puts a history entry between them and wherever they
+  // were going.
+  if (isEmbedded()) return;
   const params = new URLSearchParams();
   if (state.filter !== "all") params.set("f", state.filter);
   if (state.search !== "") params.set("q", state.search);
@@ -143,7 +167,9 @@ function syncUrl(replace = true): void {
 }
 
 function readUrl(): { tab: TabName; filter: FilterName; search: string } {
-  const raw = location.hash.slice(1);
+  // And it is not ours to read either: a host page using hash routing would otherwise
+  // decide which tab this opens on.
+  const raw = isEmbedded() ? "" : location.hash.slice(1);
   const split = raw.indexOf("?");
   const name = split === -1 ? raw : raw.slice(0, split);
   const params = new URLSearchParams(split === -1 ? "" : raw.slice(split + 1));
@@ -195,6 +221,7 @@ function initTabs(): void {
     });
   });
 
+  if (isEmbedded()) return;
   addEventListener("popstate", () => {
     const url = readUrl();
     state.filter = url.filter;
@@ -207,7 +234,9 @@ function initTabs(): void {
 // ---- keyboard ---------------------------------------------------------------
 
 function initKeyboard(): void {
-  addEventListener("keydown", (event) => {
+  // Scoped to this dashboard when embedded: a digit pressed while the host page has
+  // focus switched a tab in here, which is somebody else's keyboard being taken.
+  eventTarget().addEventListener("keydown", ((event: KeyboardEvent) => {
     const target = event.target as HTMLElement | null;
     const typing = target !== null && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT");
 
@@ -253,7 +282,7 @@ function initKeyboard(): void {
       event.preventDefault();
       showTab(available[digit]?.[1] ?? FIRST, { focus: true, replace: false });
     }
-  });
+  }) as EventListener);
 }
 
 // ---- the two range controls --------------------------------------------------
@@ -367,7 +396,7 @@ function applySections(): void {
     ["evidence-legend", SECTIONS.evidence],
   ];
   for (const [id, enabled] of gated) {
-    const node = document.getElementById(id);
+    const node = rootNode().querySelector<HTMLElement>(`#${id}`);
     if (node !== null && !enabled) node.remove();
   }
 }
@@ -382,6 +411,7 @@ function start(): void {
   initHeader();
   drawPeers();
   initTabs();
+  initSkipLink();
   initKeyboard();
   initRanges();
   if (SECTIONS.feed) initFeed();

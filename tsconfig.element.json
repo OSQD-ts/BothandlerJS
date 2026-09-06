@@ -1,0 +1,18 @@
+{
+  // Declarations for `src/element`, which is a published entry point and therefore needs
+  // them — but which speaks DOM, and the main project deliberately withholds the DOM lib
+  // so that a stray `document` in the rest of `src/` cannot type-check and then fail in
+  // Node. `src/dashboard/client` sidesteps this by never being a public entry: it is
+  // bundled into a string. The element is imported by name, so it gets its own project
+  // rather than a hole in the main one.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src/element/**/*", "src/dashboard/**/*", "src/*.ts", "src/**/*.ts"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts"]
+}

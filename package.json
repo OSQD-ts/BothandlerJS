@@ -4,7 +4,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "Bot traffic detection and handling for TypeScript — evidence-tiered detection that separates proof from suspicion, so blocking never rests on a guess.",
+  "description": "Bot traffic detection and handling for TypeScript \u2014 evidence-tiered detection that separates proof from suspicion, so blocking never rests on a guess.",
   "keywords": [
     "bot-detection",
     "bot-management",
@@ -26,7 +26,7 @@
   "bugs": {
     "url": "https://github.com/OSQD-ts/BothandlerJS/issues"
   },
-  "author": "Michał Płatosz <platosz.michal@gmail.com>",
+  "author": "Micha\u0142 P\u0142atosz <platosz.michal@gmail.com>",
   "type": "module",
   "exports": {
     ".": {
@@ -43,6 +43,11 @@
       "types": "./dist/client/index.d.ts",
       "import": "./dist/client/index.js",
       "require": "./dist/client/index.cjs"
+    },
+    "./element": {
+      "types": "./dist/element/index.d.ts",
+      "import": "./dist/element/index.js",
+      "require": "./dist/element/index.cjs"
     },
     "./package.json": "./package.json",
     "./cli": {
@@ -74,7 +79,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup && tsc --emitDeclarationOnly",
+    "build": "tsup && tsc --emitDeclarationOnly && tsc -p tsconfig.element.json",
     "build:watch": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",

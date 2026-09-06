@@ -126,7 +126,13 @@ describe("measuring a pointer path", () => {
    * produces without trying. Distance per sample reads only where the pointer went.
    */
   it("does not mistake ragged event timing for organic movement", () => {
-    const evenStepsRaggedTiming = Array.from({ length: 24 }, () => ({ dx: 12.5, dy: 4.5, dt: 6 + Math.round(Math.random() * 14) }));
+    // Seeded, like every other generated path in this file. Written with `Math.random()`
+    // it failed about one run in twenty — whenever the gaps happened to cluster, the
+    // variation this asserts on fell under the bar. That is the same defect this suite
+    // caught in the challenge tests, reintroduced two files later by the person who fixed
+    // it, which is the argument for the helper existing at all.
+    const jitter = seeded(11);
+    const evenStepsRaggedTiming = Array.from({ length: 24 }, () => ({ dx: 12.5, dy: 4.5, dt: 6 + Math.round(jitter() * 14) }));
     const analysis = analyseMovement(evenStepsRaggedTiming);
     expect(analysis.speedVariation).toBeGreaterThan(0.2);        // the free variation
     expect(analysis.distanceVariation).toBeCloseTo(0, 10);       // and the term that resists it

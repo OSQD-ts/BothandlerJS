@@ -96,7 +96,7 @@ export function drawTraffic(): void {
   // Three gridlines: enough to read a magnitude, few enough to stay recessive.
   for (const fraction of [0, 0.5, 1]) {
     const y = markerRow + plot - fraction * plot;
-    svg.appendChild(svgEl("line", { x1: 0, x2: width, y1: y, y2: y, stroke: grid, "stroke-width": 1 }));
+    svg.appendChild(svgEl("line", { class: "gridline", x1: 0, x2: width, y1: y, y2: y, stroke: grid, "stroke-width": 1 }));
     if (fraction > 0) svg.appendChild(svgText({ x: 2, y: y - 3, fill: muted, "font-size": 10 }, Math.round(max * fraction)));
   }
 
@@ -290,7 +290,7 @@ export function drawScores(): void {
   const muted = css("--muted");
   const grid = css("--grid");
   const crit = css("--crit");
-  svg.appendChild(svgEl("line", { x1: 0, x2: width, y1: plot, y2: plot, stroke: grid, "stroke-width": 1 }));
+  svg.appendChild(svgEl("line", { class: "gridline", x1: 0, x2: width, y1: plot, y2: plot, stroke: grid, "stroke-width": 1 }));
 
   const step = width / SCORE_BOUNDS;
   buckets.forEach((value, index) => {
@@ -376,7 +376,7 @@ export function drawLatency(): void {
   const fill = css("--s1");
   const muted = css("--muted");
   const grid = css("--grid");
-  svg.appendChild(svgEl("line", { x1: 0, x2: width, y1: plot, y2: plot, stroke: grid, "stroke-width": 1 }));
+  svg.appendChild(svgEl("line", { class: "gridline", x1: 0, x2: width, y1: plot, y2: plot, stroke: grid, "stroke-width": 1 }));
 
   const step = width / counts.length;
   counts.forEach((value, index) => {

@@ -8,6 +8,43 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`<bot-dashboard>`, the dashboard as an element.** A new entry point,
+  `@osqd/bothandlerjs/element`, exporting `defineBotDashboard()`. Mount
+  `createDashboardHandler` as before and drop the element into a page you already
+  have: it renders the whole dashboard into a shadow root in your own layout, under
+  your own heading, rather than on a route of its own.
+
+  `config.tabs` chooses which of the four screens appear, in what order and under what
+  labels. `config.theme` sets the scheme, the density and any of the stylesheet's
+  tokens — which is why every token block is now written `:root, :host`, since `:root`
+  matches nothing inside a shadow tree. `config.panels` adds panels of your own, fed
+  by a URL or a function and rendered as text.
+
+  **Be clear about what embedding costs.** A shadow root is a styling boundary and not
+  a security boundary: any script that can run on the host page can read every client
+  address and every piece of evidence the dashboard renders, and call its API with your
+  credentials. On the standalone page it could not. Mount it behind your admin
+  authentication and treat an XSS on that page as equivalent to handing the dashboard
+  over — or serve the standalone page, which is the same dashboard and already
+  isolated. `config.hide` is cosmetic; `sections` on the handler is the setting that
+  stops data leaving the process.
+
+  Embedded, the dashboard stops doing four things it does when it owns a page: binding
+  its keyboard shortcuts to the window, where a digit pressed on the host page switched
+  a tab in here; writing its tab and filter into `location.hash`, which is the host's
+  address bar and its back button; relying on a fragment anchor for the skip link,
+  which is inert across a shadow boundary; and refusing to mount a second time, which
+  made it unusable under any router, since unmount-and-remount is what a route change
+  is. A remount now keeps the feed history it had built.
+
+  `GET {basePath}/api/bootstrap` is new, serving the element the same configuration the
+  standalone page carries stamped into it.
+
+  The entry point imports safely on a server — Next, Remix, Astro and the rest evaluate
+  top-level imports while rendering, where there is no DOM — and `defineBotDashboard()`
+  does nothing until it is in a browser, so it can be imported like anything else and
+  called on mount.
+
 - **An interaction challenge.** `challenge.interaction` asks the interstitial for a
   deliberate gesture as well as the proof of work, and probes what the browser can
   actually do while it waits. Six probes read back things only a rendering engine

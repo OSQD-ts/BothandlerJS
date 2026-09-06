@@ -5,6 +5,7 @@ import { app } from "./app.js";
 import { clockTime, n } from "./format.js";
 import { getJson } from "./api.js";
 import { setSearch, state } from "./store.js";
+import type { ActorRow } from "./types.js";
 
 /**
  * The Actors screen.
@@ -21,19 +22,6 @@ import { setSearch, state } from "./store.js";
  * Streaming twenty thousand actors to every viewer to keep a sorted list of fifty
  * fresh would be a great deal of traffic to answer a question nobody asks continuously.
  */
-export interface ActorRow {
-  key: string;
-  requests: number;
-  recentRate: number;
-  distinctPaths: number;
-  distinctUserAgents: number;
-  cadenceCv: number | undefined;
-  priorConfirmations: number;
-  unsolvedChallenges: number;
-  cleared: boolean;
-  firstSeen: number;
-  lastSeen: number;
-}
 
 interface ActorsBody {
   actors: ActorRow[];

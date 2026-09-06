@@ -1,4 +1,4 @@
-import { $, clear, el } from "./dom.js";
+import { $, clear, el, rootNode } from "./dom.js";
 import { BOOT, SECTIONS } from "./boot.js";
 import { aggregate, oldestAt, state } from "./store.js";
 import { drawBars, pairs } from "./bars.js";
@@ -105,7 +105,7 @@ export function drawChips(): void {
  */
 export function updateWindowLabels(): void {
   const label = windowLabel(state.rows.length, oldestAt(), Date.now());
-  for (const node of Array.from(document.querySelectorAll<HTMLElement>(".win"))) node.textContent = label;
+  for (const node of Array.from(rootNode().querySelectorAll<HTMLElement>(".win"))) node.textContent = label;
 }
 
 export function drawLivePanels(): void {

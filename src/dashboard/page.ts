@@ -46,22 +46,30 @@ export interface DashboardPageOptions {
  * it. The HTML is a few tens of kilobytes and identical on every request; rebuilding
  * it per view would be pure waste.
  */
+/**
+ * What the page is told about itself.
+ *
+ * Built here rather than inline in the renderer so that the embeddable element can be
+ * served the identical object from `/api/bootstrap`. The page carries it stamped into its
+ * one nonced script; the element has to ask, because it is rendered into somebody else's
+ * document and there is nothing to stamp.
+ */
+export function bootFor(options: DashboardPageOptions): Record<string, unknown> {
+  return {
+    base: options.basePath === "/" ? "" : options.basePath,
+    title: options.title,
+    allowReset: options.allowReset,
+    allowEdit: options.allowEdit,
+    allowGuardEdit: options.allowGuardEdit,
+    allowActing: options.allowActing,
+    peers: options.peers.map((peer) => ({ label: String(peer.label), href: String(peer.href) })),
+    sections: options.sections,
+    links: options.links.map((link) => ({ label: String(link.label), href: String(link.href) })),
+  };
+}
+
 export function renderDashboardPage(options: DashboardPageOptions): (nonce: string) => string {
-  const bootstrap = escapeForScript(
-    JSON.stringify(
-      JSON.stringify({
-        base: options.basePath === "/" ? "" : options.basePath,
-        title: options.title,
-        allowReset: options.allowReset,
-        allowEdit: options.allowEdit,
-        allowGuardEdit: options.allowGuardEdit,
-        allowActing: options.allowActing,
-        peers: options.peers.map((peer) => ({ label: String(peer.label), href: String(peer.href) })),
-        sections: options.sections,
-        links: options.links.map((link) => ({ label: String(link.label), href: String(link.href) })),
-      }),
-    ),
-  );
+  const bootstrap = escapeForScript(JSON.stringify(JSON.stringify(bootFor(options))));
 
   // Function replacements throughout, never string ones. `String.prototype.replace`
   // reads `$&`, `` $` `` and `$'` out of a *string* replacement and substitutes match
@@ -96,15 +104,15 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
 }
 
-const PAGE = String.raw`<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow">
-<title>__TITLE__ · bot dashboard</title>
-<style nonce="__NONCE__">
-/* ---------------------------------------------------------------------------
+/**
+ * The dashboard's stylesheet, on its own.
+ *
+ * Separated from the document so the same rules can be adopted into a shadow root by the
+ * embeddable element. The selectors are written `:root, :host` throughout for that
+ * reason: `:root` matches the document element on the standalone page and matches nothing
+ * inside a shadow tree, where `:host` is the element the tokens have to hang off.
+ */
+export const DASHBOARD_CSS = String.raw`/* ---------------------------------------------------------------------------
    Tokens.
 
    The two series colours and the critical status step are the validated data
@@ -113,7 +121,7 @@ const PAGE = String.raw`<!doctype html>
    label, so hue is never the only thing distinguishing anything. Text never wears a
    series colour — the ink tokens below are all at least 4.5:1 on their surface.
 --------------------------------------------------------------------------- */
-:root {
+:root, :host {
   color-scheme: light;
   --page: #f4f5f7;
   --surface: #ffffff;
@@ -146,7 +154,7 @@ const PAGE = String.raw`<!doctype html>
   --focus: #2a78d6;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
+  :root:not([data-theme="light"]), :host(:not([data-theme="light"])) {
     color-scheme: dark;
     --page: #0d0f12;
     --surface: #16181d;
@@ -171,7 +179,7 @@ const PAGE = String.raw`<!doctype html>
     --focus: #86b6ef;
   }
 }
-:root[data-theme="dark"] {
+:root[data-theme="dark"], :host([data-theme="dark"]) {
   color-scheme: dark;
   --page: #0d0f12;
   --surface: #16181d;
@@ -317,9 +325,16 @@ main { padding: 18px 20px 64px; max-width: 1680px; margin: 0 auto; }
   display: flex; align-items: center; gap: 10px;
 }
 .panel > h2 .sub { font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11.5px; margin-left: auto; }
+/* A container, so the two-column grid below can ask how much room it actually has.
+
+   It used to ask the viewport, which is the same mistake the feed table's breakpoints
+   made one level down: the constraint is the width of this column, not of the window.
+   Embedded in a 320px sidebar on a 1280px screen the media query never fired, the second
+   column held its 280px minimum, and the feed was squeezed to twenty-two pixels. */
+.stack { container: dash / inline-size; }
 .two { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.9fr) minmax(280px, 1fr); align-items: start; }
 .grid3 { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
-@media (max-width: 1080px) { .two { grid-template-columns: minmax(0, 1fr); } }
+@container dash (max-width: 1080px) { .two { grid-template-columns: minmax(0, 1fr); } }
 
 /* The feed table has a floor — six columns of request text will not go below about
    940px — and under it the panel was simply amputating the right-hand columns.
@@ -717,10 +732,27 @@ input::placeholder { color: color-mix(in srgb, var(--muted) 80%, transparent); }
 .toast span { color: var(--muted); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } * { transition: none !important; } }
-</style>
-</head>
-<body>
 
+/* Forced colours — Windows High Contrast and the like.
+   The browser repaints text, backgrounds and borders from the user's palette but leaves
+   SVG fill and stroke alone, which is the right outcome for the two series: they stay
+   tellable apart instead of collapsing into one system colour. The gridlines are the
+   casualty. They are drawn in --grid, a colour picked to recede against *this* dashboard's
+   background, and against a forced black one they recede to 1.4:1 — measured, on the
+   statistics charts — which is not recessive, it is gone. GrayText is the palette's own
+   answer to "present but secondary", so the grid follows the user's colours while the data
+   keeps the ones that carry meaning. */
+@media (forced-colors: active) {
+  .gridline { stroke: GrayText; }
+}`;
+
+/**
+ * Everything between `<body>` and the boot script.
+ *
+ * The standalone page and the embedded element render identical markup; only what they
+ * render it *into* differs.
+ */
+export const DASHBOARD_MARKUP = String.raw`
 <a class="skip" href="#view-live">Skip to the feed</a>
 
 <header>
@@ -1007,7 +1039,21 @@ input::placeholder { color: color-mix(in srgb, var(--muted) 80%, transparent); }
 </main>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
+`;
 
+const PAGE = String.raw`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>__TITLE__ · bot dashboard</title>
+<style nonce="__NONCE__">
+${DASHBOARD_CSS}
+</style>
+</head>
+<body>
+${DASHBOARD_MARKUP}
 <script nonce="__NONCE__">
 window.__BOOTSTRAP__ = JSON.parse(__BOOT_JSON__);
 __SCRIPT__

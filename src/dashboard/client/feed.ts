@@ -1,4 +1,4 @@
-import { $, byId, clear, cssEscape, el } from "./dom.js";
+import { $, byId, clear, cssEscape, el, rootNode } from "./dom.js";
 import { FEED_LIMIT, matchingCount, setSearch, state, visibleRows } from "./store.js";
 import { SECTIONS } from "./boot.js";
 import { app, download, today, toast } from "./app.js";
@@ -224,7 +224,7 @@ function buildRow(entry: DashboardEntry, open: boolean): HTMLTableRowElement {
     app.drawNow();
     // The row was rebuilt, so focus has to be put back or a keyboard user is returned
     // to the top of the document every time they open one.
-    document.querySelector<HTMLElement>(`button.row-toggle[data-request="${cssEscape(entry.requestId)}"]`)?.focus();
+    rootNode().querySelector<HTMLElement>(`button.row-toggle[data-request="${cssEscape(entry.requestId)}"]`)?.focus();
   };
   toggle.addEventListener("click", (event) => {
     event.stopPropagation();

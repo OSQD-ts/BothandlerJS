@@ -63,6 +63,23 @@ That combination is worth understanding. The dashboard people watch all day need
 one that names individuals, or the one that explains your detection to whoever is scraping
 you.
 
+**It does not have to be its own page.** The same dashboard is also a custom element, so it
+can live inside the admin tool your team already opens, rather than behind a second link
+they have to remember:
+
+```html
+<bot-dashboard src="/_bots"></bot-dashboard>
+<script type="module">
+  import { defineBotDashboard } from "@osqd/bothandlerjs/element";
+  defineBotDashboard();
+</script>
+```
+
+`sections` and `redact` above still apply — they are enforced on the server, and embedding
+changes nothing about that. What the element adds is which screens appear and how it looks.
+[Embedding it](../operations/embedding.md) has the whole of it, including what putting the
+dashboard inside your own page costs you.
+
 ## Metrics
 
 On by default; a handful of integer increments per request.
@@ -232,7 +249,8 @@ miss.
 
 ## Reference
 
-- [The dashboard](../operations/dashboard.md) · [Metrics](../operations/metrics.md)
-- [The audit](../operations/audit.md) · [Notifications](../operations/notifications.md)
+- [The dashboard](../operations/dashboard.md) · [Embedding it](../operations/embedding.md)
+- [Metrics](../operations/metrics.md) · [The audit](../operations/audit.md)
+- [Notifications](../operations/notifications.md)
 
 Next: [Scaling and changing it live](14-scaling.md).

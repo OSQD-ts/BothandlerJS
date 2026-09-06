@@ -719,6 +719,8 @@ what you see at `localhost:9674` is what you get in your own application.
 
 ## Related
 
+- [Embedding it](embedding.md) — the same dashboard as an element inside your own admin
+  page, with the screens and theme you choose
 - [Operations](index.md) — events, metrics, the audit
 - [Runtime changes](runtime-changes.md) — what the editor and the guard panel actually call
 - [Try it](../testing/try-it.md) — the demo, including the role-gated dashboards

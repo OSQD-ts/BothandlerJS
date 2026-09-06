@@ -5,7 +5,7 @@ import { DashboardChanges, DashboardFeed, DashboardNotices } from "./feed.js";
 import { candidatePolicy, previewPolicy } from "./preview.js";
 import type { GuardSettings } from "../policy/policy.js";
 import { constantTimeEqual, randomId } from "../internal/crypto.js";
-import { renderDashboardPage } from "./page.js";
+import { bootFor, renderDashboardPage } from "./page.js";
 import { robotsFromRules } from "../robots.js";
 import { toPrometheus } from "../metrics.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -181,7 +181,7 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
   const notices = new DashboardNotices(handler);
   const changes = new DashboardChanges(handler);
   const instance = options.instance ?? hostname();
-  const page = renderDashboardPage({
+  const pageOptions = {
     title: options.title ?? "bothandlerjs",
     basePath,
     links: options.links ?? [],
@@ -191,7 +191,12 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
     allowActing,
     sections,
     peers: options.peers ?? [],
-  });
+  };
+  const page = renderDashboardPage(pageOptions);
+  // The same object the standalone page carries inline. The embeddable element cannot be
+  // handed it at render time — it is somebody else's page — so it asks for it, and asking
+  // must return exactly what the page would have been given or the two drift apart.
+  const bootstrap = JSON.stringify(bootFor(pageOptions));
 
   const streams = new Set<Stream>();
   /**
@@ -348,6 +353,8 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
     switch (route) {
       case "/":
         return sendPage(response);
+      case "/api/bootstrap":
+        return send(response, 200, "application/json; charset=utf-8", bootstrap);
       case "/api/stats":
         return send(response, 200, "application/json; charset=utf-8", JSON.stringify(snapshot()));
       case "/api/feed":

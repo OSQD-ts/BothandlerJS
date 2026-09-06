@@ -16,14 +16,37 @@ import type { DashboardEntry, Snapshot } from "./types.js";
  * page's side of that bargain is this: nothing here tracks the cursor, because the
  * browser already does, and a second copy would be the one that is wrong.
  */
+/**
+ * The open connection, so it can be closed again.
+ *
+ * It used to be a local, which meant nothing could stop it. Embedded in somebody's page
+ * that mattered: removing the element left the stream open and the client drawing into a
+ * detached tree for the life of the page — one held server connection and a steady trickle
+ * of work for a dashboard nobody was looking at.
+ */
+let source: EventSource | undefined;
+
+/**
+ * Closes the stream, keeping everything the page has drawn.
+ *
+ * Reconnecting resumes from where this left off: the server is told the last id seen and
+ * sends only what was missed, so suspending across a route change costs a reconnect rather
+ * than a reload.
+ */
+export function suspendStream(): void {
+  source?.close();
+  source = undefined;
+}
+
 export function connectStream(): void {
   if (!SECTIONS.feed) {
     $("dot").className = "dot";
     $("conn").textContent = "feed off";
     return;
   }
+  if (source !== undefined) return;
 
-  const source = new EventSource(`${API}/api/stream`);
+  source = new EventSource(`${API}/api/stream`);
 
   source.addEventListener("open", () => {
     $("dot").className = "dot on";
