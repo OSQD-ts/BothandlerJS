@@ -3,7 +3,7 @@ import { parseRequest } from "../src/dashboard/parse-request.js";
 import { corpusCase, replayFile, replayLine } from "../src/dashboard/client/replay.js";
 import { draftRule } from "../src/dashboard/client/draft.js";
 import { matchesFilter, matchesQuery, parseQuery, searchableText } from "../src/dashboard/client/query.js";
-import { actionKind, outcome, verdictBadge } from "../src/dashboard/client/outcome.js";
+import { actionKind, outcome, provenBots, verdictBadge } from "../src/dashboard/client/outcome.js";
 import { clearFeed, state } from "../src/dashboard/client/store.js";
 import { n, pct, rangeLabel, uptime, windowLabel } from "../src/dashboard/client/format.js";
 import type { DashboardEntry } from "../src/dashboard/types.js";
@@ -355,5 +355,36 @@ describe("clearing the feed", () => {
     expect(state.bufferedWhilePaused).toBe(0);
     // The badge's other half is reset on the server; this is the half that was not.
     expect(state.laggedDrops).toBe(0);
+  });
+});
+
+/**
+ * The counter tile that said the opposite of the truth.
+ *
+ * `metrics.proven` counts assessments resting on proven evidence, and evidence has a
+ * direction — an operator or interaction clearance is *certain human* evidence. The tile
+ * showed that number under the words "Proven bots", so a dashboard watching a logged-in
+ * audience reported "23, 100% of traffic" while every one of those verdicts was `human`,
+ * and counted the same requests again under Unremarkable.
+ */
+describe("counting proven bots", () => {
+  it("counts the two verdicts only the proven path can reach", () => {
+    expect(provenBots({ "confirmed-bot": 3, "verified-bot": 2, "suspected-bot": 9, human: 40, unknown: 7 })).toBe(5);
+  });
+
+  it("does not count a proven human", () => {
+    // The reported case: every request a cleared human, every verdict `human`, and the
+    // tile reading 100%.
+    expect(provenBots({ "confirmed-bot": 0, "verified-bot": 0, "suspected-bot": 0, human: 23, unknown: 0 })).toBe(0);
+  });
+
+  it("does not count suspicion, however strong", () => {
+    // `suspected-bot` is the probabilistic path's verdict and never proven — that
+    // separation is the whole point of the evidence tiers.
+    expect(provenBots({ "suspected-bot": 100, human: 0, unknown: 0 })).toBe(0);
+  });
+
+  it("survives a snapshot missing a key", () => {
+    expect(provenBots({})).toBe(0);
   });
 });

@@ -3,6 +3,7 @@ import { BOOT, SECTIONS } from "./boot.js";
 import { aggregate, oldestAt, state } from "./store.js";
 import { drawBars, pairs } from "./bars.js";
 import { clockTime, ms, n, pct, rangeLabel, uptime, windowLabel } from "./format.js";
+import { provenBots } from "./outcome.js";
 import type { Aggregates } from "./store.js";
 
 /**
@@ -38,10 +39,14 @@ export function drawTiles(force = false): void {
   const served = actions.allow + actions.tag + actions.log;
   const total = metrics.requests;
   const unremarkable = metrics.verdicts.unknown + metrics.verdicts.human;
+  // From the verdicts rather than from `metrics.proven`: that counter includes proven
+  // *humans* — a clearance token is certain evidence too — so a dashboard watching a
+  // logged-in audience reported all of them as proven bots. See `provenBots`.
+  const provenBotCount = provenBots(metrics.verdicts);
 
   const tiles: Array<[string, string, string, string]> = [
     ["", n(total), "Requests", "since start"],
-    ["proven", n(metrics.proven), "Proven bots", `${pct(metrics.proven, total)} of traffic`],
+    ["proven", n(provenBotCount), "Proven bots", `${pct(provenBotCount, total)} of traffic`],
     ["warn", n(metrics.verdicts["suspected-bot"]), "Suspected", "never denied on this alone"],
     ["", n(unremarkable), "Unremarkable", `${pct(unremarkable, total)} of traffic`],
     ["warn", n(metrics.downgrades), "Guard stops", metrics.downgrades > 0 ? "rules asking for more than the evidence" : "no rule overreached"],

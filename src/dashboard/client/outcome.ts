@@ -35,3 +35,21 @@ export function verdictBadge(entry: Pick<DashboardEntry, "verdict" | "bypass">):
   if (entry.verdict === "human") return ["b-human", "human"];
   return ["b-unknown", entry.bypass !== undefined ? `skipped · ${entry.bypass}` : "unknown"];
 }
+
+/**
+ * How many assessments proved a *bot*.
+ *
+ * Not `metrics.proven`, which is what the tile used to show. That counter is honestly
+ * named for what it holds — assessments resting on at least one piece of proven evidence —
+ * and evidence has a direction: a client holding an operator or interaction clearance
+ * produces *certain human* evidence, so it lands there too. A dashboard watching nothing
+ * but cleared humans therefore read "Proven bots: 100% of traffic", and the same requests
+ * were counted again under Unremarkable.
+ *
+ * The two proven-bot verdicts are the exact answer. Only the proven path can reach them —
+ * the probabilistic path produces `suspected-bot`, `human` or `unknown` and nothing else —
+ * so this is a rename of the truth rather than an approximation of it.
+ */
+export function provenBots(verdicts: Record<string, number>): number {
+  return (verdicts["confirmed-bot"] ?? 0) + (verdicts["verified-bot"] ?? 0);
+}
