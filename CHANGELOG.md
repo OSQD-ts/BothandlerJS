@@ -8,6 +8,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`indexers-only`, a preset for sites that want search traffic and nothing else.**
+  Serves a bot only when its identity has been confirmed by DNS or a published range
+  *and* it is a `search` or `social` crawler; refuses every other proven bot; challenges
+  suspicion and holds weak signal to a ceiling. It is the first shipped preset whose
+  terminal rules cover all proven automation permanently rather than during an incident.
+
+  Read its documentation before choosing it. Twenty-three of the shipped search and
+  social signatures — Twitterbot, LinkedInBot, Slackbot, Discord, Telegram, WhatsApp,
+  Reddit, Mastodon, Bluesky among them — publish nothing that can confirm a claim, so
+  they can never be verified and `unverifiable-indexer-block` refuses them, taking your
+  link previews with it. Fifteen of the corpus's infrastructure cases are refused too,
+  including health checks, a server-side renderer and a payment webhook: allowlist your
+  own automation above the preset before switching it on.
+
 - **`<bot-dashboard>`, the dashboard as an element.** A new entry point,
   `@osqd/bothandlerjs/element`, exporting `defineBotDashboard()`. Mount
   `createDashboardHandler` as before and drop the element into a page you already

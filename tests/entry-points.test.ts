@@ -26,7 +26,7 @@ const PROMISED: Record<string, { module: Record<string, unknown>; names: readonl
       "defaultDetectors", "BOT_SIGNATURES", "renderTrapLink", "renderTrapField", "trapRobotsEntries",
       "DEFAULT_TRAP_PATHS", "TRAP_FIELD_SOURCE", "trapDetector", "probeSignatureDetector",
       "PRESETS", "monitorOnly", "protectContent", "protectData", "protectAuth", "protectApi",
-      "allowCrawlers", "declineAiTraining", "underAttack",
+      "allowCrawlers", "declineAiTraining", "indexersOnly", "underAttack",
       "defineHandler", "generateRobotsTxt", "robotsFromRules", "agentFor",
       "ChallengeService", "parseAcceptLanguage", "pickTranslation",
       "MemoryStore", "RedisStore",

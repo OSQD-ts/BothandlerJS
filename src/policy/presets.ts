@@ -1,6 +1,17 @@
 import type { Rule } from "./types.js";
 
 /**
+ * Said once, so the three rules that decline a bot say the same thing.
+ *
+ * It points at no `robots.txt`, deliberately. The generated file cannot express
+ * "only if verified" — {@link robotsFromRules} reads identities and categories, not
+ * verdicts — so for {@link indexersOnly} it stays permissive while the policy does
+ * not, and sending a refused crawler to read it would be sending it to be told it
+ * is welcome.
+ */
+const DECLINED = "This site serves search and social crawlers whose identity it can confirm. Other automated requests are declined.\n";
+
+/**
  * Ready-made rule sets.
  *
  * Each is a starting point to read, adapt and own — not a black box. Every rule
@@ -227,6 +238,111 @@ export function protectApi(): Rule[] {
 }
 
 /**
+ * Indexers welcome, everything else automated is not.
+ *
+ * The strictest permanent posture in this file: a crawler is served only when its
+ * identity has been *confirmed* against its operator's DNS or published ranges, and
+ * only when the job it does is bringing people to the site. Every other proven bot is
+ * refused, and suspicion escalates as far as the guard allows.
+ *
+ * Three things to be clear about before choosing it.
+ *
+ * **Most indexers cannot be verified at all.** Of the search and social signatures the
+ * library ships, twelve publish forward-confirmable DNS — Google, Bing, Yandex, Baidu,
+ * Apple, Sogou, Seznam, Naver, PetalBot, Cốc Cốc, Yahoo, Pinterest — and two more
+ * (DuckDuckBot, Facebook) are checkable only if you supply `crawlerRanges`. The other
+ * twenty-three, Twitterbot, LinkedInBot, Slackbot, Discord, Telegram, WhatsApp,
+ * Reddit, Mastodon and Bluesky among them, publish nothing to check a claim against.
+ * They can never reach `verified-bot`, so `unverifiable-indexer-block` refuses them and
+ * your pages stop getting link previews when somebody shares them. That rule is
+ * deliberately separate and deliberately named: change its action to `rate-limit` and
+ * you serve them at a ceiling instead, which is the trade every site makes differently.
+ *
+ * **A confirmed crawler outside `search` and `social` is refused too** — the AI
+ * crawlers, the SEO tools, the archivers, the uptime monitors, and **your own webhooks,
+ * health probes and server-side renderer**. That last group is how this preset breaks
+ * your own infrastructure on the first deploy; fifteen of the corpus's thirty-three
+ * infrastructure cases are refused by it. Allowlist yours first, by identity or by
+ * address, above everything else:
+ *
+ * ```ts
+ * rules: [{ id: "our-renderer", match: { identity: "our-ssr" }, action: "allow" }, ...indexersOnly()]
+ * ```
+ *
+ * **Suspicion is challenged, not blocked**, and no rule here asks otherwise. Under the
+ * default `strict` guard a `block` on a probabilistic verdict is downgraded to a
+ * challenge anyway, so writing one would express a strictness the engine does not have
+ * while reporting a guard stop on every suspicious request. If you want denial on
+ * suspicion, say so where it is visible — `falsePositivePolicy: "balanced"`, which
+ * additionally demands two independent strong signals — and add the rule that asks:
+ *
+ * ```ts
+ * { id: "high-suspicion-block", match: { verdict: "suspected-bot", minScore: 90 }, action: "block" }
+ * ```
+ *
+ * Some real people will be denied by that. Nothing in this preset does it for you.
+ */
+export function indexersOnly(): Rule[] {
+  return [
+    { id: "cleared-human-allow", match: { verdict: "human", certain: true }, action: "allow", reason: "Your application asserted this is a person. Nothing below should second-guess that." },
+    {
+      id: "verified-indexer-allow",
+      // `verified-bot` is only ever reached through forward-confirmed reverse DNS or a
+      // published range, so no claim can reach this rule — which is the whole basis on
+      // which this policy is willing to serve a bot at all.
+      match: { verdict: "verified-bot", category: ["search", "social"] },
+      action: "allow",
+      reason: "Identity confirmed against the operator's DNS or published ranges, doing the one job this site serves bots for: making it findable.",
+    },
+    { id: "impersonator-block", match: { botClass: "impersonator", certain: true }, action: "block", params: { status: 403 }, reason: "Forged a verifiable third-party crawler identity. Proven by DNS, not inferred." },
+    { id: "scanner-block", match: { botClass: "scanner", certain: true }, action: "block", params: { status: 403 }, reason: "Self-identified security scanner." },
+    { id: "trap-block", match: { detector: "trap", certain: true }, action: "block", params: { status: 403 }, reason: "Followed a link no person can reach." },
+    {
+      id: "non-indexing-crawler-block",
+      match: { verdict: "verified-bot" },
+      action: "block",
+      params: { status: 403, body: DECLINED },
+      reason: "A confirmed crawler doing something other than indexing. Declined by policy rather than by suspicion — and said plainly, so its operator can act on it.",
+    },
+    {
+      id: "unverifiable-indexer-block",
+      // The rule to reach for first when this preset costs you something you wanted.
+      // `rate-limit` here serves the link unfurlers at a ceiling; the reason a forged
+      // Slackbot is cheap to send is exactly the reason a ceiling is the right answer.
+      match: { verdict: "confirmed-bot", category: ["search", "social"] },
+      action: "block",
+      params: { status: 403, body: DECLINED },
+      reason: "Says it indexes, and publishes nothing anyone could check that against. This policy serves crawlers it can confirm, and this claim cannot be confirmed.",
+    },
+    {
+      id: "proven-automation-block",
+      match: { verdict: "confirmed-bot", certain: true },
+      action: "block",
+      params: { status: 403, body: DECLINED },
+      reason: "Proven automation that is not a confirmed indexer. A declaration, a contradiction or a trap — never a score.",
+    },
+    {
+      id: "persistent-refuser-ratelimit",
+      // Ahead of the challenge rule on purpose: a fourth challenge to something that
+      // answered none of the first three achieves nothing but latency.
+      match: { minUnsolvedChallenges: 3 },
+      action: "rate-limit",
+      params: { limit: { max: 10, windowMs: 60_000 } },
+      reason: "Three challenges issued and none answered. Held to a rate rather than asked again; solving one clears the count.",
+    },
+    { id: "suspected-challenge", match: { verdict: "suspected-bot" }, action: "challenge", reason: "Suspicion, at this site's threshold. A challenge is as far as unproven evidence may go, and the client can pass it on its own." },
+    {
+      id: "weak-suspicion-ratelimit",
+      match: { verdict: "unknown", minScore: 40 },
+      action: "rate-limit",
+      params: { limit: { max: 60, windowMs: 60_000 } },
+      reason: "Some signal, below the bar for calling it a bot at all. A ceiling rather than a challenge: it costs a person nothing and costs bulk automation everything.",
+    },
+    { id: "everything-else-tag", match: {}, action: "tag", reason: "Nothing withheld, and the verdict travels to your handlers so they can decide for themselves." },
+  ];
+}
+
+/**
  * For while it is happening.
  *
  * A deliberately impatient posture for an incident: a scrape in progress, a stuffing
@@ -294,6 +410,7 @@ export const PRESETS = {
   "protect-data": protectData,
   "protect-api": protectApi,
   "protect-auth": protectAuth,
+  "indexers-only": indexersOnly,
   "under-attack": underAttack,
 } as const;
 

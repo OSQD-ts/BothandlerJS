@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Policy } from "../src/policy/policy.js";
-import { PRESETS, allowCrawlers, declineAiTraining, protectApi, protectContent, underAttack } from "../src/policy/presets.js";
+import { PRESETS, allowCrawlers, declineAiTraining, indexersOnly, protectApi, protectContent, underAttack } from "../src/policy/presets.js";
 import { makeFacts } from "./helpers.js";
 import type { Assessment, Verdict } from "../src/types.js";
 import type { Decision } from "../src/policy/types.js";
@@ -376,5 +376,51 @@ describe("what each preset is for", () => {
 
   it("puts a rate limit on everyone under attack, including traffic it likes", () => {
     expect(decide(underAttack(), { verdict: "unknown", certain: false }).action).toBe("rate-limit");
+  });
+
+  // The claim the preset is built on: an identity is served because it was checked,
+  // never because it was claimed — however honest the claim looks.
+  it("indexers-only separates a confirmed indexer from a claimed one", () => {
+    const googlebot = {
+      verdict: "verified-bot" as const,
+      botClass: "verified-bot" as const,
+      certain: true,
+      identity: "googlebot",
+      evidence: [{ detector: "crawler-verification", summary: "confirmed", direction: "bot" as const, certainty: "certain" as const, identity: "googlebot", metadata: { category: "search" }, deterministicBasis: "fcrdns" }],
+    };
+    expect(decide(indexersOnly(), googlebot).action).toBe("allow");
+
+    // Slack publishes nothing to check this against, so it can never be verified.
+    const slackbot = {
+      verdict: "confirmed-bot" as const,
+      botClass: "declared-bot" as const,
+      certain: true,
+      identity: "slackbot",
+      evidence: [{ detector: "self-identified", summary: "Slackbot", direction: "bot" as const, certainty: "certain" as const, identity: "slackbot", metadata: { category: "social" }, deterministicBasis: "declared" }],
+    };
+    const declined = decide(indexersOnly(), slackbot);
+    expect(declined.action).toBe("block");
+    expect(declined.rule, "the rule to lift when link previews matter more").toBe("unverifiable-indexer-block");
+  });
+
+  it("indexers-only refuses a confirmed crawler that is not indexing", () => {
+    const verifiedTrainer = {
+      verdict: "verified-bot" as const,
+      botClass: "verified-bot" as const,
+      certain: true,
+      identity: "claudebot",
+      evidence: [{ detector: "crawler-verification", summary: "confirmed", direction: "bot" as const, certainty: "certain" as const, identity: "claudebot", metadata: { category: "ai" }, deterministicBasis: "fcrdns" }],
+    };
+    expect(decide(indexersOnly(), verifiedTrainer).rule).toBe("non-indexing-crawler-block");
+  });
+
+  // The preset asks for exactly what the guard permits, so its blocks are decisions
+  // rather than downgrades. A rule asking to block on suspicion would land here as a
+  // guard stop on every suspicious request, which is noise, not strictness.
+  it("indexers-only challenges suspicion rather than asking for a block", () => {
+    const policy = new Policy({ rules: indexersOnly(), defaultAction: "allow" });
+    const decision = policy.decide(assessment({ verdict: "suspected-bot", score: 95, certain: false }));
+    expect(decision.action).toBe("challenge");
+    expect(decision.downgradedFrom).toBeUndefined();
   });
 });

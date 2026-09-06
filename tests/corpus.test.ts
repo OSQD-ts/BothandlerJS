@@ -165,6 +165,16 @@ describe("policy shape", () => {
     expect(denied, "the guard applies during an incident too").toEqual([]);
   });
 
+  it("indexers-only serves no bot it has not confirmed", async () => {
+    const scorecard = await runner("indexers-only", { assertActions: false });
+    const served = scorecard.results
+      .filter((result) => result.skipped === undefined && result.case.audience !== "human")
+      .filter((result) => result.final.decision.action === "allow")
+      .filter((result) => result.final.assessment.verdict !== "verified-bot")
+      .map((result) => `${result.case.id} -> ${result.final.decision.rule}`);
+    expect(served, "this preset serves crawlers it checked, never crawlers that claimed").toEqual([]);
+  });
+
   // A finding from the corpus, kept as a regression test so the warning in the
   // preset's documentation stays true.
   it("protect-auth blocks your own infrastructure when applied site-wide", async () => {

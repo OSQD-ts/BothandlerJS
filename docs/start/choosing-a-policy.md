@@ -19,6 +19,7 @@ wrong?**
 | a broken integration | an API bill | [`protect-api`](../policy/presets.md#protect-api) |
 | a lost signup | a compromised account | [`protect-auth`](../policy/presets.md#protect-auth), on those routes |
 | your search traffic | your work in a training corpus | [`decline-ai-training`](../policy/presets.md#decline-ai-training) |
+| a reader in an in-app browser, and your own health checks | any automation you did not confirm by name | [`indexers-only`](../policy/presets.md#indexers-only) |
 
 Whatever the answer, **the first week is [`monitor-only`](../policy/presets.md#monitor-only)**.
 

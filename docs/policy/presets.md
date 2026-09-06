@@ -38,6 +38,7 @@ allowed to go.**
 | [`protect-data`](#protect-data) | pricing, listings, inventory | + declared AI and SEO crawlers |
 | [`protect-api`](#protect-api) | a JSON API | impersonators, scanners, traps |
 | [`protect-auth`](#protect-auth) | login, signup, checkout — **those routes only** | all proven automation |
+| [`indexers-only`](#indexers-only) | a site that wants search traffic and nothing else automated | all proven automation, and every crawler it cannot confirm |
 | [`under-attack`](#under-attack) | during an incident, then off again | all proven automation |
 
 ---
@@ -141,6 +142,58 @@ later.
 The unusual choice is `delay` on merely-suspected traffic: 250 ms is imperceptible to a
 person filling in a form and ruinous to a credential stuffer working through a list — and,
 unlike a challenge, it excludes nobody.
+
+## `indexers-only`
+
+The strictest permanent posture here. A bot is served only when its identity has been
+*confirmed* — forward-confirmed reverse DNS, or a published range you supplied — and only
+when it is a `search` or `social` crawler. Everything else proven is refused; suspicion is
+challenged; weak signal is held to a ceiling.
+
+```ts
+new BotHandler({ preset: "indexers-only" });
+```
+
+Against the corpus that means five crawlers served — Googlebot, Googlebot Smartphone,
+Bingbot, DuckDuckBot and `facebookexternalhit`, the last two only because the run supplies
+their published ranges — and 194 requests refused by `proven-automation-block` alone.
+
+**Most indexers cannot be verified at all.** Twelve of the shipped search and social
+signatures publish forward-confirmable DNS; two more are checkable only if you configure
+`crawlerRanges`. The remaining twenty-three — Twitterbot, LinkedInBot, Slackbot, Discord,
+Telegram, WhatsApp, Reddit, Mastodon, Bluesky, and the smaller search engines — publish
+nothing a claim can be checked against, so they can never reach `verified-bot` and
+`unverifiable-indexer-block` refuses them. Your pages stop getting link previews when
+somebody shares them. That rule is separate and named so you can change its action to
+`rate-limit`, which serves them at a ceiling instead.
+
+**It refuses your own infrastructure.** Fifteen of the corpus's thirty-three
+infrastructure cases are blocked by it: Kubernetes and ALB health checks, the Prometheus
+blackbox exporter, a Cloudflare origin fetch, your own server-side renderer, and the
+Stripe webhook. Allowlist yours by identity, address or path *above* the preset, before
+you switch it on.
+
+**And it reaches people through their software.** The corpus's `app-podcast-shownotes`
+case is a person reading show notes in Overcast, whose User-Agent carries the crawler
+contact convention because the same app fetches feeds. The library reads a proven declared
+bot and is right about the client; the person behind it still gets a 403. Thirteen more
+human cases — VS Code's Simple Browser, the Slack, Discord, Spotify, Notion, Figma,
+Postman, Teams and Steam clients, an office of two hundred behind one address — are held
+to the 60/minute ceiling, and five, including a corporate proxy and a carrier transcoder,
+are challenged. None of that is a bug in the preset; it is the price of the posture, and
+it is why `monitor-only` comes first.
+
+One thing it cannot say in `robots.txt`. [`robotsFromRules`](../reference/api.md) reads
+identities and categories, not verdicts, so it sees `verified-indexer-allow` serving the
+`search` and `social` categories and generates a permissive file — while the policy in
+fact refuses every crawler in those categories it could not confirm. The error runs in the
+conservative direction (a file that turns crawlers away when the policy would have served
+them is the expensive one), but it means the enforcement here is the 403 and not the file.
+
+Suspicion is challenged rather than blocked, and deliberately: under `strict` a `block` on
+a probabilistic verdict is downgraded to a challenge anyway, so a rule asking for one
+would only add a guard stop to every suspicious request. To deny on suspicion, say so
+where it shows — `falsePositivePolicy: "balanced"` plus a rule that asks for a block.
 
 ## `under-attack`
 
