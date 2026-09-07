@@ -49,6 +49,17 @@ export type BotCategory =
    */
   | "accessibility"
   /**
+   * A mail or messaging gateway checking a link on somebody's behalf.
+   *
+   * Its own category because of who pays when it is blocked. A social preview that fails
+   * costs a card; one of these failing tells a real person, in their inbox, that the link
+   * they were sent could not be verified — and they were never the one crawling. They also
+   * arrive with none of a browser's marks: from a datacentre, once, with no cookie and no
+   * referer, moments after a message was delivered, which is a shape that reads as
+   * automation because it *is* automation, acting for a human.
+   */
+  | "email-security"
+  /**
    * Research and measurement: universities, internet-measurement projects, plagiarism
    * and citation indexes.
    *
@@ -77,6 +88,7 @@ export const BOT_CATEGORIES: readonly BotCategory[] = [
   "commerce",
   "accessibility",
   "academic",
+  "email-security",
   "other",
 ];
 
@@ -179,6 +191,13 @@ const SEARCH: BotSignature[] = [
   { id: "yisouspider", name: "Shenma (Yisou) Spider", tokens: ["yisouspider"], category: "search", benign: true, robotsAgent: "YisouSpider", verification: { kind: "none" } },
   { id: "yahoo-slurp", name: "Yahoo! Slurp", tokens: ["yahoo! slurp"], category: "search", benign: true, robotsAgent: "Slurp", verification: { kind: "fcrdns", domains: ["crawl.yahoo.net", "yahoo.com"] } },
   { id: "mail-ru", name: "Mail.Ru bot", tokens: ["mail.ru_bot"], category: "search", benign: true, verification: { kind: "none" } },
+  { id: "brave-search", name: "Brave Search", tokens: ["bravesearchbot"], category: "search", benign: true, robotsAgent: "BraveSearchBot", verification: { kind: "none" } },
+  { id: "ecosia", name: "Ecosia", tokens: ["ecosiabot"], category: "search", benign: true, verification: { kind: "none" } },
+  { id: "startpage", name: "Startpage", tokens: ["startpagebot"], category: "search", benign: true, verification: { kind: "none" } },
+  { id: "daum", name: "Daumoa", tokens: ["daumoa"], category: "search", benign: true, verification: { kind: "none" } },
+  { id: "stract", name: "Stract", tokens: ["stractbot"], category: "search", benign: true, verification: { kind: "none" } },
+  { id: "rightdao", name: "RightDao", tokens: ["rightdaobot"], category: "search", benign: true, verification: { kind: "none" } },
+  { id: "gigablast", name: "Gigablast", tokens: ["gigablastopensource"], category: "search", benign: true, verification: { kind: "none" } },
   { id: "exabot", name: "Exabot (Exalead)", tokens: ["exabot"], category: "search", benign: true, verification: { kind: "none" } },
   { id: "kagibot", name: "Kagi", tokens: ["kagibot"], category: "search", benign: true, robotsAgent: "KagiBot", verification: { kind: "none" } },
 ];
@@ -261,11 +280,15 @@ const SOCIAL: BotSignature[] = [
   { id: "pinterestbot", name: "Pinterestbot", tokens: ["pinterest/", "pinterestbot"], category: "social", benign: true, verification: { kind: "fcrdns", domains: ["pinterest.com"] } },
   { id: "mastodon", name: "Mastodon / Fediverse", tokens: ["mastodon/", "pleroma", "misskey/", "akkoma"], category: "social", benign: true, verification: { kind: "none" } },
   { id: "embedly", name: "Embedly", tokens: ["embedly"], category: "social", benign: true, verification: { kind: "none" } },
-  { id: "bluesky", name: "Bluesky card fetcher", tokens: ["bluesky cardyb", "cardyb/"], category: "social", benign: true, verification: { kind: "none" } },
+  { id: "bluesky", name: "Bluesky card fetcher", tokens: ["bluesky cardyb", "cardyb/", "blueskybot"], category: "social", benign: true, verification: { kind: "none" } },
   { id: "iframely", name: "Iframely", tokens: ["iframely"], category: "social", benign: true, verification: { kind: "none" } },
   { id: "skype-preview", name: "Skype URI preview", tokens: ["skypeuripreview"], category: "social", benign: true, verification: { kind: "none" } },
   { id: "vk-share", name: "VK / Odnoklassniki preview", tokens: ["vkshare", "odklbot"], category: "social", benign: true, verification: { kind: "none" } },
   { id: "discourse-onebox", name: "Discourse Onebox", tokens: ["discourse forum onebox"], category: "social", benign: true, verification: { kind: "none" } },
+  { id: "microsoft-preview", name: "Microsoft Teams preview", tokens: ["microsoftpreview"], category: "social", benign: true, verification: { kind: "none" } },
+  { id: "zoom-preview", name: "Zoom link preview", tokens: ["zoombot"], category: "social", benign: true, verification: { kind: "none" } },
+  { id: "signal-preview", name: "Signal link preview", tokens: ["signalbot"], category: "social", benign: true, verification: { kind: "none" } },
+  { id: "matrix-synapse", name: "Matrix (Synapse) preview", tokens: ["synapse/"], category: "social", benign: true, verification: { kind: "none" } },
   { id: "yahoo-preview", name: "Yahoo Link Preview", tokens: ["yahoo link preview"], category: "social", benign: true, verification: { kind: "none" } },
 ];
 
@@ -322,6 +345,10 @@ const FEED: BotSignature[] = [
   { id: "smartnews", name: "SmartNews", tokens: ["smartnewsbot"], category: "feed", benign: true, verification: { kind: "none" } },
   { id: "flipboard", name: "Flipboard", tokens: ["flipboardproxy"], category: "feed", benign: true, verification: { kind: "none" } },
   { id: "podcast-index", name: "Podcast Index", tokens: ["podcastindexbot"], category: "feed", benign: true, verification: { kind: "none" } },
+  // Spotify's podcast fetcher sends `Spotify/1.0` — and so does the Spotify desktop app,
+  // with a person driving it. There is no token that separates them, so this one is left
+  // unnamed rather than named wrongly: the corpus proved the point immediately by blocking
+  // a human under `protect-auth`, `indexers-only` and `under-attack` at once.
   { id: "freshrss", name: "FreshRSS", tokens: ["freshrss"], category: "feed", benign: true, verification: { kind: "none" } },
   { id: "netnewswire", name: "NetNewsWire", tokens: ["netnewswire"], category: "feed", benign: true, verification: { kind: "none" } },
   { id: "overcast", name: "Overcast", tokens: ["overcast/"], category: "feed", benign: true, verification: { kind: "none" } },
@@ -488,6 +515,22 @@ const EMBEDDED: BotSignature[] = [
 const ADVERTISING: BotSignature[] = [
   { id: "adsbot-google", name: "AdsBot-Google", tokens: ["adsbot-google", "mediapartners-google", "adsbot"], category: "advertising", benign: true, verification: { kind: "fcrdns", domains: ["googlebot.com", "google.com"] } },
   { id: "criteo", name: "Criteo", tokens: ["criteobot"], category: "advertising", benign: true, verification: { kind: "none" } },
+  // Verification and contextual classification: they read a page to decide whether an ad
+  // may appear beside it, or what the page is about. A publisher usually wants these and a
+  // site with no advertising has no reason to.
+  { id: "doubleverify", name: "DoubleVerify", tokens: ["doubleverifybot"], category: "advertising", benign: true, verification: { kind: "none" } },
+  { id: "ias", name: "Integral Ad Science", tokens: ["ias crawler"], category: "advertising", benign: true, verification: { kind: "none" } },
+  { id: "moat", name: "Moat", tokens: ["moatbot"], category: "advertising", benign: true, verification: { kind: "none" } },
+  { id: "comscore", name: "comScore (Proximic)", tokens: ["proximic"], category: "advertising", benign: true, verification: { kind: "none" } },
+  { id: "grapeshot", name: "Grapeshot", tokens: ["grapeshotcrawler"], category: "advertising", benign: true, verification: { kind: "none" } },
+  { id: "peer39", name: "Peer39", tokens: ["peer39bot"], category: "advertising", benign: true, verification: { kind: "none" } },
+  { id: "taboola", name: "Taboola", tokens: ["taboolabot"], category: "advertising", benign: true, verification: { kind: "none" } },
+  { id: "outbrain", name: "Outbrain", tokens: ["outbrainbot"], category: "advertising", benign: true, verification: { kind: "none" } },
+  { id: "pubmatic", name: "PubMatic", tokens: ["pubmaticbot"], category: "advertising", benign: true, verification: { kind: "none" } },
+  { id: "thetradedesk", name: "The Trade Desk", tokens: ["ttd-content"], category: "advertising", benign: true, verification: { kind: "none" } },
+  // Competitive ad intelligence rather than verification: it collects what everyone else
+  // is running. Named, and left for the operator to decide about.
+  { id: "adbeat", name: "Adbeat", tokens: ["adbeat_bot"], category: "advertising", benign: false, verification: { kind: "none" } },
 ];
 
 
@@ -527,6 +570,22 @@ const ACADEMIC: BotSignature[] = [
 ];
 
 /**
+ * Link protection: a mail or messaging gateway fetching a URL a person was sent, before
+ * that person is allowed to click it.
+ *
+ * All benign, and the reason is worth stating: blocking one of these does not inconvenience
+ * a crawler, it tells somebody their mail contained a link that could not be checked. The
+ * request is automation acting on a human's behalf, and it looks like automation because it
+ * is — no cookie, no referer, once, from a datacentre.
+ */
+const EMAIL_SECURITY: BotSignature[] = [
+  { id: "proofpoint", name: "Proofpoint URL Defense", tokens: ["proofpointurldefensebot"], category: "email-security", benign: true, verification: { kind: "none" } },
+  { id: "mimecast", name: "Mimecast URL Protect", tokens: ["mimecasturlprotectbot"], category: "email-security", benign: true, verification: { kind: "none" } },
+  { id: "barracuda", name: "Barracuda Link Protect", tokens: ["barracudalinkprotectbot"], category: "email-security", benign: true, verification: { kind: "none" } },
+  { id: "cisco-esa", name: "Cisco Secure Email", tokens: ["ciscosecureemailbot"], category: "email-security", benign: true, verification: { kind: "none" } },
+];
+
+/**
  * Accessibility auditing.
  *
  * Almost always commissioned by the site's own owner and then forgotten about, which is
@@ -554,6 +613,7 @@ export const BOT_SIGNATURES: readonly BotSignature[] = Object.freeze([
   ...COMMERCE,
   ...ACADEMIC,
   ...ACCESSIBILITY,
+  ...EMAIL_SECURITY,
 ]);
 
 /**

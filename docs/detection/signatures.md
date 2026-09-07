@@ -44,8 +44,16 @@ individual name does not.
 | `commerce` | idealo, Kelkoo, PriceRunner, Trivago, Skyscanner, Indeedbot | a commercial decision |
 | `academic` | Crossref, OpenAlex, university web-science crawls | usually allow |
 | `accessibility` | Siteimprove and other WCAG auditors | allow |
+| `email-security` | Proofpoint, Mimecast, Barracuda, Cisco Secure Email | allow |
 
-The last three are separate from their nearest neighbours because the decision is. A price
+`email-security` is a mail or messaging gateway checking a link somebody was sent, before
+they are allowed to click it — and it is separate because of who pays when it is blocked. A
+social preview that fails costs a card; one of these failing tells a real person, in their
+inbox, that their mail contained a link that could not be verified, and they were never the
+one crawling. They arrive with none of a browser's marks — from a datacentre, once, no
+cookie, no referer — because the request is automation acting on a human's behalf.
+
+The other three are separate from their nearest neighbours because the decision is. A price
 comparator is not an SEO auditor — nothing there is auditing your site for you, and the
 same crawler is a distribution channel to one retailer and a competitor's research tool to
 the next, which is why nothing in `commerce` is marked benign. A citation index is not a
