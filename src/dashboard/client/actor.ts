@@ -2,7 +2,7 @@ import { $, clear, el } from "./dom.js";
 import { actorActions } from "./actions.js";
 import { SECTIONS } from "./boot.js";
 import { app } from "./app.js";
-import { clockTime, n } from "./format.js";
+import { clockStamp, n } from "./format.js";
 import { drawBars } from "./bars.js";
 import { state } from "./store.js";
 
@@ -51,7 +51,7 @@ export function drawActor(): void {
     ["Engine sees", stats !== undefined ? `${n(stats.requests)} requests, ${n(stats.distinctPaths)} distinct paths` : "—"],
     ["Prior confirmations", stats !== undefined ? n(stats.priorConfirmations) : "—"],
     ["Holds clearance", stats !== undefined ? (stats.cleared ? "yes" : "no") : "—"],
-    ["First seen", stats !== undefined ? clockTime(stats.firstSeen) : "—"],
+    ["First seen", stats !== undefined ? clockStamp(stats.firstSeen) : "—"],
     ["Mean gap", gaps.length > 0 ? `${Math.round(meanGap)}ms over ${n(gaps.length)} gaps` : "one request only"],
   ];
   for (const [key, value] of rows) {

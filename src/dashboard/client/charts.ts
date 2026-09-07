@@ -1,5 +1,5 @@
 import { $, clear, css, el, svgEl, svgText } from "./dom.js";
-import { n, pct, ms, rangeLabel, windowLabel } from "./format.js";
+import { clockTime, n, pct, ms, rangeLabel, windowLabel } from "./format.js";
 import { oldestAt, state } from "./store.js";
 import { outcome } from "./outcome.js";
 
@@ -143,7 +143,7 @@ export function drawTraffic(): void {
     svg.appendChild(svgEl("line", { x1: x, x2: x, y1: 0, y2: markerRow + plot, stroke: markColour, "stroke-width": 1.5, "stroke-dasharray": "3 2", opacity: 0.85 }));
     const dot = svgEl("circle", { cx: x, cy: 3, r: 3, fill: markColour });
     const title = svgEl("title");
-    title.textContent = `${new Date(change.at).toLocaleTimeString()} · ${change.kind}: ${change.summary}${change.by === undefined ? "" : ` (by ${change.by})`}`;
+    title.textContent = `${clockTime(change.at)} · ${change.kind}: ${change.summary}${change.by === undefined ? "" : ` (by ${change.by})`}`;
     dot.appendChild(title);
     svg.appendChild(dot);
   }
@@ -164,7 +164,7 @@ export function drawTraffic(): void {
     hover.setAttribute("x", String(index * step));
     hover.setAttribute("width", String(step));
     clear(tip);
-    tip.appendChild(el("div", "t", `${new Date(bucket.at).toLocaleTimeString()} · ${Math.round(state.rangeMs / BUCKETS / 1000)}s`));
+    tip.appendChild(el("div", "t", `${clockTime(bucket.at)} · ${Math.round(state.rangeMs / BUCKETS / 1000)}s`));
     tip.appendChild(tipRow("Served", n(bucket.served), s1));
     tip.appendChild(tipRow("Mitigated", n(bucket.mitigated), s2));
     tip.appendChild(tipRow("Denied", n(bucket.denied), crit));
@@ -192,7 +192,7 @@ export function drawTraffic(): void {
     `Traffic over the last ${rangeLabel(state.rangeMs)}: ${n(total)} requests — ${n(served)} served, ${n(mitigated)} mitigated, ${n(denied)} denied. ` +
     (total === 0
       ? "No traffic in this range."
-      : `Busiest ${Math.round(state.rangeMs / BUCKETS / 1000)}-second interval: ${n(busiest.total)} requests at ${new Date(busiest.at).toLocaleTimeString()}.`) +
+      : `Busiest ${Math.round(state.rangeMs / BUCKETS / 1000)}-second interval: ${n(busiest.total)} requests at ${clockTime(busiest.at)}.`) +
     (changes.length === 0 ? "" : ` ${n(changes.length)} runtime change${changes.length === 1 ? "" : "s"} in this range: ${changes.map((change) => `${change.kind}, ${change.summary}`).join("; ")}.`);
 
   const legend = $("traffic-legend");

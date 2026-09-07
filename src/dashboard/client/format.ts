@@ -30,8 +30,38 @@ export function rangeLabel(milliseconds: number): string {
 }
 
 /** Wall-clock time for a feed row. Local, seconds included, because a feed moves in seconds. */
+/**
+ * A time, always as 24-hour HH:MM:SS.
+ *
+ * Built from the local components rather than handed to `toLocaleTimeString`, which
+ * answers in whatever the viewer's locale prefers — so the same feed read "4:40:46 PM" on
+ * one operator's screen and "16:40:46" on the next, and a dashboard two people look at
+ * together should not disagree with itself about what time it is. Local time, not UTC:
+ * this is the clock on the wall next to the server somebody is watching.
+ */
 export function clockTime(at: number): string {
-  return new Date(at).toLocaleTimeString();
+  const when = new Date(at);
+  return `${pad(when.getHours())}:${pad(when.getMinutes())}:${pad(when.getSeconds())}`;
+}
+
+/** A date, always as DD-MM-YYYY. */
+export function clockDate(at: number): string {
+  const when = new Date(at);
+  return `${pad(when.getDate())}-${pad(when.getMonth() + 1)}-${when.getFullYear()}`;
+}
+
+/**
+ * Both, for the places where the time alone is ambiguous.
+ *
+ * An actor's first sighting can be days back, and "first seen 09:14:02" invites the reader
+ * to assume it was this morning.
+ */
+export function clockStamp(at: number): string {
+  return `${clockDate(at)} ${clockTime(at)}`;
+}
+
+function pad(value: number): string {
+  return String(value).padStart(2, "0");
 }
 
 /**
