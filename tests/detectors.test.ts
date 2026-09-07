@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { BotHandler, createFacts } from "../src/index.js";
+import { BOT_CATEGORIES, BOT_SIGNATURES } from "../src/detectors/known-bots.js";
 import { acceptSignatureDetector } from "../src/detectors/accept-signature.js";
 import { cadenceDetector } from "../src/detectors/cadence.js";
 import { crawlBreadthDetector } from "../src/detectors/crawl-breadth.js";
@@ -482,5 +484,149 @@ describe("what counts as a client declaring itself", () => {
     ]) {
       for (const item of await declare(ua)) expect(item.certainty, ua.slice(0, 40)).not.toBe("certain");
     }
+  });
+});
+
+/**
+ * Verifying an identity with a check of your own.
+ *
+ * Most of the signature database publishes no proof this library can check: no DNS
+ * mechanism, no range list, so the claim is unfalsifiable and the honest answer is
+ * silence. That is 133 of the 179 signatures. But an operator often *can* check — their
+ * CDN has already verified the crawler and says so in a header it adds, the bot signs its
+ * requests, they hold the ASN data — and until this hook existed, saying so meant writing
+ * a detector that reimplemented the confirm and refute semantics, including the part where
+ * an inconclusive answer must stay quiet.
+ */
+describe("verifying a crawler with your own check", () => {
+  const claim = (ua: string): ReturnType<typeof createFacts> =>
+    createFacts({ method: "GET", url: "/x", headers: { host: "shop.test", "user-agent": ua, accept: "*/*" }, ip: "203.0.113.7" });
+  // idealo publishes no DNS mechanism and no range list, so the built-in checks have
+  // nothing to say about it either way — which is the case this hook exists for, and is
+  // true of 133 of the 179 signatures. AhrefsBot would have been the wrong example: it
+  // has forward-confirmed reverse DNS, so an inconclusive verifier there falls through to
+  // a check that does reach an answer.
+  const IDEALO = "Mozilla/5.0 (compatible; idealo-bot/1.0; +https://www.idealo.de/robots)";
+  const GOOGLEBOT = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+
+  it("turns your confirmation into a verified identity", async () => {
+    const handler = new BotHandler({ crawlerVerification: { verifiers: { googlebot: () => "verified" } } });
+    const assessment = await handler.assess(claim(GOOGLEBOT));
+    expect(assessment.verdict).toBe("verified-bot");
+    expect(assessment.certain).toBe(true);
+    const evidence = assessment.evidence.find((item) => item.detector === "crawler-verification");
+    // `certain` obliges a written basis, and this one has to say whose assertion it is.
+    expect(evidence?.deterministicBasis).toContain("Your application confirmed");
+  });
+
+  it("turns your refutation into an impersonator, for a bot nothing else could check", async () => {
+    const handler = new BotHandler({ crawlerVerification: { verifiers: { idealo: () => "refuted" } } });
+    const assessment = await handler.assess(claim(IDEALO));
+    const evidence = assessment.evidence.find((item) => item.detector === "crawler-verification");
+    expect(evidence?.botClass).toBe("impersonator");
+    expect(evidence?.certainty).toBe("certain");
+  });
+
+  it("says nothing at all when your check does not know", async () => {
+    // The important half. A verifier that could not reach its key server must not be
+    // read as an accusation, or an outage becomes a wave of blocked crawlers.
+    const handler = new BotHandler({ crawlerVerification: { verifiers: { idealo: () => "unknown" } } });
+    const assessment = await handler.assess(claim(IDEALO));
+    expect(assessment.evidence.some((item) => item.detector === "crawler-verification")).toBe(false);
+  });
+
+  it("treats a throw as not knowing, rather than as a refusal", async () => {
+    const handler = new BotHandler({
+      crawlerVerification: {
+        verifiers: {
+          idealo: () => {
+            throw new Error("key server unreachable");
+          },
+        },
+      },
+    });
+    const assessment = await handler.assess(claim(IDEALO));
+    expect(assessment.evidence.some((item) => item.detector === "crawler-verification")).toBe(false);
+  });
+
+  it("accepts an async verifier, which is the shape a real one has", async () => {
+    const handler = new BotHandler({
+      crawlerVerification: {
+        verifiers: {
+          idealo: async () => {
+            await Promise.resolve();
+            return "verified" as const;
+          },
+        },
+      },
+    });
+    const assessment = await handler.assess(claim(IDEALO));
+    expect(assessment.evidence.some((item) => item.botClass === "verified-bot")).toBe(true);
+  });
+
+  it("hands the verifier the signature it is being asked about", async () => {
+    const seen: string[] = [];
+    const handler = new BotHandler({
+      crawlerVerification: {
+        verifiers: {
+          idealo: (_ctx, signature) => {
+            seen.push(`${signature.id}/${signature.category}`);
+            return "unknown";
+          },
+        },
+      },
+    });
+    await handler.assess(claim(IDEALO));
+    expect(seen).toEqual(["idealo/commerce"]);
+  });
+
+  it("leaves every other identity to the built-in checks", async () => {
+    // A verifier for one bot must not silence the DNS path for another.
+    const handler = new BotHandler({ crawlerVerification: { verifiers: { idealo: () => "verified" } } });
+    const assessment = await handler.assess(claim(GOOGLEBOT));
+    expect(assessment.verdict).not.toBe("verified-bot");
+  });
+});
+
+/**
+ * The categories a rule can name.
+ *
+ * Three of them are new, and each exists because the decision differs from its nearest
+ * neighbour: a price comparator is not an SEO auditor, a citation index is not a model
+ * being trained, and an accessibility crawler is not an uptime probe.
+ */
+describe("the widened bot taxonomy", () => {
+  const identify = async (ua: string): Promise<{ identity: string | undefined; category: string | undefined }> => {
+    const handler = new BotHandler();
+    const assessment = await handler.assess(
+      createFacts({ method: "GET", url: "/x", headers: { host: "shop.test", "user-agent": ua, accept: "*/*" }, ip: "203.0.113.7" }),
+    );
+    return { identity: assessment.identity, category: BOT_SIGNATURES.find((signature) => signature.id === assessment.identity)?.category };
+  };
+
+  it("names a price comparison crawler as commerce", async () => {
+    expect(await identify("Mozilla/5.0 (compatible; idealo-bot/1.0; +https://www.idealo.de/robots)")).toEqual({ identity: "idealo", category: "commerce" });
+  });
+
+  it("names a citation index as academic rather than as an AI crawler", async () => {
+    expect(await identify("Mozilla/5.0 (compatible; CrossrefBot/1.0; mailto:labs@crossref.org)")).toEqual({ identity: "crossref", category: "academic" });
+  });
+
+  it("names an accessibility auditor as its own thing", async () => {
+    expect(await identify("Mozilla/5.0 (compatible; SiteimproveBot/2.0; +https://siteimprove.com/bot)")).toEqual({ identity: "siteimprove", category: "accessibility" });
+  });
+
+  it("leaves a comparison crawler for the operator to decide about", async () => {
+    // Not benign: the same crawler is a distribution channel to one retailer and a
+    // competitor's research tool to the next, and that is not this library's call.
+    expect(BOT_SIGNATURES.find((signature) => signature.id === "idealo")?.benign).toBe(false);
+    // Where it plainly is wanted, it says so.
+    expect(BOT_SIGNATURES.find((signature) => signature.id === "siteimprove")?.benign).toBe(true);
+  });
+
+  it("keeps every category enumerable, so a rule editor can list them", () => {
+    const used = new Set(BOT_SIGNATURES.map((signature) => signature.category));
+    for (const category of used) expect(BOT_CATEGORIES).toContain(category);
+    for (const fresh of ["commerce", "academic", "accessibility"]) expect(BOT_CATEGORIES).toContain(fresh);
   });
 });

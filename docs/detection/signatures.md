@@ -41,6 +41,18 @@ individual name does not.
 | `library` | curl, wget, python-requests, Go-http-client, okhttp | usually challenge |
 | `headless` | HeadlessChrome, Playwright, Puppeteer, Selenium | usually challenge |
 | `embedded` | Smart TVs, set-top boxes, game consoles | allow |
+| `commerce` | idealo, Kelkoo, PriceRunner, Trivago, Skyscanner, Indeedbot | a commercial decision |
+| `academic` | Crossref, OpenAlex, university web-science crawls | usually allow |
+| `accessibility` | Siteimprove and other WCAG auditors | allow |
+
+The last three are separate from their nearest neighbours because the decision is. A price
+comparator is not an SEO auditor — nothing there is auditing your site for you, and the
+same crawler is a distribution channel to one retailer and a competitor's research tool to
+the next, which is why nothing in `commerce` is marked benign. A citation index is not a
+model being trained, and an operator refusing the second is often glad of the first. And an
+accessibility crawler is not an uptime probe: it is usually commissioned by the site's own
+owner and then forgotten about, so blocking it does not reduce load, it makes an
+accessibility report look clean by removing the evidence.
 
 ```ts
 { id: "no-ai", match: { category: "ai" }, action: "block", reason: "Not for model training." }
@@ -54,6 +66,7 @@ What, if anything, can check the claim:
 type Verification =
   | { kind: "fcrdns"; domains: readonly string[] }   // reverse DNS, forward-confirmed
   | { kind: "ip-ranges"; publishedAt?: string }      // an address list the operator publishes
+  | { kind: "proof"; via: string }                   // something only you can check
   | { kind: "none" };                                // no published mechanism
 ```
 
@@ -61,6 +74,29 @@ type Verification =
 them, and for those the claim is **unfalsifiable**. The library neither confirms nor
 accuses — it records what the client said and lets the policy decide what a self-declared
 identity is worth. See [verifying a crawler](verification.md).
+
+**But you may be able to check what this library cannot.** Your CDN has often already
+verified the crawler and says so in a header it adds; some bots now sign their requests;
+you may hold ASN data. None of those belong inside a detection library — two need a
+network dependency and the third needs a key it has no business fetching — so instead you
+supply the answer:
+
+```ts
+new BotHandler({
+  crawlerVerification: {
+    verifiers: {
+      // Whatever you can prove, however you prove it.
+      gptbot: (ctx) => (ctx.facts.headers["cf-verified-bot"] === "gptbot" ? "verified" : "unknown"),
+    },
+  },
+});
+```
+
+A verifier returns `"verified"`, `"refuted"` or `"unknown"`, runs before the built-in check
+for that signature, and a definite answer settles it — which also means no DNS lookup.
+`"unknown"` falls through to whatever the library can do on its own, and so does a throw:
+an unreachable key server must never read as an accusation, or an outage becomes a wave of
+blocked crawlers.
 
 ## What a name is worth
 

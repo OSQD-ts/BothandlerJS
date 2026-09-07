@@ -9,6 +9,7 @@ import type { PresetName } from "./policy/presets.js";
 import type { Clock } from "./internal/clock.js";
 import type { DnsResolver } from "./internal/dns.js";
 import type { Detector } from "./detectors/types.js";
+import type { CrawlerVerificationOptions } from "./detectors/crawler-verification.js";
 import type { BotSignature } from "./detectors/known-bots.js";
 import type { ActionParams, FalsePositivePolicy, Rule } from "./policy/types.js";
 import type { CustomHandler } from "./actions/types.js";
@@ -68,6 +69,15 @@ export interface BotHandlerConfig {
   detectors?: readonly Detector[];
   /** Appended to the built-in set. Ignored when `detectors` is given. */
   extraDetectors?: readonly Detector[];
+  /**
+   * How claimed crawler identities are confirmed or refuted.
+   *
+   * Chiefly `verifiers`: your own answer to "is this really Googlebot", for the many
+   * identities that publish no proof this library can check on its own. Also the two
+   * strictness flags, which were documented on the detector and reachable only by
+   * rebuilding the whole detector list.
+   */
+  crawlerVerification?: CrawlerVerificationOptions;
 
   /** A named starting policy. Combined with `rules`, which are evaluated first. */
   preset?: PresetName;
@@ -329,7 +339,7 @@ export class ConfigError extends Error {
 export function resolveConfig(config: BotHandlerConfig = {}): ResolvedConfig {
   const warnings: string[] = [];
 
-  const detectors = config.detectors ? [...config.detectors] : [...defaultDetectors(), ...(config.extraDetectors ?? [])];
+  const detectors = config.detectors ? [...config.detectors] : [...defaultDetectors(config.crawlerVerification === undefined ? {} : { crawlerVerification: config.crawlerVerification }), ...(config.extraDetectors ?? [])];
   const seen = new Set<string>();
   for (const detector of detectors) {
     if (seen.has(detector.id)) {

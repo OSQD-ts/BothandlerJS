@@ -4,6 +4,7 @@ import { cadenceDetector } from "./cadence.js";
 import { clientHintsDetector } from "./client-hints.js";
 import { crawlBreadthDetector } from "./crawl-breadth.js";
 import { crawlerVerificationDetector } from "./crawler-verification.js";
+import type { CrawlerVerificationOptions } from "./crawler-verification.js";
 import { fetchMetadataDetector } from "./fetch-metadata.js";
 import { headerIntegrityDetector } from "./header-integrity.js";
 import { headerOrderDetector } from "./header-order.js";
@@ -73,7 +74,7 @@ export type { BotSignature, BotCategory, Verification } from "./known-bots.js";
  * `clearanceDetector` is not here either, because it needs the challenge service —
  * the engine adds it automatically once `challenge.secrets` is configured.
  */
-export function defaultDetectors(): Detector[] {
+export function defaultDetectors(options: { crawlerVerification?: CrawlerVerificationOptions } = {}): Detector[] {
   return [
     // Identity first: a self-declaration or a verified crawler settles the question
     // outright, and the engine can then skip everything that would only add nuance.
@@ -96,6 +97,6 @@ export function defaultDetectors(): Detector[] {
     // The other side of the argument: what a real browsing session looks like.
     browsingCoherenceDetector(),
     // Confirming stage: only runs when an identity was claimed.
-    crawlerVerificationDetector(),
+    crawlerVerificationDetector(options.crawlerVerification ?? {}),
   ];
 }

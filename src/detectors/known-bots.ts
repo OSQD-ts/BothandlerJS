@@ -30,10 +30,55 @@ export type BotCategory =
   | "headless"
   /** A real browser engine embedded in a desktop application, with a person driving it. */
   | "embedded"
+  /**
+   * Price, stock and catalogue collection: comparison shopping, marketplace feeds,
+   * repricing tools.
+   *
+   * Its own category because it is the one kind of crawling a shop has a commercial
+   * opinion about rather than a technical one. It is not `seo` — nothing here is
+   * auditing your site for you — and it is not `scraper`, which is a *behavioural*
+   * verdict this library reaches on its own. This is a client that says what it is.
+   */
+  | "commerce"
+  /**
+   * Accessibility auditing: contrast, landmarks, ARIA, WCAG conformance.
+   *
+   * Separated from `monitoring` because the answer is almost always different. A site
+   * owner who blocks uptime probes still wants the tool their accessibility team runs
+   * to reach the page, and frequently does not know it is arriving as a bot at all.
+   */
+  | "accessibility"
+  /**
+   * Research and measurement: universities, internet-measurement projects, plagiarism
+   * and citation indexes.
+   *
+   * Distinct from `ai` on purpose. Both read the whole page and neither sends a person,
+   * but the decision differs: an operator refusing to feed a commercial model may be
+   * perfectly happy to appear in a citation index, and folding the two together forces
+   * one answer onto two questions.
+   */
+  | "academic"
   | "other";
 
 /** Every category, for anything that has to enumerate them — a rule editor, a report. */
-export const BOT_CATEGORIES: readonly BotCategory[] = ["search", "ai", "seo", "social", "monitoring", "archive", "feed", "security", "advertising", "library", "headless", "embedded", "other"];
+export const BOT_CATEGORIES: readonly BotCategory[] = [
+  "search",
+  "ai",
+  "seo",
+  "social",
+  "monitoring",
+  "archive",
+  "feed",
+  "security",
+  "advertising",
+  "library",
+  "headless",
+  "embedded",
+  "commerce",
+  "accessibility",
+  "academic",
+  "other",
+];
 
 /**
  * How a claimed identity is checked.
@@ -53,6 +98,23 @@ export const BOT_CATEGORIES: readonly BotCategory[] = ["search", "ai", "seo", "s
 export type Verification =
   | { kind: "fcrdns"; domains: readonly string[] }
   | { kind: "ip-ranges"; publishedAt?: string }
+  /**
+   * The operator publishes a proof this library cannot check by itself, and you can.
+   *
+   * A signed request under [Web Bot Auth](https://www.rfc-editor.org/rfc/rfc9421), a
+   * CDN that has already verified the crawler and says so in a header it adds, an ASN
+   * lookup against data you hold — all of them are conclusive, and none of them are
+   * something a detection library should be doing on its own: two need a network
+   * dependency and the third needs a key it has no business fetching.
+   *
+   * So the claim is marked verifiable-by-you, and stays *unverified* until you supply a
+   * verifier for it in `crawlerVerification.verifiers`. Marked and unsupplied behaves
+   * exactly like `none`: neither confirmed nor accused.
+   *
+   * `via` names the mechanism, for the operator reading this table to know what they
+   * would have to write.
+   */
+  | { kind: "proof"; via: string }
   | { kind: "none" };
 
 export interface BotSignature {
@@ -235,6 +297,9 @@ const MONITORING: BotSignature[] = [
 ];
 
 const ARCHIVE: BotSignature[] = [
+  { id: "archive-today", name: "archive.today", tokens: ["archive.today"], category: "archive", benign: true, verification: { kind: "none" } },
+  { id: "perma-cc", name: "Perma.cc", tokens: ["perma.cc"], category: "archive", benign: true, verification: { kind: "none" } },
+  { id: "webrecorder", name: "Webrecorder", tokens: ["webrecorder"], category: "archive", benign: true, verification: { kind: "none" } },
   { id: "ia-archiver", name: "Internet Archive", tokens: ["ia_archiver", "archive.org_bot", "wayback"], category: "archive", benign: true, verification: { kind: "none" } },
   { id: "heritrix", name: "Heritrix", tokens: ["heritrix"], category: "archive", benign: true, verification: { kind: "none" } },
 ];
@@ -253,6 +318,10 @@ const ARCHIVE: BotSignature[] = [
  * rather than risking a signature that names a listener as a bot.
  */
 const FEED: BotSignature[] = [
+  { id: "newsblur", name: "NewsBlur", tokens: ["newsblur"], category: "feed", benign: true, verification: { kind: "none" } },
+  { id: "smartnews", name: "SmartNews", tokens: ["smartnewsbot"], category: "feed", benign: true, verification: { kind: "none" } },
+  { id: "flipboard", name: "Flipboard", tokens: ["flipboardproxy"], category: "feed", benign: true, verification: { kind: "none" } },
+  { id: "podcast-index", name: "Podcast Index", tokens: ["podcastindexbot"], category: "feed", benign: true, verification: { kind: "none" } },
   { id: "freshrss", name: "FreshRSS", tokens: ["freshrss"], category: "feed", benign: true, verification: { kind: "none" } },
   { id: "netnewswire", name: "NetNewsWire", tokens: ["netnewswire"], category: "feed", benign: true, verification: { kind: "none" } },
   { id: "overcast", name: "Overcast", tokens: ["overcast/"], category: "feed", benign: true, verification: { kind: "none" } },
@@ -421,6 +490,53 @@ const ADVERTISING: BotSignature[] = [
   { id: "criteo", name: "Criteo", tokens: ["criteobot"], category: "advertising", benign: true, verification: { kind: "none" } },
 ];
 
+
+/**
+ * Listing and price collection: comparison shopping, marketplaces, and the metasearch
+ * sites that aggregate travel and jobs.
+ *
+ * None of these is marked benign, and that is the point rather than an omission. The same
+ * crawler is a distribution channel to one retailer and a competitor's research tool to
+ * the next, so this library names it accurately and leaves the commercial question where
+ * it belongs. A rule saying `category: ["commerce"]` is now possible to write, in either
+ * direction.
+ */
+const COMMERCE: BotSignature[] = [
+  { id: "idealo", name: "idealo", tokens: ["idealo-bot"], category: "commerce", benign: false, verification: { kind: "none" } },
+  { id: "kelkoo", name: "Kelkoo", tokens: ["kelkoobot"], category: "commerce", benign: false, verification: { kind: "none" } },
+  { id: "pricerunner", name: "PriceRunner", tokens: ["pricerunnerbot"], category: "commerce", benign: false, verification: { kind: "none" } },
+  { id: "trivago", name: "Trivago", tokens: ["trivagobot"], category: "commerce", benign: false, verification: { kind: "none" } },
+  { id: "skyscanner", name: "Skyscanner", tokens: ["skyscannerbot"], category: "commerce", benign: false, verification: { kind: "none" } },
+  { id: "indeedbot", name: "Indeedbot", tokens: ["indeedbot"], category: "commerce", benign: true, robotsAgent: "Indeedbot", verification: { kind: "none" }, docs: "http://www.indeed.com/indeedbot.html" },
+  { id: "adzuna", name: "Adzuna", tokens: ["adzunabot"], category: "commerce", benign: true, verification: { kind: "none" } },
+];
+
+/**
+ * Research and measurement: citation indexes, scholarly catalogues, university web
+ * science.
+ *
+ * Separate from `ai` deliberately. Both read the whole page and neither sends a person,
+ * but an operator refusing to feed a commercial model may be perfectly happy to appear in
+ * a citation index, and one category for both forces one answer onto two questions.
+ * Research crawls are also, in practice, run by people who stop when asked.
+ */
+const ACADEMIC: BotSignature[] = [
+  { id: "crossref", name: "Crossref", tokens: ["crossrefbot"], category: "academic", benign: true, verification: { kind: "none" } },
+  { id: "openalex", name: "OpenAlex", tokens: ["openalexbot"], category: "academic", benign: true, verification: { kind: "none" } },
+  { id: "webis", name: "Webis research crawler", tokens: ["webisbot"], category: "academic", benign: true, verification: { kind: "none" } },
+];
+
+/**
+ * Accessibility auditing.
+ *
+ * Almost always commissioned by the site's own owner and then forgotten about, which is
+ * why it is not filed under `monitoring`: blocking it does not reduce load, it makes an
+ * accessibility report look clean by removing the evidence.
+ */
+const ACCESSIBILITY: BotSignature[] = [
+  { id: "siteimprove", name: "Siteimprove", tokens: ["siteimprovebot"], category: "accessibility", benign: true, robotsAgent: "SiteimproveBot", verification: { kind: "none" } },
+];
+
 /** Every built-in signature, in one array. Extend it via `extraSignatures` rather than editing. */
 export const BOT_SIGNATURES: readonly BotSignature[] = Object.freeze([
   ...SEARCH,
@@ -435,6 +551,9 @@ export const BOT_SIGNATURES: readonly BotSignature[] = Object.freeze([
   ...LIBRARY,
   ...HEADLESS,
   ...EMBEDDED,
+  ...COMMERCE,
+  ...ACADEMIC,
+  ...ACCESSIBILITY,
 ]);
 
 /**

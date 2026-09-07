@@ -3,7 +3,41 @@ import type { Detector, DetectionContext } from "./types.js";
 import type { Evidence } from "../types.js";
 import type { BotSignature } from "./known-bots.js";
 
+/**
+ * What an operator's own check concluded about a claimed identity.
+ *
+ * Three answers, and the third is not a formality. "I could not tell" has to be
+ * expressible and has to mean *silence* — a verifier that returned false for both "this
+ * is a forgery" and "my key server timed out" would turn an outage into an accusation.
+ */
+export type VerificationOutcome = "verified" | "refuted" | "unknown";
+
+/**
+ * Your own answer to "is this really who it says it is".
+ *
+ * Called with the same context the built-in checks get, for one claimed signature. It
+ * may be async: the natural implementations are a lookup or a signature check.
+ */
+export type CrawlerVerifier = (ctx: DetectionContext, signature: BotSignature) => VerificationOutcome | Promise<VerificationOutcome>;
+
 export interface CrawlerVerificationOptions {
+  /**
+   * Verifiers of your own, by signature id — `{ googlebot: ..., gptbot: ... }`.
+   *
+   * Most of this database cannot be checked from inside a request: the operator
+   * publishes no DNS proof and no range list, and the claim is simply unfalsifiable.
+   * That is most bots, and until now it meant the library had nothing to offer an
+   * operator who *could* check — because their CDN had already verified the crawler and
+   * said so in a header, because the bot signs its requests, or because they hold the
+   * ASN data. Writing a whole detector to say so meant reimplementing the confirm and
+   * refute semantics in this file, including the part where an inconclusive answer must
+   * stay silent.
+   *
+   * A verifier here runs before the built-in check for that signature and a definite
+   * answer settles it, which also means no DNS lookup. `unknown` falls through to
+   * whatever this library can do on its own.
+   */
+  verifiers?: Readonly<Record<string, CrawlerVerifier>>;
   /**
    * Treat an address with no PTR record as a forged claim. Default true.
    *
@@ -44,6 +78,7 @@ export interface CrawlerVerificationOptions {
 export function crawlerVerificationDetector(options: CrawlerVerificationOptions = {}): Detector {
   const missingPtrIsForgery = options.treatMissingPtrAsForgery ?? true;
   const useRanges = options.useConfiguredRanges ?? true;
+  const verifiers = options.verifiers ?? {};
 
   return {
     id: "crawler-verification",
@@ -54,16 +89,66 @@ export function crawlerVerificationDetector(options: CrawlerVerificationOptions 
     stage: "confirming",
 
     async inspect(ctx: DetectionContext): Promise<Evidence[] | undefined> {
-      const claims = ctx.signatureMatches.filter((signature) => signature.verification.kind !== "none");
+      // A `none` claim is still worth offering to a verifier of the operator's own: they
+      // may be able to check something this library cannot, which is the entire reason
+      // that hook exists. Without one, it is filtered out exactly as before.
+      const claims = ctx.signatureMatches.filter((signature) => signature.verification.kind !== "none" || verifiers[signature.id] !== undefined);
       if (claims.length === 0) return undefined;
 
       const results: Evidence[] = [];
       for (const claim of claims) {
+        const own = await runVerifier(verifiers[claim.id], ctx, claim);
+        if (own !== undefined) {
+          results.push(own);
+          continue;
+        }
         const outcome = await verifyClaim(ctx, claim, { missingPtrIsForgery, useRanges });
         if (outcome) results.push(outcome);
       }
       return results.length > 0 ? results : undefined;
     },
+  };
+}
+
+/**
+ * Runs an operator's verifier and turns its answer into evidence.
+ *
+ * A throw is `unknown`, not a refutation: the same argument as the timeout above, and the
+ * failure mode of getting it wrong is accusing a real Googlebot because a key server was
+ * briefly unreachable.
+ */
+async function runVerifier(verifier: CrawlerVerifier | undefined, ctx: DetectionContext, signature: BotSignature): Promise<Evidence | undefined> {
+  if (verifier === undefined) return undefined;
+  let outcome: VerificationOutcome;
+  try {
+    outcome = await verifier(ctx, signature);
+  } catch {
+    return undefined;
+  }
+  if (outcome === "unknown") return undefined;
+
+  const via = signature.verification.kind === "proof" ? signature.verification.via : "a check you supplied";
+  if (outcome === "verified") {
+    return {
+      detector: "crawler-verification",
+      summary: `${signature.name} confirmed by your own verifier`,
+      direction: "bot",
+      certainty: "certain",
+      botClass: "verified-bot",
+      identity: signature.id,
+      deterministicBasis: `Your application confirmed this identity through ${via} — a proof it holds and this library cannot see. It is your assertion about your own infrastructure, and it is treated the way the operator's word is treated everywhere else here.`,
+      metadata: { signatureId: signature.id, method: "operator-verifier" },
+    };
+  }
+  return {
+    detector: "crawler-verification",
+    summary: `Client claims to be ${signature.name}, and your own verifier refutes it`,
+    direction: "bot",
+    certainty: "certain",
+    botClass: "impersonator",
+    identity: signature.id,
+    deterministicBasis: `The client named itself ${signature.name}, and the check you supplied for that identity — ${via} — returned a definite no. The refutation is yours; this library only reports it.`,
+    metadata: { signatureId: signature.id, method: "operator-verifier" },
   };
 }
 
@@ -104,6 +189,8 @@ async function verifyClaim(
     };
   }
 
+  // `proof` and anything else without a built-in check: verifiable only by a verifier of
+  // the operator's own, and one either was not supplied or did not know.
   if (signature.verification.kind !== "fcrdns") return undefined;
 
   const outcome = await forwardConfirmedReverseDns(ctx.resolver, ctx.facts.ip, signature.verification.domains);
