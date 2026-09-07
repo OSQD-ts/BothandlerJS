@@ -211,6 +211,27 @@ new BotHandler({
 The library ships **no address data** and refuses to guess any; see
 [design decisions](../design/decisions.md).
 
+**Loading a feed.** `fetchAddressList` reads a published list — a reputation feed, a hosting
+provider's own ranges — over the same hardened path the crawler ranges use: HTTPS only, a
+size cap, `#` and `;` comments stripped, JSON `prefixes` documents or one prefix per line,
+and a list that is empty, oversized or contains a block big enough to matter is refused
+**whole** rather than in part.
+
+```ts
+import { fetchAddressList } from "@osqd/bothandlerjs";
+
+const prefixes = await fetchAddressList({ id: "denylist", url: "https://example.org/drop.txt" });
+detector.updateRanges("denylist", prefixes);
+```
+
+Two steps, on purpose: fetching is the part that can fail, and installing is the part that
+changes what happens to somebody. Nothing is fetched on a schedule unless you schedule it.
+
+And think hard before pointing that at `denylist` rather than `datacenter`. A denylist entry
+does not corroborate anything — it decides, and it blocks people. A feed is somebody else's
+judgement about an address, refreshed on somebody else's schedule, and an address that was a
+bot last month may be a customer's home connection this month.
+
 ### `trap`
 
 **cheap · always · ceiling `certain`**
@@ -275,6 +296,107 @@ walking a sitemap almost never revisits, so its ratio sits near one.
 
 `weak`, because a *welcome* crawler produces exactly this shape and so does a person on a
 first visit to a documentation site.
+
+### `id-enumeration`
+
+**cheap · always · ceiling `moderate`**
+
+Somebody working through the identifiers rather than following the links.
+
+`crawl-breadth` sees this as "many distinct paths" — which is also what it sees when a
+person reads a documentation site, so it stays `weak` and nothing separates the two.
+Measured before this existed: `/user/1` through `/user/120` in order scored 57, a hundred
+and twenty scattered ids scored 57, and ordinary article paths scored 57.
+
+What separates them is not *which* ids were asked for but whether they **cover a range**.
+People arrive at ids through links, and links do not densely enumerate an integer interval;
+a harvester does nothing else. Thirty requests reaching from id 1 to id 33 is a walk; thirty
+scattered across a hundred thousand is somebody reading.
+
+It costs three numbers per path shape — a count, a lowest and a highest — rather than a
+list of every id seen, which is what makes it affordable for an actor that asks for ten
+thousand of them. The last numeric segment is taken as the identifier, so in
+`/api/v2/orders/42` the version is part of the shape and the order id is the walk. Numbers
+too large to be a counter are ignored: nobody walks epoch seconds.
+
+`moderate`, with the bar set high on purpose. Products in one category often carry
+consecutive ids, so somebody browsing a catalogue produces a smaller version of this.
+
+### `probe-volume`
+
+**cheap · always · ceiling `moderate`**
+
+An actor that is looking for something rather than reading anything.
+
+The oldest tell there is for a scanner, and the one this library could not see. Every
+verdict here is reached *before* the response exists — that is what lets it shape the
+response, and it is also what hides the status code from it. So the application reports it
+back:
+
+```ts
+const { outcome } = await handler.handle(facts);
+// …your application answers…
+handler.recordOutcome(facts, response.statusCode);
+```
+
+The bundled Node adapter does this for you. Nothing else depends on it: every other
+detector works unchanged if you never call it, and this one is simply absent.
+
+Counts **404 and 410 only**. A 403 is usually this library's own doing, and counting it
+would let a rule that challenges an actor manufacture the evidence for having challenged
+it. A 500 is the site's problem and says nothing about the client.
+
+`moderate`, because a site that has just moved its URLs produces exactly this shape from
+perfectly ordinary readers, and so does a feed reader working through removed articles.
+Eighty per cent of at least twenty reported responses, by default.
+
+### `transport-coherence`
+
+**cheap · always · ceiling `moderate`**
+
+How a claimed browser *moves*, rather than what it says.
+
+The header checks read one request against the client it claims to be. This reads the
+transport underneath and the verbs across a visit — harder to copy, because neither is in
+the part of a request most tooling lets you set.
+
+Two things. A claimed browser that negotiated **HTTP/1.0**, which no shipping browser has
+offered in over a decade. And a visit made **entirely of HEAD**: one HEAD is a browser
+checking a link it is about to follow or a cache revalidating, but a whole visit of them is
+something checking what exists without reading any of it.
+
+Both were measured as blind spots before this existed — a client claiming Chrome 120 over
+HTTP/1.0, and one whose whole visit was HEAD, each scored exactly what the honest control
+scored.
+
+Capped at `moderate`, for different reasons each. HTTP/1.0 is not always the client's
+doing: a few older load balancers speak it to the origin, and behind one of those every
+request looks like this — which is what `transportCoherenceDetector({ legacyHttp: false })`
+is for. An all-HEAD visit is a stronger shape, but a link checker is a real and mostly
+harmless thing to be.
+
+### `parameter-sweep`
+
+**cheap · always · ceiling `weak`**
+
+The collection `crawl-breadth` cannot see.
+
+Breadth counts distinct *paths*, and a path carries no query string — so the shape it reads
+as "somebody rereading one page" is also the shape of enumerating a catalogue.
+`/products?page=1` through `?page=200` is one path and two hundred requests. Measured on
+the same two hundred requests expressed both ways: as distinct paths they scored 62 and
+were called `suspected-bot`; as `?page=N` they scored 55 and passed as `unknown`. Paginated
+collection is not an exotic case — it is how catalogues, search results and APIs are
+actually taken.
+
+So this counts the other thing: distinct parameterisations, and how many of them stack onto
+a single path. Both halves matter. A high variant count on its own is ordinary — a shop's
+own visitors filter and sort — and it is the *concentration* that separates a person
+changing their mind from a machine walking an index.
+
+`weak`, for the same reason as breadth: a person paging through search results produces a
+smaller version of exactly this. Its value is as a second signal beside an actor that has
+already failed something sharper.
 
 ### `identity-rotation`
 

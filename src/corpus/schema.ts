@@ -64,6 +64,14 @@ export interface CaseRequest {
   tlsFingerprint?: string;
   /** Milliseconds after the case's start time. Drives the behavioural detectors. */
   atMs?: number;
+  /**
+   * What the application answered, if the case is about that.
+   *
+   * The engine decides before a response exists, so this is reported back afterwards the
+   * way an adapter reports it. Only cases about response shape need it — a scan that is
+   * almost all misses being the one that matters.
+   */
+  status?: number;
   /** The source could not supply the full header set. See `RequestFacts.partialHeaders`. */
   partialHeaders?: boolean;
 }

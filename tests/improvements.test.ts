@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BotHandler, ConfigError, MemoryStore, RedisStore, createFacts, fetchCrawlerRanges, generateRobotsTxt, refreshCrawlerRanges, resolveClientIp, robotsFromRules, toPrometheus } from "../src/index.js";
+import { BotHandler, ConfigError, MemoryStore, RedisStore, createFacts, fetchAddressList, fetchCrawlerRanges, generateRobotsTxt, refreshCrawlerRanges, resolveClientIp, robotsFromRules, toPrometheus } from "../src/index.js";
 import { MultiPatternMatcher } from "../src/internal/matcher.js";
 import { cachingResolver, forwardConfirmedReverseDns } from "../src/internal/dns.js";
 import { ManualClock } from "../src/internal/clock.js";
@@ -1301,5 +1301,60 @@ describe("the explain command", () => {
     const parsed = JSON.parse((await run(["explain", "--json", "curl/8.4.0"])).out) as { assessment: { verdict: string } };
     expect(parsed.assessment.verdict).toBe("confirmed-bot");
     expect((await run(["explain", "   "])).code).toBe(1);
+  });
+});
+
+/**
+ * Loading a reputation feed.
+ *
+ * The data could always be *installed* — `updateRanges("denylist", …)` has been public
+ * from the start — but there was no safe way to load one. `fetchCrawlerRanges` refuses a
+ * list on the grounds that no crawler owns that much of the internet, which is the right
+ * rule for a crawler and the wrong one for a feed of thousands of hijacked blocks.
+ */
+describe("fetching an address list", () => {
+  const respond = (body: string, status = 200): typeof globalThis.fetch =>
+    (async () => new Response(body, { status })) as unknown as typeof globalThis.fetch;
+
+  it("reads the line format every reputation feed publishes", async () => {
+    const prefixes = await fetchAddressList(
+      { id: "denylist", url: "https://example.invalid/drop.txt" },
+      { fetch: respond("; a feed's header\n203.0.113.0/24\n198.51.100.0/22 ; hijacked\n\n# comment\n192.0.2.0/24\n") },
+    );
+    expect(prefixes).toEqual(["203.0.113.0/24", "198.51.100.0/22", "192.0.2.0/24"]);
+  });
+
+  it("accepts a list far larger than any crawler's", async () => {
+    // The reason this exists. A crawler publishes hundreds of prefixes; a reputation feed
+    // publishes thousands, and the crawler loader refuses those outright.
+    const many = Array.from({ length: 12_000 }, (_, i) => `198.51.${i % 256}.${(i * 7) % 256}/32`).join("\n");
+    const prefixes = await fetchAddressList({ id: "denylist", url: "https://example.invalid/big.txt" }, { fetch: respond(many) });
+    expect(prefixes).toHaveLength(12_000);
+    await expect(fetchCrawlerRanges({ id: "googlebot", url: "https://example.invalid/big.txt" }, { fetch: respond(many) })).rejects.toThrow();
+  });
+
+  it("refuses a list containing a block big enough to matter, whole", async () => {
+    // Partial trust is the wrong shape: a denylist entry is `certain` and blocks people,
+    // so a feed that slipped in half the internet must not be applied in part.
+    await expect(
+      fetchAddressList({ id: "denylist", url: "https://example.invalid/bad.txt" }, { fetch: respond("203.0.113.0/24\n10.0.0.0/4\n") }),
+    ).rejects.toThrow(/covers more of the internet/);
+  });
+
+  it("will not fetch one over plain HTTP", async () => {
+    // Anything between here and the publisher would get to choose who this blocks.
+    await expect(fetchAddressList({ id: "denylist", url: "http://example.invalid/drop.txt" }, { fetch: respond("203.0.113.0/24") })).rejects.toThrow(ConfigError);
+  });
+
+  it("hands back prefixes rather than installing them", async () => {
+    // Two steps on purpose: fetching is the part that fails, installing is the part that
+    // changes what happens to somebody.
+    const handler = new BotHandler();
+    const prefixes = await fetchAddressList({ id: "denylist", url: "https://example.invalid/drop.txt" }, { fetch: respond("203.0.113.0/24") });
+    handler.updateRanges("denylist", prefixes);
+    const assessment = await handler.assess(
+      createFacts({ method: "GET", url: "/", headers: { host: "shop.test", "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15" }, ip: "203.0.113.9" }),
+    );
+    expect(assessment.evidence.some((item) => item.detector === "ip-intelligence")).toBe(true);
   });
 });

@@ -25,7 +25,7 @@ function assessment(): Assessment {
     certain: true,
     evidence: [],
     humanEvidence: [],
-    actor: { key: "203.0.113.99", requests: 1, distinctPaths: 1, firstSeen: 0, lastSeen: 0, priorConfirmations: 0, unsolvedChallenges: 0, cleared: false },
+    actor: { key: "203.0.113.99", requests: 1, distinctPaths: 1, distinctQueries: 0, queriesSaturated: false, methodsSeen: ["GET"], responses: 0, misses: 0, firstSeen: 0, lastSeen: 0, priorConfirmations: 0, unsolvedChallenges: 0, cleared: false },
     durationMs: 0,
     failures: [],
     facts: createFacts({

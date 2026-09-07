@@ -33,6 +33,17 @@ import type { ActorSnapshot, RequestFacts } from "./types.js";
  */
 const TIMESTAMP_RING = 32;
 const PATH_CAP = 64;
+/* Distinct query strings held per actor. Same argument as PATH_CAP: enough to tell a
+   sweep from a person changing a filter twice, and bounded so a single actor cannot make
+   the registry grow without limit. */
+const QUERY_CAP = 64;
+/* Distinct methods held per actor. There are only nine worth naming, and the cap stops a
+   client inventing verbs from growing the set. */
+const METHOD_CAP = 12;
+/* Path shapes watched per actor for a numeric walk. Four is enough to catch an actor
+   working through `/user/#` while also reading `/article/#`, and small enough that the
+   memory is three numbers times four rather than a list of every id seen. */
+const WALK_CAP = 4;
 const UA_CAP = 4;
 
 /**
@@ -47,6 +58,7 @@ const UA_CAP = 4;
  */
 export const MAX_TRACKED_ARRIVALS = TIMESTAMP_RING;
 export const MAX_TRACKED_PATHS = PATH_CAP;
+export const MAX_TRACKED_QUERIES = QUERY_CAP;
 export const MAX_TRACKED_USER_AGENTS = UA_CAP;
 
 export class ActorState {
@@ -90,6 +102,45 @@ export class ActorState {
   private readonly paths = new Set<number>();
   private pathsOverflowed = false;
   private pathsSaturatedAtTotal = 0;
+  /**
+   * Distinct *parameterised* requests: the path together with its query.
+   *
+   * Counted apart from `paths` because the two answer different questions and a scraper
+   * lives in the gap between them. `/products?page=1` through `?page=200` is one path and
+   * two hundred requests, so breadth reads it as somebody rereading a single page — which
+   * is exactly what enumerating a catalogue looks like from the path alone.
+   */
+  private readonly queries = new Set<number>();
+  private queriesOverflowed = false;
+  /**
+   * Which HTTP methods this actor has used.
+   *
+   * A browser navigating issues GET. Something that has issued nothing but HEAD across a
+   * long visit is checking what exists rather than reading it, and that is a fact about
+   * the actor rather than about any one of its requests — which is why it is kept here.
+   */
+  private readonly methods = new Set<string>();
+  /**
+   * Numeric walks in progress, by path shape: `/user/#` against the ids requested under it.
+   *
+   * Three numbers per shape, deliberately — a count, a lowest and a highest — rather than
+   * the ids themselves. What separates enumeration from reading is not which ids were
+   * asked for but whether they *cover a range*: thirty requests spanning thirty
+   * consecutive ids is a walk, and thirty scattered across a hundred thousand is somebody
+   * following links. Both are answerable from a count and a span, and only the count and
+   * the span survive an actor asking for ten thousand of them.
+   */
+  private readonly walks = new Map<string, { count: number; min: number; max: number }>();
+  /**
+   * What the application answered, for the requests anybody bothered to tell us about.
+   *
+   * The engine decides *before* the response exists, so this arrives afterwards and only
+   * when the adapter reports it. Kept as two counters rather than a list because the one
+   * question worth asking is a ratio: an actor whose requests are almost all misses is
+   * looking for something rather than reading anything.
+   */
+  private responsesSeen = 0;
+  private missesSeen = 0;
   private readonly userAgents = new Set<string>();
 
   constructor(key: string, now: number) {
@@ -117,6 +168,19 @@ export class ActorState {
       this.pathsSaturatedAtTotal = this.total;
     }
 
+    // Sorted, so `?a=1&b=2` and `?b=2&a=1` are one request rather than two — otherwise a
+    // client that reorders parameters would look like a sweep for free.
+    const keys = Object.keys(facts.query).sort();
+    if (keys.length > 0) {
+      const signature = `${facts.path}?${keys.map((key) => `${key}=${facts.query[key] ?? ""}`).join("&")}`;
+      const queryHash = hashString(signature);
+      if (this.queries.size < QUERY_CAP) this.queries.add(queryHash);
+      else if (!this.queries.has(queryHash)) this.queriesOverflowed = true;
+    }
+
+    if (this.methods.size < METHOD_CAP) this.methods.add(facts.method);
+    this.noteWalk(facts.path);
+
     const ua = facts.headers["user-agent"];
     if (ua !== undefined && this.userAgents.size < UA_CAP) this.userAgents.add(ua);
   }
@@ -128,6 +192,90 @@ export class ActorState {
 
   get pathsSaturated(): boolean {
     return this.pathsOverflowed;
+  }
+
+  /** Distinct path-and-query combinations seen. Saturates at {@link QUERY_CAP}. */
+  get distinctQueries(): number {
+    return this.queries.size;
+  }
+
+  get queriesSaturated(): boolean {
+    return this.queriesOverflowed;
+  }
+
+  /**
+   * Records what the application answered. Called after the response, if at all.
+   *
+   * 404 and 410 only. A 403 is usually this library's own doing and counting it would
+   * make the detector that reads this argue with itself; a 500 is the site's problem and
+   * says nothing about the client.
+   */
+  recordOutcome(status: number): void {
+    this.responsesSeen++;
+    if (status === 404 || status === 410) this.missesSeen++;
+  }
+
+  /** Responses reported for this actor. Zero unless something is reporting them. */
+  get responses(): number {
+    return this.responsesSeen;
+  }
+
+  /** Of those, how many were 404 or 410. */
+  get misses(): number {
+    return this.missesSeen;
+  }
+
+  /**
+   * Files a request under the shape of its path, if that path carries a number.
+   *
+   * The last numeric segment is the one taken to be the identifier: in `/api/v2/orders/42`
+   * the version is part of the shape and the order id is what is being walked.
+   */
+  private noteWalk(path: string): void {
+    const segments = path.split("/");
+    let value: number | undefined;
+    let template = "";
+    for (const segment of segments) {
+      if (segment !== "" && /^\d+$/.test(segment)) {
+        const parsed = Number(segment);
+        // Ignore anything that is not a plain counter. A timestamp or a very long id is
+        // not something anybody walks, and it would make every span meaningless.
+        if (Number.isSafeInteger(parsed) && parsed <= 10_000_000) value = parsed;
+        template += "/#";
+      } else if (segment !== "") {
+        template += `/${segment}`;
+      }
+    }
+    if (value === undefined) return;
+
+    const existing = this.walks.get(template);
+    if (existing !== undefined) {
+      existing.count++;
+      if (value < existing.min) existing.min = value;
+      if (value > existing.max) existing.max = value;
+      return;
+    }
+    if (this.walks.size < WALK_CAP) this.walks.set(template, { count: 1, min: value, max: value });
+  }
+
+  /**
+   * The path shape this actor has walked hardest, with how far it reached.
+   *
+   * `span` is inclusive of both ends, so a walk of 1 to 30 spans 30. Comparing the count
+   * against it is what separates covering a range from visiting a few points in one.
+   */
+  densestWalk(): { template: string; count: number; span: number } | undefined {
+    let best: { template: string; count: number; span: number } | undefined;
+    for (const [template, walk] of this.walks) {
+      const span = walk.max - walk.min + 1;
+      if (best === undefined || walk.count > best.count) best = { template, count: walk.count, span };
+    }
+    return best;
+  }
+
+  /** Every HTTP method this actor has used, in first-seen order. */
+  get methodsSeen(): readonly string[] {
+    return [...this.methods];
   }
 
   /**
@@ -228,6 +376,12 @@ export class ActorState {
       key: this.key,
       requests: this.total,
       distinctPaths: this.distinctPaths,
+      distinctQueries: this.distinctQueries,
+      methodsSeen: this.methodsSeen,
+      walk: this.densestWalk(),
+      responses: this.responses,
+      misses: this.misses,
+      queriesSaturated: this.queriesSaturated,
       firstSeen: this.firstSeen,
       lastSeen: this.lastSeen,
       sinceLastMs: this.sinceLast(now),

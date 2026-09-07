@@ -86,6 +86,14 @@ export function botHandler(handler: BotHandler, options: NodeMiddlewareOptions =
           for (const [name, value] of Object.entries(outcome.responseHeaders)) response.setHeader(name, value);
         }
         if (outcome.delayMs !== undefined) await pause(outcome.delayMs);
+        // What the application answers is the one thing detection cannot see for itself:
+        // the verdict above was reached before this response existed, which is what lets
+        // it shape the response. Reported back on the way out, it feeds `probe-volume` —
+        // an actor whose requests are almost all misses is looking for something rather
+        // than reading anything. One listener, and nothing depends on it arriving.
+        response.once("finish", () => {
+          handler.recordOutcome(facts, response.statusCode);
+        });
         handedOff = true;
         next();
       } catch (error) {

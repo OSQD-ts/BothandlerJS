@@ -3,6 +3,10 @@ import { browsingCoherenceDetector } from "./browsing-coherence.js";
 import { cadenceDetector } from "./cadence.js";
 import { clientHintsDetector } from "./client-hints.js";
 import { crawlBreadthDetector } from "./crawl-breadth.js";
+import { parameterSweepDetector } from "./parameter-sweep.js";
+import { transportCoherenceDetector } from "./transport-coherence.js";
+import { probeVolumeDetector } from "./probe-volume.js";
+import { idEnumerationDetector } from "./id-enumeration.js";
 import { crawlerVerificationDetector } from "./crawler-verification.js";
 import type { CrawlerVerificationOptions } from "./crawler-verification.js";
 import { fetchMetadataDetector } from "./fetch-metadata.js";
@@ -36,7 +40,15 @@ export type { RateAnomalyOptions } from "./rate-anomaly.js";
 export { cadenceDetector } from "./cadence.js";
 export type { CadenceOptions } from "./cadence.js";
 export { crawlBreadthDetector } from "./crawl-breadth.js";
+export { parameterSweepDetector } from "./parameter-sweep.js";
+export { transportCoherenceDetector } from "./transport-coherence.js";
+export { probeVolumeDetector } from "./probe-volume.js";
+export { idEnumerationDetector } from "./id-enumeration.js";
 export type { CrawlBreadthOptions } from "./crawl-breadth.js";
+export type { ParameterSweepOptions } from "./parameter-sweep.js";
+export type { TransportCoherenceOptions } from "./transport-coherence.js";
+export type { ProbeVolumeOptions } from "./probe-volume.js";
+export type { IdEnumerationOptions } from "./id-enumeration.js";
 export { sessionIntegrityDetector } from "./session-integrity.js";
 export type { SessionIntegrityOptions } from "./session-integrity.js";
 export { identityRotationDetector } from "./identity-rotation.js";
@@ -88,11 +100,15 @@ export function defaultDetectors(options: { crawlerVerification?: CrawlerVerific
     clientHintsDetector(),
     fetchMetadataDetector(),
     acceptSignatureDetector(),
+    transportCoherenceDetector(),
     headerOrderDetector(),
     // Behaviour across requests.
     rateAnomalyDetector(),
     cadenceDetector(),
     crawlBreadthDetector(),
+    parameterSweepDetector(),
+    probeVolumeDetector(),
+    idEnumerationDetector(),
     sessionIntegrityDetector(),
     // The other side of the argument: what a real browsing session looks like.
     browsingCoherenceDetector(),

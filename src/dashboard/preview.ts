@@ -126,7 +126,7 @@ export function assessmentFromEntry(entry: DashboardEntry): Assessment {
     actor: {
       key: entry.actor,
       requests: entry.actorStats.requests,
-      distinctPaths: entry.actorStats.distinctPaths,
+      distinctPaths: entry.actorStats.distinctPaths, distinctQueries: 0, queriesSaturated: false, methodsSeen: ["GET"], responses: 0, misses: 0,
       firstSeen: entry.actorStats.firstSeen,
       lastSeen: entry.at,
       ...(entry.actorStats.sinceLastMs !== undefined ? { sinceLastMs: entry.actorStats.sinceLastMs } : {}),

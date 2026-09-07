@@ -4,6 +4,8 @@ import { BOT_CATEGORIES, BOT_SIGNATURES } from "../src/detectors/known-bots.js";
 import { acceptSignatureDetector } from "../src/detectors/accept-signature.js";
 import { cadenceDetector } from "../src/detectors/cadence.js";
 import { crawlBreadthDetector } from "../src/detectors/crawl-breadth.js";
+import { parameterSweepDetector } from "../src/detectors/parameter-sweep.js";
+import { transportCoherenceDetector } from "../src/detectors/transport-coherence.js";
 import { clientHintsDetector } from "../src/detectors/client-hints.js";
 import { crawlerVerificationDetector } from "../src/detectors/crawler-verification.js";
 import { fetchMetadataDetector } from "../src/detectors/fetch-metadata.js";
@@ -624,9 +626,353 @@ describe("the widened bot taxonomy", () => {
     expect(BOT_SIGNATURES.find((signature) => signature.id === "siteimprove")?.benign).toBe(true);
   });
 
+  it("names the crawlers that reach a page on a person's behalf", async () => {
+    // A mail gateway checking a link somebody was sent. Blocking one does not inconvenience
+    // a crawler — it tells a real person their mail contained a link that could not be
+    // verified, which is why the whole category is benign.
+    expect(await identify("Mozilla/5.0 (compatible; ProofpointURLDefenseBot/1.0; +https://www.proofpoint.com/us)")).toEqual({ identity: "proofpoint", category: "email-security" });
+    expect(BOT_SIGNATURES.filter((signature) => signature.category === "email-security").every((signature) => signature.benign)).toBe(true);
+  });
+
+  it("names ad verification apart from ad intelligence", async () => {
+    // Reading a page to decide whether an ad may run beside it; a publisher wants these.
+    expect(await identify("Mozilla/5.0 (compatible; DoubleVerifyBot/1.0; +https://doubleverify.com/bot)")).toEqual({ identity: "doubleverify", category: "advertising" });
+    // Collecting what everyone else is running. Named, and not called benign.
+    expect(BOT_SIGNATURES.find((signature) => signature.id === "adbeat")?.benign).toBe(false);
+  });
+
+  it("does not name a bot it cannot tell from a person", async () => {
+    // Spotify's podcast fetcher sends `Spotify/1.0`, and so does the Spotify desktop app
+    // with somebody driving it. Adding that token blocked a human under three presets at
+    // once, which the corpus caught; the fetcher stays unnamed rather than named wrongly.
+    expect(BOT_SIGNATURES.some((signature) => signature.tokens.includes("spotify/"))).toBe(false);
+  });
+
   it("keeps every category enumerable, so a rule editor can list them", () => {
     const used = new Set(BOT_SIGNATURES.map((signature) => signature.category));
     for (const category of used) expect(BOT_CATEGORIES).toContain(category);
     for (const fresh of ["commerce", "academic", "accessibility"]) expect(BOT_CATEGORIES).toContain(fresh);
+  });
+});
+
+/**
+ * The collection breadth cannot see.
+ *
+ * `crawl-breadth` counts distinct paths, and a path carries no query string — so
+ * enumerating a catalogue reads to it as somebody rereading one page. The gap was
+ * measured before this detector existed: the same two hundred requests scored 62 and were
+ * called `suspected-bot` when expressed as distinct paths, and 55 — under the line — when
+ * expressed as `?page=N`.
+ */
+describe("catching a sweep that leaves the path alone", () => {
+  const BROWSER = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  const headers = {
+    host: "shop.example",
+    "user-agent": BROWSER,
+    accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "accept-language": "en-GB,en;q=0.9",
+    "accept-encoding": "gzip, deflate, br",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-dest": "document",
+  };
+
+  const walk = async (count: number, url: (i: number) => string): Promise<Awaited<ReturnType<BotHandler["assess"]>>> => {
+    const handler = new BotHandler({ preset: "protect-content" });
+    let last: Awaited<ReturnType<BotHandler["assess"]>> | undefined;
+    for (let i = 0; i < count; i++) {
+      const result = await handler.handle(createFacts({ method: "GET", url: url(i), headers, ip: "203.0.113.77", timestamp: 1_700_000_000_000 + i * 400 }));
+      last = result.assessment;
+    }
+    return last as Awaited<ReturnType<BotHandler["assess"]>>;
+  };
+  const swept = (assessment: { evidence: Array<{ detector: string }> }): boolean =>
+    assessment.evidence.some((item) => item.detector === "parameter-sweep");
+
+  it("scores a paginated sweep like the path-walking it really is", async () => {
+    const sweep = await walk(200, (i) => `/products?page=${i}`);
+    expect(swept(sweep)).toBe(true);
+    expect(sweep.verdict).toBe("suspected-bot");
+
+    // The same two hundred requests as distinct paths, which breadth already caught. The
+    // point is that the two now agree rather than differing by the shape of a URL.
+    const paths = await walk(200, (i) => `/products/item-${i}`);
+    expect(paths.verdict).toBe("suspected-bot");
+    expect(sweep.score).toBe(paths.score);
+    // And it is not double-counted: breadth is what fires on distinct paths, not this.
+    expect(swept(paths)).toBe(false);
+  });
+
+  it("catches a search sweep with more than one parameter", async () => {
+    expect(swept(await walk(200, (i) => `/search?q=term${i}&sort=price`))).toBe(true);
+  });
+
+  it("is not fooled by a client that reorders its parameters", async () => {
+    // `?a=1&b=2` and `?b=2&a=1` are one request. Otherwise shuffling the query string
+    // would manufacture variants for free and this would fire on a single page.
+    const handler = new BotHandler({ preset: "protect-content" });
+    for (let i = 0; i < 60; i++) {
+      const url = i % 2 === 0 ? "/products?sort=price&page=2" : "/products?page=2&sort=price";
+      await handler.handle(createFacts({ method: "GET", url, headers, ip: "203.0.113.78", timestamp: 1_700_000_000_000 + i * 400 }));
+    }
+    const [actor] = handler.registry.top(1, 1_700_000_000_000);
+    expect(actor?.distinctQueries).toBe(1);
+  });
+
+  it("stays quiet on the shapes ordinary use makes", async () => {
+    // A visitor filtering across many pages: plenty of query strings, spread thin.
+    expect(swept(await walk(60, (i) => `/c/${i % 20}?sort=${i % 3}`))).toBe(false);
+    // Somebody browsing, with the occasional sort.
+    expect(swept(await walk(40, (i) => (i % 4 === 0 ? "/products?sort=price" : `/products/item-${i}`)))).toBe(false);
+    // No query strings at all.
+    expect(swept(await walk(30, (i) => `/article/${i % 6}`))).toBe(false);
+  });
+
+  it("refuses a threshold it could never reach", () => {
+    // The count saturates at the registry's cap, so a higher threshold would mean a
+    // detector that can only ever stay silent. Same guard crawl-breadth makes.
+    expect(() => parameterSweepDetector({ threshold: 5_000 })).toThrow(RangeError);
+  });
+});
+
+/**
+ * How a claimed browser moves, rather than what it says.
+ *
+ * The header checks read one request against the client it claims to be. These read the
+ * transport underneath and the verbs across a visit — harder to copy, because they are not
+ * in the part of a request most tools let you set. Both were measured as blind spots first:
+ * a client claiming Chrome 120 over HTTP/1.0 and one whose whole visit was HEAD each scored
+ * exactly what the honest control scored.
+ */
+describe("reading the transport under a browser's claim", () => {
+  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  const headers = {
+    host: "shop.example",
+    "user-agent": UA,
+    accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "accept-language": "en-GB,en;q=0.9",
+    "accept-encoding": "gzip, deflate, br",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-dest": "document",
+  };
+
+  const visit = async (count: number, method: string, httpVersion?: string, ua = UA): Promise<Awaited<ReturnType<BotHandler["assess"]>>> => {
+    const handler = new BotHandler({ preset: "protect-content" });
+    let last: Awaited<ReturnType<BotHandler["assess"]>> | undefined;
+    for (let i = 0; i < count; i++) {
+      const result = await handler.handle(
+        createFacts({
+          method,
+          url: `/article/${i}`,
+          headers: { ...headers, "user-agent": ua },
+          ip: "203.0.113.92",
+          timestamp: 1_700_000_000_000 + i * 900,
+          ...(httpVersion === undefined ? {} : { httpVersion }),
+        }),
+      );
+      last = result.assessment;
+    }
+    return last as Awaited<ReturnType<BotHandler["assess"]>>;
+  };
+  const said = (assessment: { evidence: Array<{ detector: string }> }): boolean =>
+    assessment.evidence.some((item) => item.detector === "transport-coherence");
+
+  it("reports a browser that negotiated HTTP/1.0", async () => {
+    const legacy = await visit(30, "GET", "1.0");
+    expect(said(legacy)).toBe(true);
+    expect(legacy.verdict).toBe("suspected-bot");
+    // The versions a browser actually speaks say nothing.
+    expect(said(await visit(30, "GET", "1.1"))).toBe(false);
+    expect(said(await visit(30, "GET", "2.0"))).toBe(false);
+  });
+
+  it("leaves a client that never claimed to be a browser alone", async () => {
+    // curl over HTTP/1.0 is curl being curl. This detector exists to catch a contradiction
+    // between claim and transport, and there is no claim here to contradict.
+    expect(said(await visit(30, "GET", "1.0", "curl/8.4.0"))).toBe(false);
+  });
+
+  it("reports a visit made entirely of HEAD", async () => {
+    expect(said(await visit(30, "HEAD", "1.1"))).toBe(true);
+  });
+
+  it("says nothing about a handful of HEADs", async () => {
+    // One HEAD is a browser checking a link it is about to follow, or a cache revalidating.
+    expect(said(await visit(4, "HEAD", "1.1"))).toBe(false);
+  });
+
+  it("says nothing when the visit contains ordinary navigation too", async () => {
+    const handler = new BotHandler({ preset: "protect-content" });
+    let last: Awaited<ReturnType<BotHandler["handle"]>> | undefined;
+    for (let i = 0; i < 30; i++) {
+      last = await handler.handle(
+        createFacts({
+          method: i % 5 === 0 ? "HEAD" : "GET",
+          url: `/article/${i}`,
+          headers,
+          ip: "203.0.113.93",
+          timestamp: 1_700_000_000_000 + i * 900,
+        }),
+      );
+    }
+    expect(said((last as Awaited<ReturnType<BotHandler["handle"]>>).assessment)).toBe(false);
+  });
+
+  it("can be switched off where an intermediary is the one speaking HTTP/1.0", async () => {
+    // A few older load balancers speak 1.0 to the origin, and then every request arrives
+    // that way — the signal would describe the infrastructure rather than the visitor.
+    const detector = transportCoherenceDetector({ legacyHttp: false });
+    expect(detector.id).toBe("transport-coherence");
+  });
+});
+
+/**
+ * What the application answered.
+ *
+ * The one thing detection cannot see for itself: every verdict is reached *before* the
+ * response exists, which is what lets it shape the response and also what hides the status
+ * from it. Reported back, it closes the oldest gap in reading a scanner.
+ */
+describe("reading what the site answered", () => {
+  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  const headers = {
+    host: "shop.example",
+    "user-agent": UA,
+    accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "accept-language": "en-GB,en;q=0.9",
+    "accept-encoding": "gzip, deflate, br",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-dest": "document",
+  };
+
+  const walk = async (count: number, statusAt?: (index: number) => number): Promise<Awaited<ReturnType<BotHandler["assess"]>>> => {
+    const handler = new BotHandler({ preset: "protect-content" });
+    let last: Awaited<ReturnType<BotHandler["assess"]>> | undefined;
+    for (let i = 0; i < count; i++) {
+      const facts = createFacts({ method: "GET", url: `/p/${i}`, headers, ip: "203.0.113.95", timestamp: 1_700_000_000_000 + i * 900 });
+      const result = await handler.handle(facts);
+      if (statusAt !== undefined) handler.recordOutcome(facts, statusAt(i));
+      last = result.assessment;
+    }
+    return last as Awaited<ReturnType<BotHandler["assess"]>>;
+  };
+  const probed = (assessment: { evidence: Array<{ detector: string }> }): boolean =>
+    assessment.evidence.some((item) => item.detector === "probe-volume");
+
+  it("reports an actor whose requests are almost all misses", async () => {
+    expect(probed(await walk(30, () => 404))).toBe(true);
+    expect(probed(await walk(30, (i) => (i % 10 === 0 ? 200 : 404)))).toBe(true);
+  });
+
+  it("says nothing about a site that has simply moved its URLs", async () => {
+    // Half a visit missing is a reader following stale links, not a wordlist.
+    expect(probed(await walk(30, (i) => (i % 2 === 0 ? 200 : 404)))).toBe(false);
+    expect(probed(await walk(30, () => 200))).toBe(false);
+  });
+
+  it("does not count the refusals it caused itself", async () => {
+    // A 403 is usually this library's own doing. Counting it would let a rule that
+    // challenges an actor manufacture the evidence for having challenged it.
+    expect(probed(await walk(30, () => 403))).toBe(false);
+    expect(probed(await walk(30, () => 500))).toBe(false);
+  });
+
+  it("stays silent when nothing reports anything", async () => {
+    // Every other detector works unchanged without this; supplying it sharpens one.
+    expect(probed(await walk(30))).toBe(false);
+  });
+
+  it("waits for enough reported responses to mean anything", async () => {
+    expect(probed(await walk(10, () => 404))).toBe(false);
+  });
+
+  it("ignores a status that is not a number", async () => {
+    const handler = new BotHandler({ preset: "protect-content" });
+    const facts = createFacts({ method: "GET", url: "/p", headers, ip: "203.0.113.96" });
+    await handler.handle(facts);
+    expect(() => handler.recordOutcome(facts, Number.NaN)).not.toThrow();
+  });
+
+  it("does not mind being told about an actor it has forgotten", async () => {
+    const handler = new BotHandler({ preset: "protect-content" });
+    const facts = createFacts({ method: "GET", url: "/p", headers, ip: "203.0.113.97" });
+    await handler.handle(facts);
+    handler.forgetActor(handler.actorKeyFor(facts));
+    expect(() => handler.recordOutcome(facts, 404)).not.toThrow();
+  });
+});
+
+/**
+ * Working through the identifiers rather than following the links.
+ *
+ * `crawl-breadth` sees this as "many distinct paths" — which is also what it sees when
+ * somebody reads a documentation site, so it stays `weak` and nothing separates the two.
+ * Measured before this existed: `/user/1` through `/user/120` in order scored 57, a
+ * hundred and twenty scattered ids scored 57, and ordinary article paths scored 57.
+ */
+describe("catching a walk through the ids", () => {
+  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  const headers = {
+    host: "shop.example",
+    "user-agent": UA,
+    accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "accept-language": "en-GB,en;q=0.9",
+    "accept-encoding": "gzip, deflate, br",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-dest": "document",
+  };
+
+  const walk = async (count: number, url: (index: number) => string): Promise<Awaited<ReturnType<BotHandler["assess"]>>> => {
+    const handler = new BotHandler({ preset: "protect-content" });
+    let last: Awaited<ReturnType<BotHandler["assess"]>> | undefined;
+    for (let i = 0; i < count; i++) {
+      const result = await handler.handle(createFacts({ method: "GET", url: url(i), headers, ip: "203.0.113.98", timestamp: 1_700_000_000_000 + i * 900 }));
+      last = result.assessment;
+    }
+    return last as Awaited<ReturnType<BotHandler["assess"]>>;
+  };
+  const walked = (assessment: { evidence: Array<{ detector: string }> }): boolean =>
+    assessment.evidence.some((item) => item.detector === "id-enumeration");
+
+  it("reports a contiguous run of identifiers", async () => {
+    const harvest = await walk(120, (i) => `/user/${i + 1}`);
+    expect(walked(harvest)).toBe(true);
+    expect(harvest.verdict).toBe("suspected-bot");
+    // A few gaps is still a walk.
+    expect(walked(await walk(60, (i) => `/user/${500 + i + (i % 12 === 0 ? 1 : 0)}`))).toBe(true);
+  });
+
+  it("reads the identifier rather than the version in the path", async () => {
+    // `/api/v2/orders/42`: the version is part of the shape, the order id is the walk.
+    expect(walked(await walk(60, (i) => `/api/v2/orders/${i + 1}`))).toBe(true);
+  });
+
+  it("never reports coverage above the whole range", async () => {
+    // A repeated id makes the count exceed the span, and "covering 102% of a range" is
+    // not a thing anybody can read.
+    const repeated = await walk(90, (i) => `/user/${1 + (i % 60)}`);
+    const reported = repeated.evidence.find((item) => item.detector === "id-enumeration");
+    expect(reported).toBeDefined();
+    const percentage = Number(/covering (\d+)%/.exec(reported?.summary ?? "")?.[1]);
+    expect(percentage).toBeLessThanOrEqual(100);
+  });
+
+  it("leaves people following links alone", async () => {
+    const scattered = [8, 941, 33, 6012, 77, 512, 4, 88123, 231, 19, 7734, 62];
+    expect(walked(await walk(120, (i) => `/user/${scattered[i % scattered.length]! * (1 + (i % 7))}`))).toBe(false);
+    expect(walked(await walk(120, (i) => `/article/${["a", "b", "c"][i % 3]}-${i}`))).toBe(false);
+    // One page, refreshed: a span of one is somebody reloading, not enumerating.
+    expect(walked(await walk(60, () => "/user/42"))).toBe(false);
+    // Products in a category do carry consecutive ids, so the floor has to sit above what
+    // browsing a catalogue produces.
+    expect(walked(await walk(20, (i) => `/product/${300 + i}`))).toBe(false);
+  });
+
+  it("does not mistake a timestamp for an identifier", async () => {
+    // Nobody walks epoch seconds, and treating them as a range makes every span meaningless.
+    expect(walked(await walk(60, (i) => `/log/${1_700_000_000 + i}`))).toBe(false);
   });
 });

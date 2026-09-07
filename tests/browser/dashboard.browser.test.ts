@@ -1095,7 +1095,11 @@ describe("paging through more than fits", () => {
 
   beforeAll(async () => {
     pagedHandler = new BotHandler({ preset: "protect-content" });
-    pagedDashboard = await pagedHandler.serveDashboard({ port: 0, auth: false, controls: { reset: true } });
+    // A cap of one per second, so that a burst is *certainly* thinned. Whether the stream
+    // skips anything at the default hundred depends on how fast the machine gets through
+    // the requests, and the catch-up test below waited on a badge that sometimes never
+    // appeared — a test that needs a gap has to be given one rather than hope for it.
+    pagedDashboard = await pagedHandler.serveDashboard({ port: 0, auth: false, controls: { reset: true }, maxEventsPerSecond: 1 });
     pagedUrl = `http://127.0.0.1:${pagedDashboard.port}/`;
     // One request so the page has a row to settle on before each test adds its own.
     await pagedHandler.handle(

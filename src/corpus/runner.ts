@@ -287,6 +287,9 @@ export async function runCase(handler: BotHandler, clock: ManualClock, item: Tra
       clearanceCookie === undefined ? request : { ...request, headers: [...request.headers, ["Cookie", clearanceCookie]] };
     const facts = toFacts(withClearance, fallbackIp, clock.now());
     const { assessment, decision, outcome } = await handler.handle(facts);
+    // Reported back the way an adapter would, so a case can be about what the application
+    // answered rather than only about what arrived.
+    if (request.status !== undefined) handler.recordOutcome(facts, request.status);
     requests.push({ assessment, decision, outcome });
   }
 

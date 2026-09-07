@@ -23,7 +23,7 @@ function fakeAssessment(overrides: Partial<Assessment> = {}, at = 0): Assessment
     certain: false,
     evidence: [],
     humanEvidence: [],
-    actor: { key: "203.0.113.1", requests: 1, distinctPaths: 1, firstSeen: at, lastSeen: at, priorConfirmations: 0, unsolvedChallenges: 0, cleared: false },
+    actor: { key: "203.0.113.1", requests: 1, distinctPaths: 1, distinctQueries: 0, queriesSaturated: false, methodsSeen: ["GET"], responses: 0, misses: 0, firstSeen: at, lastSeen: at, priorConfirmations: 0, unsolvedChallenges: 0, cleared: false },
     durationMs: 0.1,
     failures: [],
     facts: createFacts({ method: "GET", url: "/", headers: { host: "s.example" }, ip: "203.0.113.1", timestamp: at }),

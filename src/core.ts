@@ -456,6 +456,25 @@ export class BotHandler {
     this.events.emit("actor-change", { key, action: "clear", until, by: context.by });
   }
 
+  /**
+   * Tells the engine what the application answered.
+   *
+   * The one thing detection cannot see for itself. Every verdict here is reached *before*
+   * the response exists — that is what makes it useful, since it can shape the response —
+   * and so the status is knowledge only the application holds. Handed back, it closes the
+   * oldest gap in reading a scanner: an actor whose requests are almost all misses is
+   * looking for something rather than reading anything, and no amount of header analysis
+   * shows that.
+   *
+   * Optional, and silent when the actor has already been forgotten. Nothing about
+   * detection depends on it being called; supplying it sharpens `probe-volume` and
+   * nothing else. The bundled Node adapter wires it up for you.
+   */
+  recordOutcome(facts: RequestFacts, status: number): void {
+    if (!Number.isFinite(status)) return;
+    this.registry.peek(this.actorKeyFor(facts))?.recordOutcome(status);
+  }
+
   /** Convenience for `updateRanges("crawler:<id>", …)`, matching a signature id. */
   updateCrawlerRanges(signatureId: string, entries: readonly string[], context: ChangeContext = {}): void {
     this.updateRanges(`crawler:${signatureId}`, entries, context);
@@ -971,7 +990,7 @@ export class BotHandler {
       actor: existing?.snapshot(facts.timestamp) ?? {
         key: actorKey,
         requests: 0,
-        distinctPaths: 0,
+        distinctPaths: 0, distinctQueries: 0, queriesSaturated: false, methodsSeen: ["GET"], responses: 0, misses: 0,
         firstSeen: facts.timestamp,
         lastSeen: facts.timestamp,
         priorConfirmations: 0,

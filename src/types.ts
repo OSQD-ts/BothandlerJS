@@ -193,6 +193,38 @@ export interface ActorSnapshot {
   requests: number;
   /** Distinct paths seen inside the window — breadth of crawl. */
   distinctPaths: number;
+  /**
+   * Distinct path-and-query combinations seen from this actor.
+   *
+   * Separate from `distinctPaths` because a scraper lives in the gap between them:
+   * `/products?page=1` through `?page=200` is one path and two hundred requests.
+   */
+  distinctQueries: number;
+  /** Whether `distinctQueries` stopped being able to grow. */
+  queriesSaturated: boolean;
+  /**
+   * Every HTTP method this actor has used.
+   *
+   * A browser navigating issues GET; an actor whose whole visit is HEAD is checking what
+   * exists rather than reading it.
+   */
+  methodsSeen: readonly string[];
+  /**
+   * Responses reported back for this actor, and how many of them were misses.
+   *
+   * Both zero unless something calls `recordOutcome` — the engine decides before a
+   * response exists, so this is knowledge only the application has.
+   */
+  responses: number;
+  /** Of `responses`, how many were 404 or 410. */
+  misses: number;
+  /**
+   * The path shape this actor has walked hardest — `/user/#` — with how many requests
+   * went to it and how wide a range of numbers they covered.
+   *
+   * Undefined when no path carried a number. `span` is inclusive, so ids 1 to 30 span 30.
+   */
+  walk?: { template: string; count: number; span: number } | undefined;
   /** First and last sighting, ms since epoch. */
   firstSeen: number;
   lastSeen: number;

@@ -1,5 +1,5 @@
 import { browser, plain, userAgentOf } from "./headers.js";
-import { bot } from "./schema.js";
+import { bot, repeat } from "./schema.js";
 import { GOOGLEBOT_IP, OUT_OF_RANGE } from "./ranges.js";
 import type { TrafficCase } from "./schema.js";
 
@@ -24,6 +24,104 @@ import type { TrafficCase } from "./schema.js";
 const CHROME_UA = userAgentOf("chromeWindows");
 
 export const ADVERSARIAL_CASES: TrafficCase[] = [
+  bot({
+    id: "id-harvest-contiguous",
+    title: "Every profile id in order, with a copied browser header set",
+    audience: "hostile",
+    category: "scraping",
+    provenance:
+      "Harvesting by identifier rather than by link: the shape of an IDOR sweep and of profile collection. Distinct-path breadth reads it as somebody who visited a lot of pages, which is also what it reads when a person works through a documentation site.",
+    requests: repeat({ ...browser("chromeWindows"), ip: "198.51.100.65" }, 40, 800, (index) => `/user/${index + 1}`),
+    expect: {
+      // One `moderate` signal against a flawless header set, like the others here. What
+      // changed is that the walk is now *visible* — before this detector it was scored
+      // identically to a hundred and twenty scattered ids and to ordinary article paths.
+      verdict: "unknown",
+      detectors: ["id-enumeration"],
+    },
+    notes:
+      "What separates this from reading is not which ids were asked for but that they cover a range: people arrive at ids through links, and links do not densely enumerate an integer interval. Held at `moderate` because products in one category often carry consecutive ids, so somebody browsing a catalogue makes a smaller version of this shape.",
+  }),
+
+  bot({
+    id: "wordlist-scan-mostly-misses",
+    title: "A wordlist walked with a copied browser header set, almost all of it missing",
+    audience: "hostile",
+    category: "scanning",
+    provenance:
+      "The oldest tell there is, and the one this library could not see: it decides before the response exists, which is what lets it shape the response and also what hides the status from it. A person browsing does not generate thirty misses in a row; a wordlist does almost nothing else.",
+    requests: repeat({ ...browser("chromeWindows"), ip: "198.51.100.64", status: 404 }, 30, 700, (index) => `/${["admin", "backup", "old", "test", "config", "db"][index % 6]}-${index}`),
+    expect: {
+      // One `moderate` signal against an otherwise flawless header set does not cross the
+      // line, and it should not: a site that has just moved its URLs produces the same
+      // shape from ordinary readers. Raising the ceiling so this case reads better would
+      // be tuning the detector to the test rather than to the traffic.
+      verdict: "unknown",
+      detectors: ["probe-volume"],
+    },
+    notes:
+      "Only counts 404 and 410. A 403 is usually this library's own doing, and counting it would let a rule that challenges an actor manufacture the evidence for having challenged it; a 500 is the site's problem and says nothing about the client. Capped at `moderate` because a site that has just moved its URLs produces this from perfectly ordinary readers.",
+  }),
+
+  bot({
+    id: "browser-claim-over-http-1-0",
+    title: "A perfect Chrome header set, arriving over HTTP/1.0",
+    audience: "hostile",
+    category: "impersonation",
+    provenance:
+      "Most tooling lets you set headers and does not let you choose an HTTP version, so the transport is the half a copied header set does not cover. No shipping browser has offered HTTP/1.0 to a server in well over a decade.",
+    requests: repeat({ ...browser("chromeWindows"), ip: "198.51.100.62", httpVersion: "1.0" }, 30, 900, (index) => `/${["news", "about", "blog", "help", "terms"][index % 5]}`),
+    expect: {
+      // Contributes rather than concludes. On its own, against an otherwise flawless
+      // header set, one `moderate` signal does not reach the threshold — and it should
+      // not, because an intermediary can cause this. Beside anything sharper it does.
+      verdict: "unknown",
+      detectors: ["transport-coherence"],
+    },
+    notes:
+      "Capped at `moderate` because it is not always the client's doing: a few older load balancers speak HTTP/1.0 to the origin, and behind one of those every request looks like this. That is what `transportCoherenceDetector({ legacyHttp: false })` is for, and why this may never deny anybody on its own.",
+  }),
+
+  bot({
+    id: "head-only-visit",
+    title: "A visit made entirely of HEAD, claiming a browser",
+    audience: "unwanted-bot",
+    category: "scraping",
+    provenance:
+      "Checking what exists without reading any of it: link checkers, availability monitors and inventory watchers all do this, and a browser navigating never does.",
+    requests: repeat({ ...browser("chromeWindows"), ip: "198.51.100.63", method: "HEAD" }, 30, 900, (index) => `/${["news", "about", "blog", "help", "terms"][index % 5]}`),
+    expect: {
+      // As above: a shape worth reporting, not worth concluding from alone.
+      verdict: "unknown",
+      detectors: ["transport-coherence"],
+    },
+    notes:
+      "One HEAD is a browser checking a link it is about to follow, or a cache revalidating; the shape only means anything across a visit, which is why it is counted on the actor rather than on the request. A link checker is a real and mostly harmless thing to be, so this stays `moderate`.",
+  }),
+
+  bot({
+    id: "catalogue-sweep-by-page",
+    title: "A catalogue taken a page at a time, with the path never changing",
+    audience: "unwanted-bot",
+    category: "scraping",
+    provenance:
+      "How a catalogue is actually taken. The collector copies a browser's headers exactly and walks ?page=1..N, which leaves the path constant — so distinct-path breadth reads it as somebody rereading one page rather than as enumeration.",
+    requests: repeat({ ...browser("chromeWindows"), ip: "198.51.100.61" }, 40, 900, (index) => `/products?page=${index}`),
+    expect: {
+      // Not proven, and not even suspected at this pace. Said plainly because it is true:
+      // headers this clean leave only behaviour, behaviour is weak by construction, and a
+      // collector polite enough to space its requests stays under the line. What changed
+      // is that it no longer scores *lower* than the identical crawl expressed as distinct
+      // paths — measured at a faster pace before this detector existed, the two differed by
+      // seven points and only the path version crossed; they now score the same at every
+      // volume tried.
+      verdict: "unknown",
+      detectors: ["parameter-sweep"],
+    },
+    notes:
+      "The counterpart to crawl-breadth rather than a replacement for it: breadth counts paths, this counts what is hung on them. Both stay weak, and both are worth having because a collector picks one shape or the other and nothing says which. Neither is a reason to deny anybody on its own.",
+  }),
+
   // ---------------------------------------------------------------------------
   // Forged identities. The narrow case where a lie is provable.
   // ---------------------------------------------------------------------------

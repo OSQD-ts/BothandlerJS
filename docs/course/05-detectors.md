@@ -82,7 +82,11 @@ fails closed is an outage with extra steps.
 | `rate-anomaly` | `moderate` | Arrivals in a short window. Reports; never concludes |
 | `cadence` | `moderate` | Coefficient of variation of the gaps. Catches the polite scraper pacing itself *under* your rate limit |
 | `crawl-breadth` | `weak` | Distinct paths against total requests: reading a site against enumerating it |
+| `parameter-sweep` | `weak` | Distinct query strings against the paths they sit on. Catches the collection that leaves the path unchanged — `?page=1..200` |
 | `session-integrity` | `moderate` | A "browser" that never carries a cookie |
+| `id-enumeration` | `moderate` | A contiguous run of numeric ids under one path shape — walking `/user/1..n` rather than following links |
+| `probe-volume` | `moderate` | The share of an actor's requests answered 404. Needs `recordOutcome`; the Node adapter wires it up |
+| `transport-coherence` | `moderate` | The HTTP version and the verbs across a visit: a "Chrome" on HTTP/1.0, a visit made only of HEAD |
 | `identity-rotation` | `moderate` | One actor, several User-Agents. **Off by default** — under an IP actor key this fires on every corporate NAT |
 | `browsing-coherence` | `moderate` | The only detector arguing *for* the client. Human-pointing, so it discounts |
 
