@@ -4,8 +4,8 @@ import { corpusCase, replayFile, replayLine } from "../src/dashboard/client/repl
 import { draftRule } from "../src/dashboard/client/draft.js";
 import { matchesFilter, matchesQuery, parseQuery, searchableText } from "../src/dashboard/client/query.js";
 import { actionKind, outcome, provenBots, verdictBadge } from "../src/dashboard/client/outcome.js";
-import { clearFeed, state } from "../src/dashboard/client/store.js";
-import { n, pct, rangeLabel, uptime, windowLabel } from "../src/dashboard/client/format.js";
+import { clearFeed, feedPage, goToFeedPage, ingest, resetPaging, sortRows, state } from "../src/dashboard/client/store.js";
+import { clockDate, clockStamp, clockTime, n, pct, rangeLabel, uptime, windowLabel } from "../src/dashboard/client/format.js";
 import type { DashboardEntry } from "../src/dashboard/types.js";
 
 /**
@@ -386,5 +386,124 @@ describe("counting proven bots", () => {
 
   it("survives a snapshot missing a key", () => {
     expect(provenBots({})).toBe(0);
+  });
+});
+
+/**
+ * Paging the feed.
+ *
+ * The list is newest-first and it grows at the newest end, so a reader on page three is
+ * standing on ground that moves: one arriving request pushes every row down by one, and
+ * they are quietly reading different rows than the ones they were looking at. Page zero
+ * follows the feed; every other page reads the list as it was when they left page zero.
+ */
+describe("paging the feed", () => {
+  const fill = (count: number): void => {
+    clearFeed();
+    state.rows = [];
+    state.byId = new Map();
+    for (let i = 0; i < count; i++) {
+      ingest(entry({ requestId: `r${i}`, at: 1_700_000_000_000 + i }));
+    }
+  };
+
+  it("cuts the newest-first list into pages", () => {
+    fill(120);
+    resetPaging();
+    const first = feedPage(50);
+    expect(first.total).toBe(120);
+    expect(first.pages).toBe(3);
+    expect(first.rows).toHaveLength(50);
+    // Newest first: the last ingested is the top row.
+    expect(first.rows[0]?.entry.requestId).toBe("r119");
+
+    goToFeedPage(1);
+    const second = feedPage(50);
+    expect(second.page).toBe(1);
+    expect(second.rows[0]?.entry.requestId).toBe("r69");
+
+    goToFeedPage(2);
+    const last = feedPage(50);
+    expect(last.rows).toHaveLength(20);
+    expect(last.rows[19]?.entry.requestId).toBe("r0");
+  });
+
+  it("holds a page still while the feed grows under it", () => {
+    fill(120);
+    resetPaging();
+    goToFeedPage(1);
+    const before = feedPage(50).rows.map((row) => row.entry.requestId);
+
+    for (let i = 0; i < 10; i++) ingest(entry({ requestId: `late${i}`, at: 1_700_000_001_000 + i }));
+
+    expect(feedPage(50).rows.map((row) => row.entry.requestId)).toEqual(before);
+    // And the new ones are there the moment the reader comes back to the front.
+    goToFeedPage(0);
+    const live = feedPage(50);
+    expect(live.total).toBe(130);
+    expect(live.rows[0]?.entry.requestId).toBe("late9");
+  });
+
+  it("does not strand a reader past the end when the list shrinks", () => {
+    fill(120);
+    resetPaging();
+    goToFeedPage(2);
+    expect(feedPage(50).page).toBe(2);
+    // Whatever they were reading is gone — a reset, or a filter that now matches less.
+    fill(10);
+    const clamped = feedPage(50);
+    expect(clamped.page).toBe(0);
+    expect(clamped.rows).toHaveLength(10);
+  });
+
+  it("puts a merged backlog back in time order", () => {
+    // What the catch-up fetch does: `ingest` appends, and an entry fetched over HTTP is
+    // older than what is already held, so without the sort it would sit at the newest end.
+    fill(3);
+    ingest(entry({ requestId: "older", at: 1_699_000_000_000 }));
+    expect(state.rows[state.rows.length - 1]?.entry.requestId).toBe("older");
+    sortRows();
+    expect(state.rows[0]?.entry.requestId).toBe("older");
+    resetPaging();
+    expect(feedPage(50).rows[0]?.entry.requestId).toBe("r2");
+  });
+});
+
+/**
+ * One clock, one calendar, everywhere.
+ *
+ * These were `toLocaleTimeString`, which answers in whatever the reader's locale prefers —
+ * so the same feed read "4:40:46 PM" on one operator's screen and "16:40:46" on the next,
+ * and two people looking at one dashboard together saw it disagree with itself.
+ */
+describe("how the dashboard writes times and dates", () => {
+  // A fixed local wall-clock instant: the components are what the reader sees, so the
+  // expectations are built the same way rather than from a UTC string that would move
+  // with the machine's zone.
+  const at = new Date(2026, 1, 3, 9, 4, 5).getTime();
+  const evening = new Date(2026, 10, 28, 16, 40, 46).getTime();
+
+  it("writes the time as 24-hour, zero-padded", () => {
+    expect(clockTime(at)).toBe("09:04:05");
+    // The case that gave the format away: an afternoon, which used to read "4:40:46 PM".
+    expect(clockTime(evening)).toBe("16:40:46");
+  });
+
+  it("writes the date as dd-mm-yyyy", () => {
+    expect(clockDate(at)).toBe("03-02-2026");
+    expect(clockDate(evening)).toBe("28-11-2026");
+  });
+
+  it("puts both together where a bare time would mislead", () => {
+    // "first seen 09:04:05" invites the reader to assume it was this morning.
+    expect(clockStamp(at)).toBe("03-02-2026 09:04:05");
+  });
+
+  it("never says AM or PM", () => {
+    for (let hour = 0; hour < 24; hour++) {
+      const stamp = clockTime(new Date(2026, 5, 15, hour, 30, 0).getTime());
+      expect(stamp).not.toMatch(/[ap]m/i);
+      expect(stamp).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    }
   });
 });

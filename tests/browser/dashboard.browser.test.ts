@@ -111,6 +111,36 @@ describe("moving between views", () => {
     await page.close();
   });
 
+  /**
+   * The "Actors tracked" counter is the one tile that names a screen, so it takes you
+   * there. A real `<button>` rather than a div with a click handler: it has to be in the
+   * tab order, answer Enter and Space, and be announced as something to press, and a div
+   * gets none of those.
+   */
+  it("goes to the Actors screen from the tile that counts them", async () => {
+    const page = await open();
+    const tile = page.locator("#tiles .tile", { hasText: "Actors tracked" });
+    await expect.poll(() => tile.evaluate((node) => node.tagName)).toBe("BUTTON");
+
+    // The count and the caption still read out; the hint is added to them, not over them.
+    const label = await tile.evaluate((node) => (node.textContent ?? "").replace(/\s+/g, " "));
+    expect(label).toContain("Actors tracked");
+    expect(label).toContain("Show the Actors screen");
+
+    await tile.click();
+    await expect.poll(() => page.locator("#tab-actors").getAttribute("aria-selected")).toBe("true");
+    await expect.poll(() => page.locator("#view-actors").isVisible()).toBe(true);
+
+    // And from the keyboard, which is the half a div would have lost.
+    await page.locator("#tab-live").click();
+    await expect.poll(() => page.locator("#view-actors").isVisible()).toBe(false);
+    await tile.focus();
+    expect(await tile.evaluate((node) => document.activeElement === node)).toBe(true);
+    await page.keyboard.press("Enter");
+    await expect.poll(() => page.locator("#view-actors").isVisible()).toBe(true);
+    await page.close();
+  });
+
   /** Tab should step past the strip into the panel, not through every tab on the way. */
   it("keeps exactly one tab in the tab order", async () => {
     const page = await open();
@@ -1042,6 +1072,221 @@ describe("accessibility", () => {
  * exists to protect. It is served here through the real `ChallengeService`, with the
  * headers and the strict CSP the action sets, rather than pasted into a blank page.
  */
+
+/**
+ * Paging, on its own handler and its own listener.
+ *
+ * These tests need hundreds of requests and dozens of actors to have anything to page
+ * through, and the shared feed is read by every other test in this file — a thousand rows
+ * pushes theirs off the first page, and forty actors turns "one fewer than before" into
+ * "still a full page". Same reason the policy editor has a listener of its own.
+ */
+describe("paging through more than fits", () => {
+  let pagedHandler: BotHandler;
+  let pagedDashboard: DashboardServer;
+  let pagedUrl: string;
+
+  const openPaged = async (): Promise<Page> => {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.goto(pagedUrl);
+    await page.waitForSelector("tbody tr.row");
+    return page;
+  };
+
+  beforeAll(async () => {
+    pagedHandler = new BotHandler({ preset: "protect-content" });
+    pagedDashboard = await pagedHandler.serveDashboard({ port: 0, auth: false, controls: { reset: true } });
+    pagedUrl = `http://127.0.0.1:${pagedDashboard.port}/`;
+    // One request so the page has a row to settle on before each test adds its own.
+    await pagedHandler.handle(
+      createFacts({ method: "GET", url: "/seed", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.1" }),
+    );
+  });
+
+  afterAll(async () => {
+    await pagedDashboard.close();
+  });
+
+  /**
+   * The feed pages, and a page that is not the newest holds still.
+   *
+   * A reader on page two is standing on ground that moves: the list is newest-first and
+   * grows at that end, so one arriving request pushes every row down by one and they are
+   * reading different rows than the ones they were looking at, silently. Leaving the front
+   * page freezes the list; returning thaws it.
+   */
+  it("pages the feed, and holds a page still while requests arrive", async () => {
+    const page = await openPaged();
+    // Enough to fill more than one page, then everything the stream skipped.
+    for (let i = 0; i < 130; i++) {
+      await pagedHandler.handle(
+        createFacts({ method: "GET", url: `/paged/${i}`, headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: `198.51.100.${i % 250}` }),
+      );
+    }
+    await expect.poll(() => page.locator("#rows tr.row").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    // The opening replay is droppable, so an unknown share of those 130 may not have
+    // arrived — and the badge offering them appears whenever the server gets round to
+    // saying so. Asking once raced it: on a run where the replay happened to be complete
+    // enough for one page and no more, there was no second page to step to and the poll
+    // below waited out its timeout. Press it until there is nothing left to press.
+    const loadThem = page.locator("#feed-load-skipped");
+    await expect
+      .poll(
+        async () => {
+          // Every step bounded and allowed to fail. The button disappears the moment the
+          // load succeeds, so an unbounded click issued just before that raced it and then
+          // sat waiting for a control that was never coming back — which is what was
+          // running the whole test out of time, rather than any assertion in it.
+          if (await loadThem.isVisible().catch(() => false)) {
+            await loadThem.click({ timeout: 2_000 }).catch(() => undefined);
+          }
+          // Waiting on the *pager*, not on a row count. Fifty rows is satisfied by a
+          // single page of exactly fifty, and a single page renders no pager at all — so
+          // every `.where` read after this sat waiting for an element that was never
+          // going to be attached. `count()` answers immediately instead of waiting.
+          return page.locator("#feed-pager .where").count();
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(1);
+
+    const where = page.locator("#feed-pager .where");
+    await expect.poll(() => where.textContent(), { timeout: 15_000 }).toContain("1–50");
+    expect(await page.locator("#rows tr.row").count()).toBe(50);
+    // Nothing newer than the newest page.
+    expect(await page.locator('#feed-pager button[aria-label="Previous page"]').isDisabled()).toBe(true);
+
+    await page.locator('#feed-pager button[aria-label="Next page"]').click();
+    await expect.poll(() => where.textContent()).toContain("51–100");
+    expect(await page.locator("#feed-pager .held").count()).toBe(1);
+    const topRow = await page.locator("#rows tr.row").first().textContent();
+
+    // Requests arriving now must not move the page under the reader.
+    for (let i = 0; i < 12; i++) {
+      await pagedHandler.handle(
+        createFacts({ method: "GET", url: `/late/${i}`, headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "198.51.100.251" }),
+      );
+    }
+    await page.waitForTimeout(2500);
+    expect(await page.locator("#rows tr.row").first().textContent()).toBe(topRow);
+    expect(await where.textContent()).toContain("51–100");
+
+    // And they are waiting at the front when the reader comes back.
+    await page.locator('#feed-pager button[aria-label="Previous page"]').click();
+    await expect.poll(() => where.textContent()).toContain("1–50");
+    expect(await page.locator("#feed-pager .held").count()).toBe(0);
+
+    // Both ends of the table, because fifty rows is taller than the window and a pager
+    // only at the bottom means scrolling to the end to reach the top of the next page.
+    expect(await page.locator("#feed-pager-top .where").textContent()).toBe(await where.textContent());
+    // The size chooser sits on one of the two, not both: one setting, one control.
+    expect(await page.locator("#feed-pager-top select").count()).toBe(1);
+    expect(await page.locator("#feed-pager select").count()).toBe(0);
+
+    const newest = await page.locator("#rows tr.row").first().textContent();
+    await page.selectOption("#feed-pager-top select", "100");
+    // More than a page of fifty, rather than exactly a hundred. How many requests survive
+    // to reach this browser is not fixed — the opening replay is droppable and the rate cap
+    // thins a burst — so the total here varies from run to run, and asserting a range like
+    // "1–100 of 131" made the test depend on a number nothing guarantees. Worse, when the
+    // total happened to land at or under a hundred the whole list became one page, the
+    // pager stopped being rendered at all, and reading it waited for an element that was
+    // never coming back.
+    await expect.poll(() => page.locator("#rows tr.row").count(), { timeout: 10_000 }).toBeGreaterThan(50);
+    // Changing the size returns to the front: page four of fifty is not page four of a
+    // hundred, and keeping the number while changing what it counts moves the reader.
+    expect(await page.locator("#rows tr.row").first().textContent()).toBe(newest);
+    await page.close();
+    // A minute rather than the default half: this one drives 142 requests through a real
+    // handler, waits out a rate cap, and then settles the page twice. It was not failing
+    // on an assertion, it was running out of budget.
+  }, 60_000);
+
+  /**
+   * The Actors screen is the widest table in the dashboard and the one nobody had
+   * measured narrow. A grid item will not shrink below its content unless it is told it
+   * may, so the panel pushed the whole document sideways instead of letting the scroller
+   * inside it do its job.
+   */
+  it("does not push the page sideways at any width, on any screen", async () => {
+    for (const width of [1440, 820, 600, 390, 375]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      await page.goto(pagedUrl);
+      await page.waitForSelector("tbody tr.row");
+      for (const tab of ["live", "actors", "stats", "policy"] as const) {
+        await page.click(`#tab-${tab}`);
+        await page.waitForTimeout(400);
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        expect(overflow, `${tab} at ${width}px`).toBeLessThanOrEqual(0);
+      }
+      await page.close();
+    }
+  });
+
+  /**
+   * The entries the stream never delivered are still in the ring, and now there is a
+   * button that goes and gets them. The opening replay is droppable, so a first load of a
+   * busy dashboard can arrive missing most of its backlog — which is what this is for.
+   */
+  it("loads the entries the stream skipped", async () => {
+    const page = await openPaged();
+    for (let i = 0; i < 200; i++) {
+      await pagedHandler.handle(
+        createFacts({ method: "GET", url: `/skipped/${i}`, headers: { host: "shop.test", "user-agent": "python-requests/2.32.3", accept: "*/*" }, ip: `203.0.113.${i % 250}` }),
+      );
+    }
+    await expect.poll(() => page.locator("#rows tr.row").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+    const badge = page.locator("#feed-skipped");
+    const loadThem = page.locator("#feed-load-skipped");
+    await expect.poll(() => badge.isVisible(), { timeout: 15_000 }).toBe(true);
+    // The badge no longer just states the gap; the button beside it closes it.
+    await expect.poll(() => loadThem.isVisible()).toBe(true);
+    const before = await page.locator("#rows tr.row").count();
+
+    await loadThem.click();
+    // Everything the ring holds is now on the page, and the badge has nothing left to say.
+    await expect.poll(() => badge.isVisible(), { timeout: 15_000 }).toBe(false);
+    await expect.poll(() => loadThem.isVisible()).toBe(false);
+    expect(await page.evaluate(() => document.querySelectorAll("#rows tr.row").length + Number((document.getElementById("feed-pager") as HTMLElement).hidden ? 0 : 1))).toBeGreaterThan(before);
+    await page.close();
+  });
+
+  /**
+   * The registry holds far more clients than the feed's ring holds requests, and the
+   * dashboard could only ever see the busiest page of them — the wrong half, since the
+   * feed already shows what is loudest.
+   */
+  it("pages the Actors table past the busiest", async () => {
+    const page = await openPaged();
+    for (let actor = 0; actor < 40; actor++) {
+      for (let request = 0; request < 40 - actor; request++) {
+        await pagedHandler.handle(
+          createFacts({ method: "GET", url: `/a/${request}`, headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: `192.0.2.${actor}` }),
+        );
+      }
+    }
+    await page.locator("#tab-actors").click();
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+    const where = page.locator("#actors-pager .where");
+    await expect.poll(() => where.textContent(), { timeout: 15_000 }).toContain("1–25");
+    expect(await page.locator('#actors-pager button[aria-label="Previous page"]').isDisabled()).toBe(true);
+    const busiest = await page.locator("#actor-rows tr td.who").first().textContent();
+
+    await page.locator('#actors-pager button[aria-label="Next page"]').click();
+    await expect.poll(() => where.textContent(), { timeout: 15_000 }).toContain("26–");
+    // A different set of actors, further down the ranking.
+    expect(await page.locator("#actor-rows tr td.who").first().textContent()).not.toBe(busiest);
+
+    await page.locator('#actors-pager button[aria-label="Previous page"]').click();
+    await expect.poll(() => where.textContent(), { timeout: 15_000 }).toContain("1–25");
+    expect(await page.locator("#actor-rows tr td.who").first().textContent()).toBe(busiest);
+    await page.close();
+  });
+
+});
+
 /**
  * `<bot-dashboard>` in somebody else's page.
  *
@@ -1293,6 +1538,12 @@ document.getElementById("d").config = { panels: [
 ]};
 defineBotDashboard();
 </script></body></html>`);
+        return;
+      }
+      if (path === "/plain") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_bots"></bot-dashboard>
+<script type="module">import { defineBotDashboard } from "/element.js"; defineBotDashboard();</script></body></html>`);
         return;
       }
       if (path === "/nameclash") {
@@ -2291,6 +2542,52 @@ defineBotDashboard();
     await page.close();
   });
 
+  /**
+   * The same control inside somebody else's page, where two things could go wrong: the
+   * shadow root, and the host's URL. Switching screens must work and must leave the host
+   * page's address bar alone — the element does not own it.
+   *
+   * And where the Actors screen does not exist, the tile must not offer to go there. A
+   * control that navigates nowhere is worse than no control.
+   */
+  it("goes to the Actors screen from the tile, and does not offer to when there is none", async () => {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+    const failures: string[] = [];
+    page.on("pageerror", (error) => failures.push(String(error)));
+    await page.goto(`${embedUrl}plain`);
+    await page.waitForFunction(() => ((document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelectorAll("#tiles .tile").length ?? 0) > 0, undefined, { timeout: 15_000 });
+
+    const clicked = await page.evaluate(() => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      const tile = Array.from(shadow.querySelectorAll("#tiles .tile")).find((node) => node.querySelector(".k")?.textContent === "Actors tracked");
+      (tile as HTMLButtonElement).click();
+      return tile?.tagName;
+    });
+    expect(clicked).toBe("BUTTON");
+    await expect
+      .poll(() => page.evaluate(() => ((document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot).getElementById("view-actors")?.hidden === false), { timeout: 10_000 })
+      .toBe(true);
+    // The host page's own address bar is untouched, embedded.
+    expect(await page.evaluate(() => location.hash)).toBe("");
+    await page.close();
+
+    // The suite's own host page lists only `stats` and `live` in `tabs`, so it has no
+    // Actors screen at all — the ordinary way a developer ends up without one, rather
+    // than a case invented for this test.
+    const gated = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+    await gated.goto(embedUrl);
+    await gated.waitForFunction(() => ((document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelectorAll("#tiles .tile").length ?? 0) > 0, undefined, { timeout: 15_000 });
+    const inert = await gated.evaluate(() => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      const tile = Array.from(shadow.querySelectorAll("#tiles .tile")).find((node) => node.querySelector(".k")?.textContent === "Actors tracked");
+      return { tag: tile?.tagName, actorsTab: shadow.getElementById("tab-actors")?.hidden !== false };
+    });
+    expect(inert.tag).toBe("DIV");
+    expect(inert.actorsTab).toBe(true);
+    expect(failures).toEqual([]);
+    await gated.close();
+  });
+
   it("can be registered under a name of your own", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const failures: string[] = [];
@@ -2537,7 +2834,21 @@ describe("the challenge interstitial", () => {
     // access and voice control all reach a checkbox, and if it does not work here the
     // page is a wall for them.
     await page.keyboard.press("Space");
-    await expect.poll(() => page.locator("#confirm").isChecked()).toBe(true);
+    // Either the box is ticked or the page has already moved past it. Ticking submits
+    // straight away and a successful verify reloads, so "still checked" is only observable
+    // for as long as that round trip takes — asserting it alone meant the test failed
+    // whenever the machine was fast enough to finish first, which is the wrong way round.
+    // Both outcomes prove the same thing: the key press reached the control.
+    await expect
+      .poll(
+        async () => {
+          const checked = await page.locator("#confirm").isChecked().catch(() => false);
+          const status = await page.locator("#status").textContent().catch(() => "");
+          return checked || !(status ?? "").includes("Tick the box");
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(true);
     await page.close();
   });
 
