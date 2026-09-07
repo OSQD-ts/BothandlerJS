@@ -206,6 +206,8 @@ export const DASHBOARD_CSS = String.raw`/* -------------------------------------
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
+/* Restored by the client once the first render has settled. See the note on .tiles. */
+html.settling { overflow-anchor: none; }
 body {
   margin: 0; background: var(--page); color: var(--ink);
   font: 14px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -298,14 +300,68 @@ button[disabled] { opacity: .5; cursor: default; }
 /* --- layout ------------------------------------------------------------- */
 main { padding: 18px 20px 64px; max-width: 1680px; margin: 0 auto; }
 .stack { display: grid; gap: 16px; }
-.tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); }
+/* Everything above the feed is drawn by script once the first snapshot arrives, which
+   inserts a block of content above what is already laid out. The browser's scroll
+   anchoring compensates for that by scrolling down by its height — so on any window narrow
+   enough for the counter row to wrap, the dashboard opened with its own counters already
+   off the top of the screen, every time.
+
+   Anchoring is switched off for the first render and switched back on once it has settled
+   (see settleScrollAnchoring in the client). It is not simply left off: the feed puts new requests at
+   the top, and anchoring is exactly what keeps somebody's place while they read a screen
+   that grows above them. */
+.tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); }
 .tile {
-  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
-  padding: 12px 14px 13px; box-shadow: var(--shadow);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 12px 9px; box-shadow: var(--shadow);
 }
-.tile .v { font-size: 26px; font-weight: 620; letter-spacing: -.025em; line-height: 1.1; }
-.tile .k { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .055em; margin-top: 4px; font-weight: 560; }
-.tile .s { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+.tile .v { font-size: 21px; font-weight: 620; letter-spacing: -.025em; line-height: 1.15; }
+.tile .k { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .055em; margin-top: 2px; font-weight: 560; }
+/* One line, always. These are grid items, so the tallest sets the height of all nine —
+   two captions wrapping to a second line was costing every tile forty pixels of nothing.
+   The full text stays available on hover rather than being cut from the page. */
+.tile .s { font-size: 11px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A tile that navigates is a real button, so it arrives carrying the browser's own
+   font, centring and chrome. Reset to match its inert neighbours exactly, then given
+   back the one thing a div must not have: something that says it can be pressed. */
+button.tile {
+  font: inherit; color: inherit; text-align: left; width: 100%; display: block;
+  cursor: pointer; appearance: none; transition: border-color .12s, box-shadow .12s;
+}
+button.tile:hover { border-color: var(--focus); }
+/* The badge's companion: fetches the entries the stream skipped. Sits inline with the
+   heading, so it is styled to read as part of the sentence rather than as a form control. */
+.load-skipped {
+  font: inherit; margin-left: 6px; padding: 1px 8px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--warn-text); background: transparent; color: var(--warn-text);
+}
+.load-skipped:hover { background: color-mix(in srgb, var(--warn-text) 12%, transparent); }
+.load-skipped:disabled { opacity: .5; cursor: default; }
+
+/* Prev/next under a table. Quiet: it is navigation for a list, not an action on it. */
+.pager {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 9px 2px 2px; font-size: 12px; color: var(--muted);
+}
+.pager button {
+  font: inherit; padding: 4px 11px; border-radius: 7px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer;
+}
+.pager button:hover:not(:disabled) { border-color: var(--focus); }
+.pager button:disabled { opacity: .45; cursor: default; }
+.pager .where { font-variant-numeric: tabular-nums; }
+.pager.pager-top { padding: 2px 2px 9px; border-bottom: 1px solid var(--line); margin-bottom: 9px; }
+/* The feed's upper pager rides in the toolbar rather than owning a row of its own, which
+   was thirty-six pixels of mostly empty rule above every screenful of requests. */
+.pager.pager-inline { padding: 0; margin-left: auto; gap: 8px; }
+.pager.pager-inline .size { margin-left: 0; }
+.pager .step { min-width: 30px; font-size: 15px; line-height: 1; padding: 3px 8px 5px; }
+.pager .size { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.pager .size select {
+  font: inherit; padding: 3px 6px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+}
+.pager .held { color: var(--warn-text); }
 .tile.good .v { color: var(--good-text); }
 .tile.warn .v { color: var(--warn-text); }
 .tile.crit .v { color: var(--crit-text); }
@@ -320,7 +376,7 @@ main { padding: 18px 20px 64px; max-width: 1680px; margin: 0 auto; }
    the page header, where they were always meant to. */
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow: clip; }
 .panel > h2 {
-  margin: 0; padding: 12px 15px; font-size: 12px; font-weight: 620; color: var(--muted);
+  margin: 0; padding: 9px 14px; font-size: 11.5px; font-weight: 620; color: var(--muted);
   text-transform: uppercase; letter-spacing: .055em; border-bottom: 1px solid var(--line);
   display: flex; align-items: center; gap: 10px;
 }
@@ -332,6 +388,17 @@ main { padding: 18px 20px 64px; max-width: 1680px; margin: 0 auto; }
    Embedded in a 320px sidebar on a 1280px screen the media query never fired, the second
    column held its 280px minimum, and the feed was squeezed to twenty-two pixels. */
 .stack { container: dash / inline-size; }
+/* A grid item's min-width is auto, so a panel wrapping a wide table refuses to shrink and
+   pushes the whole document sideways instead — which is what the Actors screen did under
+   about 600px, where the table is widest and the viewport narrowest. The .two grid already
+   says minmax(0, ...) for this reason; .stack needs the same permission. With it the panel
+   shrinks and the scroller inside it does its job. */
+.stack > * { min-width: 0; }
+/* Numeric columns shrink to their contents, so the width goes to the two columns that
+   carry text — the actor and what is known about it. Six counters of one or two digits
+   were each taking about a hundred pixels while the State column was squeezed against the
+   buttons. Same trick the feed's time column already uses. */
+#view-actors th.num, #view-actors td.num { width: 1%; white-space: nowrap; }
 .two { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.9fr) minmax(280px, 1fr); align-items: start; }
 .grid3 { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 @container dash (max-width: 1080px) { .two { grid-template-columns: minmax(0, 1fr); } }
@@ -411,7 +478,7 @@ thead th {
   text-align: left; font-size: 11px; font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: .05em; padding: 9px 15px; border-bottom: 1px solid var(--line);
 }
-tbody td { padding: 9px 15px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+tbody td { padding: 7px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
 /* Narrow, quiet, and never the reason a row wraps: the time is for scanning down, not
    for reading across. */
 tbody td.when { color: var(--muted); font-size: 11.5px; white-space: nowrap; width: 1%; padding-right: 4px; }
@@ -798,7 +865,7 @@ export const DASHBOARD_MARKUP = String.raw`
 
     <div class="two">
       <section class="panel feed-panel">
-        <h2>Requests <span class="sub" id="feed-count"></span><span class="sub win" id="feed-window"></span><span class="sub warn-text" id="feed-skipped" hidden></span></h2>
+        <h2>Requests <span class="sub" id="feed-count"></span><span class="sub win" id="feed-window"></span><span class="sub warn-text" id="feed-skipped" hidden></span><button class="sub load-skipped" id="feed-load-skipped" type="button" hidden>Load them</button></h2>
         <div class="toolbar">
           <div class="filters" id="filters"></div>
           <div class="search">
@@ -806,6 +873,7 @@ export const DASHBOARD_MARKUP = String.raw`
             <kbd aria-hidden="true">/</kbd>
           </div>
           <button id="feed-export" title="Download every request matching this filter as replay JSONL">Export</button>
+          <div class="pager pager-inline" id="feed-pager-top" hidden></div>
         </div>
         <div class="feed-scroll">
         <table>
@@ -817,6 +885,7 @@ export const DASHBOARD_MARKUP = String.raw`
           <tbody id="rows"></tbody>
         </table>
         </div>
+        <div class="pager" id="feed-pager" hidden></div>
         <div class="empty" id="empty">Nothing assessed yet. Send some traffic through the handler and it appears here within a moment.</div>
       </section>
 
@@ -865,6 +934,7 @@ export const DASHBOARD_MARKUP = String.raw`
       <div class="note" id="actors-note">Everyone the engine is currently remembering, busiest first — a far larger
          population than the feed's ring, which holds requests rather than clients. This is
          what <code>cadence</code>, <code>crawl-breadth</code> and <code>rate-anomaly</code> are reading.</div>
+      <div class="pager pager-top" id="actors-pager-top" hidden></div>
       <div class="feed-scroll">
         <table>
           <thead>
@@ -876,6 +946,7 @@ export const DASHBOARD_MARKUP = String.raw`
           <tbody id="actor-rows"></tbody>
         </table>
       </div>
+      <div class="pager" id="actors-pager" hidden></div>
       <div class="empty" id="actors-empty" hidden>Nothing in the registry yet.</div>
     </section>
   </div>

@@ -440,8 +440,49 @@ function start(): void {
   if (SECTIONS.feed) reflectFilterButtons();
   showTab(url.tab, { replace: true });
 
-  void loadInitialSnapshot();
+  suspendScrollAnchoring();
+  // Settled when the snapshot that draws the counters has actually been rendered, rather
+  // than a couple of frames after start-up. The counters are the tallest thing script puts
+  // above the feed and they wait on a round trip, so a frame count was measuring the wrong
+  // thing and the page still opened scrolled.
+  void loadInitialSnapshot().finally(settleScrollAnchoring);
   connectStream();
+}
+
+/**
+ * Lets the page finish drawing itself before the browser starts defending the scroll
+ * position.
+ *
+ * The counters, the filter chips and the pager are all built by script after the document
+ * has laid out, which inserts a few hundred pixels above the feed. Scroll anchoring reads
+ * that as "content appeared above what you were looking at" and scrolls down by the same
+ * amount to compensate — so on a window narrow enough for the counter row to wrap, the
+ * dashboard opened with its own counters already off the top of the screen.
+ *
+ * Off for the first render, then back on, rather than off for good: the feed puts new
+ * requests at the *top*, and anchoring is what keeps somebody's place while they read a
+ * list that is growing above them.
+ */
+function htmlElement(): HTMLElement | undefined {
+  const root = rootNode();
+  return root instanceof Document ? root.documentElement : undefined;
+}
+
+function suspendScrollAnchoring(): void {
+  htmlElement()?.classList.add("settling");
+}
+
+function settleScrollAnchoring(): void {
+  const html = htmlElement();
+  if (html === undefined) return;
+  // Two frames after the snapshot: its own render, and the layout that follows. A third
+  // was measured and changed nothing. What remains is about fifteen pixels on a narrow
+  // window — the counters are fully clear of the header, which is what mattered.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      html.classList.remove("settling");
+    });
+  });
 }
 
 start();

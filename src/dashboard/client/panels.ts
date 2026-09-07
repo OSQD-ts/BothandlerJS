@@ -4,7 +4,9 @@ import { aggregate, oldestAt, state } from "./store.js";
 import { drawBars, pairs } from "./bars.js";
 import { clockTime, ms, n, pct, rangeLabel, uptime, windowLabel } from "./format.js";
 import { provenBots } from "./outcome.js";
+import { app } from "./app.js";
 import type { Aggregates } from "./store.js";
+import type { TabName } from "./types.js";
 
 /**
  * The counter tiles.
@@ -15,6 +17,12 @@ import type { Aggregates } from "./store.js";
  * every incoming request for numbers that could not have moved.
  */
 let paintedSnapshot: unknown;
+
+/** A screen a counter tile can send you to. */
+interface Destination {
+  tab: TabName;
+  label: string;
+}
 
 export function drawTiles(force = false): void {
   // The tiles are the statistics section's, and `applySections` removes the node when
@@ -44,27 +52,43 @@ export function drawTiles(force = false): void {
   // logged-in audience reported all of them as proven bots. See `provenBots`.
   const provenBotCount = provenBots(metrics.verdicts);
 
-  const tiles: Array<[string, string, string, string]> = [
-    ["", n(total), "Requests", "since start"],
-    ["proven", n(provenBotCount), "Proven bots", `${pct(provenBotCount, total)} of traffic`],
-    ["warn", n(metrics.verdicts["suspected-bot"]), "Suspected", "never denied on this alone"],
-    ["", n(unremarkable), "Unremarkable", `${pct(unremarkable, total)} of traffic`],
-    ["warn", n(metrics.downgrades), "Guard stops", metrics.downgrades > 0 ? "rules asking for more than the evidence" : "no rule overreached"],
-    ["crit", n(denied), "Denied", `${pct(denied, total)} of traffic`],
+  // A tile that counts what a screen shows can take you to it. Only where that screen
+  // exists: `registry` off means there is no Actors tab to reach, and a control that
+  // navigates nowhere is worse than no control.
+  const actors: Destination | undefined = SECTIONS.registry ? { tab: "actors", label: "Actors" } : undefined;
+
+  const tiles: Array<[string, string, string, string, Destination | undefined]> = [
+    ["", n(total), "Requests", "since start", undefined],
+    ["proven", n(provenBotCount), "Proven bots", `${pct(provenBotCount, total)} of traffic`, undefined],
+    ["warn", n(metrics.verdicts["suspected-bot"]), "Suspected", "never denied alone", undefined],
+    ["", n(unremarkable), "Unremarkable", `${pct(unremarkable, total)} of traffic`, undefined],
+    ["warn", n(metrics.downgrades), "Guard stops", metrics.downgrades > 0 ? "a rule over-reached" : "no rule overreached", undefined],
+    ["crit", n(denied), "Denied", `${pct(denied, total)} of traffic`, undefined],
     [
       "",
       n(mitigated),
       "Mitigated",
-      metrics.challenges.issued > 0 ? `${n(metrics.challenges.solved)} of ${n(metrics.challenges.issued)} challenges solved` : "challenged, limited or delayed",
+      metrics.challenges.issued > 0 ? `${n(metrics.challenges.solved)} of ${n(metrics.challenges.issued)} challenges solved` : "challenged or limited",
+      undefined,
     ],
-    ["good", n(served), "Served", `${pct(served, total)} of traffic`],
-    ["", n(metrics.actorsTracked), "Actors tracked", "in the registry now"],
+    ["good", n(served), "Served", `${pct(served, total)} of traffic`, undefined],
+    ["", n(metrics.actorsTracked), "Actors tracked", "in the registry now", actors],
   ];
-  for (const [kind, value, key, sub] of tiles) {
-    const tile = el("div", `tile ${kind}`);
+  for (const [kind, value, key, sub, goes] of tiles) {
+    // A real button where it navigates, so it is in the tab order, answers Enter and
+    // Space, and is announced as something to press — none of which a div with a click
+    // handler gets, and all of which somebody expects from a thing that moves the page.
+    const tile = goes === undefined ? el("div", `tile ${kind}`) : el("button", `tile ${kind} go`);
     tile.appendChild(el("div", "v tnum", value));
     tile.appendChild(el("div", "k", key));
     tile.appendChild(el("div", "s", sub));
+    if (goes !== undefined) {
+      (tile as HTMLButtonElement).type = "button";
+      // Appended rather than an `aria-label`, which would replace the count and the
+      // caption a screen reader is here to hear. This adds to them.
+      tile.appendChild(el("span", "sr-only", `. Show the ${goes.label} screen`));
+      tile.addEventListener("click", () => app.showTab(goes.tab, { replace: false }));
+    }
     box.appendChild(tile);
   }
 }
