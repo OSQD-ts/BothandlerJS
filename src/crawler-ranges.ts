@@ -107,6 +107,50 @@ const MAX_BYTES = 4 * 1024 * 1024;
  * an error rather than a guess.
  */
 export async function fetchCrawlerRanges(source: PublishedRangeSource, options: RefreshOptions = {}): Promise<string[]> {
+  return fetchPrefixes(source, options, { maxPrefixes: MAX_PREFIXES, subject: `a crawler's address list`, id: source.id });
+}
+
+/** Where a reputation or hosting-provider address list is published. */
+export interface AddressListSource {
+  /** The range set to install it as. `denylist` blocks; `datacenter` corroborates. */
+  id: "denylist" | "datacenter" | "allowlist";
+  url: string;
+}
+
+export interface AddressListOptions extends RefreshOptions {
+  /** Entries to accept before refusing the list. Default 100,000. */
+  maxPrefixes?: number;
+}
+
+/**
+ * Fetches a published address list — a reputation feed, a hosting provider's own ranges.
+ *
+ * The same hardened path as {@link fetchCrawlerRanges}: HTTPS only, a size cap, comments
+ * stripped, JSON `prefixes` documents or one prefix per line, and a list that is empty,
+ * oversized or contains a block big enough to matter is refused **whole** rather than in
+ * part. It is a separate entry point because the limits differ — a reputation feed is
+ * thousands of entries where a crawler's is hundreds, and calling one a crawler's list in
+ * an error message helps nobody.
+ *
+ * It does not install anything. Hand the result to `updateRanges("denylist", …)` when you
+ * are ready, which is the same two-step the crawler path takes and for the same reason:
+ * fetching is the part that can fail, and installing is the part that changes behaviour.
+ *
+ * **A denylist entry is `certain`.** It does not corroborate anything — it decides, and it
+ * blocks people. A feed is somebody else's judgement about an address, refreshed on
+ * somebody else's schedule, and an address that was a bot last month may be a customer's
+ * home connection this month. Read what you are subscribing to, and prefer `datacenter`
+ * for anything you have not decided about yourself.
+ */
+export async function fetchAddressList(source: AddressListSource, options: AddressListOptions = {}): Promise<string[]> {
+  return fetchPrefixes(source, options, { maxPrefixes: options.maxPrefixes ?? 100_000, subject: "an address list", id: source.id });
+}
+
+async function fetchPrefixes(
+  source: { id: string; url: string },
+  options: RefreshOptions,
+  limits: { maxPrefixes: number; subject: string; id: string },
+): Promise<string[]> {
   const url = new URL(source.url);
   // Plain HTTP would let anything between here and the publisher decide which addresses
   // this library treats as verified crawlers.
@@ -126,7 +170,7 @@ export async function fetchCrawlerRanges(source: PublishedRangeSource, options: 
   if (text.length > MAX_BYTES) throw new Error(`the list is ${Math.round(text.length / 1024)} kB, which is not a list of prefixes`);
 
   const prefixes = text.trimStart().startsWith("{") ? fromJson(text) : fromLines(text);
-  return validate(prefixes, source.id);
+  return validate(prefixes, limits);
 }
 
 function fromJson(text: string): string[] {
@@ -143,7 +187,11 @@ function fromJson(text: string): string[] {
 function fromLines(text: string): string[] {
   return text
     .split("\n")
-    .map((line) => line.split("#")[0]?.trim() ?? "")
+    // Both comment markers. Crawler lists use `#`; the reputation feeds use `;` — Spamhaus
+    // DROP puts its whole header and every per-entry note behind one — and a parser that
+    // knows only about `#` reads those as addresses and then drops them as unparseable,
+    // which looks identical to a feed that half-arrived.
+    .map((line) => (line.split("#")[0] ?? "").split(";")[0]?.trim() ?? "")
     .filter((line) => line !== "");
 }
 
@@ -156,9 +204,9 @@ function fromLines(text: string): string[] {
  * whole. Partial trust is the wrong shape for this: the operation replaces a set, and a
  * set that half-arrived is worse than the one already installed.
  */
-function validate(prefixes: readonly string[], id: string): string[] {
+function validate(prefixes: readonly string[], limits: { maxPrefixes: number; subject: string; id: string }): string[] {
   if (prefixes.length === 0) throw new Error("the list is empty");
-  if (prefixes.length > MAX_PREFIXES) throw new Error(`${prefixes.length} prefixes is not a crawler's address list`);
+  if (prefixes.length > limits.maxPrefixes) throw new Error(`${prefixes.length} prefixes is not ${limits.subject}`);
 
   const accepted: string[] = [];
   for (const prefix of prefixes) {
@@ -166,7 +214,7 @@ function validate(prefixes: readonly string[], id: string): string[] {
     if (cidr === undefined || cidr === null) continue;
     const isV4 = cidr.bytes.length === 4;
     if (cidr.prefix < (isV4 ? MAX_V4_BLOCK : MAX_V6_BLOCK)) {
-      throw new Error(`"${prefix}" covers more of the internet than any crawler owns — refusing the whole list rather than verifying strangers`);
+      throw new Error(`"${prefix}" covers more of the internet than any published list should — refusing the whole list rather than acting on it`);
     }
     accepted.push(prefix);
   }
@@ -174,7 +222,7 @@ function validate(prefixes: readonly string[], id: string): string[] {
   // A last sanity check through the real thing, so a list that would not have loaded
   // anyway fails here rather than inside the handler.
   const set = new IpRangeSet(accepted);
-  if (set.size === 0) throw new Error(`nothing in the list loaded for ${id}`);
+  if (set.size === 0) throw new Error(`nothing in the list loaded for ${limits.id}`);
   return accepted;
 }
 
