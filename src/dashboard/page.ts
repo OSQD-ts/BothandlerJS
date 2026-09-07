@@ -298,7 +298,10 @@ button[disabled] { opacity: .5; cursor: default; }
 .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--s1); }
 
 /* --- layout ------------------------------------------------------------- */
-main { padding: 18px 20px 64px; max-width: 1680px; margin: 0 auto; }
+/* The top padding is the gap under the sticky header. At 18px the counter row sat almost
+   against the header's border and read as part of it; the tiles carry their own border, so
+   two lines were meeting with nothing between them. */
+main { padding: 28px 20px 64px; max-width: 1680px; margin: 0 auto; }
 .stack { display: grid; gap: 16px; }
 /* Everything above the feed is drawn by script once the first snapshot arrives, which
    inserts a block of content above what is already laid out. The browser's scroll
