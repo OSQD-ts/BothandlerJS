@@ -2,9 +2,10 @@ import { $, byId, clear, el } from "./dom.js";
 import { SECTIONS } from "./boot.js";
 import { actorActions, isConfirming } from "./actions.js";
 import { app } from "./app.js";
-import { clockTime, n } from "./format.js";
+import { clockStamp, n } from "./format.js";
 import { getJson } from "./api.js";
 import { setSearch, state } from "./store.js";
+import { renderPager } from "./pager.js";
 import type { ActorRow } from "./types.js";
 
 /**
@@ -34,7 +35,7 @@ let timer: ReturnType<typeof setInterval> | undefined;
 export async function loadActors(): Promise<void> {
   if (!SECTIONS.registry) return;
   try {
-    const body = await getJson<ActorsBody>("/api/actors?limit=100");
+    const body = await getJson<ActorsBody>(`/api/actors?limit=${state.actorsPageSize}&offset=${state.actorsPage * state.actorsPageSize}`);
     state.actors = body.actors;
     state.actorsTracked = body.tracked;
     drawActors();
@@ -55,6 +56,57 @@ export function trackActors(): void {
   }, 4000);
 }
 
+/** Page sizes the Actors table offers. The endpoint will not serve more than 200 at once. */
+const ACTORS_PAGE_SIZES = [25, 50, 100, 200] as const;
+
+/**
+ * The pager, above the table and below it.
+ *
+ * Paged on the server by offset, because the registry holds far more clients than the
+ * feed's ring holds requests — `maxActors` of them — and the point of this screen is the
+ * population the feed cannot show. Without paging the dashboard could only ever see the
+ * busiest handful.
+ *
+ * The end of the list is "a short page came back". There is no count of how many rank
+ * below the current page that is cheaper than asking for it, and asking in order to grey
+ * out a button is not worth a request.
+ */
+function drawActorsPager(full: boolean): void {
+  const page = state.actorsPage;
+  const hidden = page === 0 && !full;
+  const from = page * state.actorsPageSize + 1;
+  const model = {
+    page,
+    from,
+    to: from + state.actors.length - 1,
+    total: state.actorsTracked,
+    atStart: page === 0,
+    atEnd: !full,
+    go: (next: number): void => {
+      state.actorsPage = Math.max(0, next);
+      void loadActors();
+    },
+    size: {
+      current: state.actorsPageSize,
+      choices: ACTORS_PAGE_SIZES,
+      set: (next: number): void => {
+        state.actorsPageSize = next;
+        state.actorsPage = 0;
+        void loadActors();
+      },
+    },
+  };
+  for (const [id, withSize] of [
+    ["actors-pager-top", true],
+    ["actors-pager", false],
+  ] as const) {
+    const host = $(id);
+    host.hidden = hidden;
+    if (hidden) clear(host);
+    else renderPager(host, model, { withSize });
+  }
+}
+
 export function drawActors(): void {
   if (!SECTIONS.registry) return;
   // A repaint replaces every button in the table, including a confirmation somebody is
@@ -65,6 +117,7 @@ export function drawActors(): void {
 
   const actors = state.actors;
   $("actors-count").textContent = `${n(actors.length)} shown · ${n(state.actorsTracked)} tracked`;
+  drawActorsPager(actors.length === state.actorsPageSize);
   byId<HTMLElement>("actors-empty").hidden = actors.length > 0;
 
   for (const actor of actors) {
@@ -93,7 +146,7 @@ export function drawActors(): void {
     const tags: string[] = [];
     if (actor.cleared) tags.push("cleared as human");
     if (actor.distinctUserAgents > 1) tags.push(`${actor.distinctUserAgents} User-Agents`);
-    tags.push(`first seen ${clockTime(actor.firstSeen)}`);
+    tags.push(`first seen ${clockStamp(actor.firstSeen)}`);
     stateCell.appendChild(el("div", "tagline", tags.join(" · ")));
     row.appendChild(stateCell);
 

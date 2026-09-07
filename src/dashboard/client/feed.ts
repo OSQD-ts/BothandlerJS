@@ -1,5 +1,7 @@
 import { $, byId, clear, cssEscape, el, rootNode } from "./dom.js";
-import { FEED_LIMIT, matchingCount, setSearch, state, visibleRows } from "./store.js";
+import { feedPage, goToFeedPage, ingest, matchingCount, matchingRows, resetPaging, setSearch, sortRows, state } from "./store.js";
+import { getJson } from "./api.js";
+import { renderPager } from "./pager.js";
 import { SECTIONS } from "./boot.js";
 import { app, download, today, toast } from "./app.js";
 import { clockTime, n } from "./format.js";
@@ -32,6 +34,16 @@ interface Rendered {
 const rendered = new Map<string, Rendered>();
 
 export function initFeed(): void {
+  const loadThem = byId<HTMLButtonElement>("feed-load-skipped");
+  loadThem.addEventListener("click", () => {
+    // Disabled while it is in flight, because the fetch is the whole ring and a second
+    // press would ask for it again.
+    loadThem.disabled = true;
+    void loadSkipped().finally(() => {
+      loadThem.disabled = false;
+    });
+  });
+
   const filters = $("filters");
   for (const [name, label] of FILTERS) {
     const button = el("button", null, label);
@@ -39,6 +51,7 @@ export function initFeed(): void {
     button.dataset["filter"] = name;
     button.addEventListener("click", () => {
       state.filter = name;
+      resetPaging();
       for (const other of Array.from(filters.children)) other.setAttribute("aria-pressed", "false");
       button.setAttribute("aria-pressed", "true");
       app.syncUrl();
@@ -60,7 +73,7 @@ export function initFeed(): void {
   const exportShown = byId<HTMLButtonElement>("feed-export");
   exportShown.hidden = !SECTIONS.evidence;
   exportShown.addEventListener("click", () => {
-    const rows = visibleRows(Number.POSITIVE_INFINITY);
+    const rows = matchingRows();
     if (rows.length === 0) {
       toast("warn", "Nothing to export", "No request in the window matches this filter.");
       return;
@@ -81,9 +94,97 @@ export function reflectFilterButtons(): void {
   if (search.value !== state.search) search.value = state.search;
 }
 
+/**
+ * Fetches the entries this viewer never received, and merges them.
+ *
+ * They were never lost. The rate cap keeps a burst off the *stream* and the lag guard
+ * drops frames a slow socket cannot take, but both leave the ring alone — and the opening
+ * replay is droppable too, so a first load of a busy dashboard can arrive with most of the
+ * backlog missing. `/api/feed` serves that ring whole, and `ingest` is keyed on the request
+ * id, so merging it is idempotent: what is already held is refreshed, what is missing is
+ * added.
+ *
+ * On demand rather than on a timer. Skips happen exactly when the origin is busiest, and a
+ * dashboard that answered every skip by re-fetching the whole ring would be a load
+ * amplifier pointed at the process it is meant to be watching — which is the thing
+ * `maxEventsPerSecond` exists to prevent.
+ */
+export async function loadSkipped(): Promise<void> {
+  const before = state.rows.length;
+  try {
+    const body = await getJson<{ entries: DashboardEntry[] }>("/api/feed");
+    for (const entry of body.entries) ingest(entry);
+    sortRows();
+  } catch {
+    toast("bad", "Could not load them", "The dashboard did not answer. The entries are still in the window; try again.");
+    return;
+  }
+  // What the badge counted has now been asked for, whether or not the ring still had all
+  // of it — anything it no longer holds is gone and saying so forever helps nobody.
+  state.caughtUp = (state.snapshot?.skipped ?? 0) + state.laggedDrops;
+  const added = state.rows.length - before;
+  resetPaging();
+  app.drawNow();
+  toast(
+    added > 0 ? "ok" : "warn",
+    added > 0 ? `Loaded ${n(added)}` : "Nothing left to load",
+    added > 0 ? "They are in the feed now, in the order they happened." : "The window no longer holds them; the ring had already rotated past.",
+  );
+}
+
+/** Page sizes the feed offers. */
+const FEED_PAGE_SIZES = [25, 50, 100, 200] as const;
+
+/**
+ * The pager, above the table and below it.
+ *
+ * Hidden outright on a single page, because a control that can only say "1 of 1" is
+ * furniture — and with it the size chooser goes too, which is the one thing lost by that
+ * rule and not worth a permanent row of chrome to keep.
+ */
+function drawPager(paged: { page: number; pages: number; total: number }): void {
+  const size = state.feedPageSize;
+  const hidden = paged.pages <= 1;
+  const model = {
+    page: paged.page,
+    from: paged.page * size + 1,
+    to: Math.min(paged.total, (paged.page + 1) * size),
+    total: paged.total,
+    atStart: paged.page === 0,
+    atEnd: paged.page >= paged.pages - 1,
+    ...(paged.page > 0 ? { held: "held while you read" } : {}),
+    go: (page: number): void => {
+      goToFeedPage(page);
+      app.drawNow();
+    },
+    size: {
+      current: size,
+      choices: FEED_PAGE_SIZES,
+      set: (next: number): void => {
+        state.feedPageSize = next;
+        // Back to the front: page four of fifty is not page four of two hundred, and
+        // keeping the number while changing what it counts moves the reader somewhere
+        // they did not ask to go.
+        resetPaging();
+        app.drawNow();
+      },
+    },
+  };
+  for (const [id, withSize] of [
+    ["feed-pager-top", true],
+    ["feed-pager", false],
+  ] as const) {
+    const host = $(id);
+    host.hidden = hidden;
+    if (hidden) clear(host);
+    else renderPager(host, model, { withSize });
+  }
+}
+
 export function drawFeed(): void {
   const body = byId<HTMLTableSectionElement>("rows");
-  const shown = visibleRows();
+  const paged = feedPage(state.feedPageSize);
+  const shown = paged.rows;
 
   // Keyed reconciliation against what is already in the table.
   //
@@ -132,8 +233,10 @@ export function drawFeed(): void {
   const total = state.rows.length;
   const matching = matchingCount();
   $("empty").hidden = total > 0;
-  $("feed-count").textContent =
-    matching === total ? `${n(total)} in this window` : `${n(matching)} of ${n(total)}${matching > FEED_LIMIT ? ` · showing ${n(FEED_LIMIT)}` : ""}`;
+  // No "showing 300" any more: the pager reaches the rest, so the count says what is in
+  // the window and the pager says where in it you are.
+  $("feed-count").textContent = matching === total ? `${n(total)} in this window` : `${n(matching)} of ${n(total)}`;
+  drawPager(paged);
   // `#feed-window` carries the `win` class, so `updateWindowLabels` fills it — one
   // owner for a label that appears on eight panels.
 
@@ -141,10 +244,15 @@ export function drawFeed(): void {
   // are in the preview, in the export and in whatever a reconnect replays — but they
   // were kept off the stream to stop a busy origin handing every open browser a
   // megabyte a second.
-  const skipped = (state.snapshot?.skipped ?? 0) + state.laggedDrops;
+  // Minus what has already been fetched back: the server's own count only ever grows, so
+  // without this the badge goes on reporting a gap that has been filled.
+  const skipped = Math.max(0, (state.snapshot?.skipped ?? 0) + state.laggedDrops - state.caughtUp);
   const note = $("feed-skipped");
   note.hidden = skipped === 0;
   note.textContent = `${n(skipped)} not streamed`;
+  // The badge used to state the gap and leave it there. It is now next to the button that
+  // closes it.
+  byId<HTMLButtonElement>("feed-load-skipped").hidden = skipped === 0;
   note.title =
     state.laggedDrops > 0
       ? `${n(state.laggedDrops)} were skipped because this connection could not keep up, and the rest by the rate cap. All of them are still in the window, the preview and the export.`

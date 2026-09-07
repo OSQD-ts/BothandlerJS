@@ -315,7 +315,7 @@ export class ActorRegistry {
    * A read, and only a read: it neither records a request against an actor nor moves
    * one up the LRU, so watching the list cannot change what it lists.
    */
-  top(limit: number, now: number): ActorSummary[] {
+  top(limit: number, now: number, offset = 0): ActorSummary[] {
     const summaries = this.actors.values().map((state) => {
       const cadence = state.intervalStats();
       return {
@@ -329,7 +329,13 @@ export class ActorRegistry {
       };
     });
     summaries.sort((a, b) => b.requests - a.requests);
-    return summaries.slice(0, Math.max(0, limit));
+    // `offset` is what lets a dashboard page past the busiest few. The sort is total and
+    // stable for a given snapshot, so a page boundary falls in the same place twice —
+    // but the underlying counts move, so paging deep into a live registry can still show
+    // an actor twice or not at all. That is inherent in ranking something that changes,
+    // not something an offset can fix.
+    const from = Math.max(0, offset);
+    return summaries.slice(from, from + Math.max(0, limit));
   }
 
   forget(key: string): void {

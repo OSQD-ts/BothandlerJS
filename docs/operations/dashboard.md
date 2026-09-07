@@ -29,6 +29,12 @@ User-Agent, the verdict, the score, the action and the rule that chose it. Filte
 proven, suspected, human, guard stops, denied, mitigated or served; or type into the
 search box.
 
+The feed pages, fifty requests at a time. The newest page follows the stream; stepping
+back holds the list still while you read it — a feed that renumbers itself under somebody
+paging through it cannot be read — and says **held while you read** so the stillness is
+not mistaken for quiet. Requests keep arriving and keep being counted; they are at the
+front when you return to it.
+
 The search takes fields, and negation, because the two cases people actually reach for
 it are an address that also appears inside a User-Agent and a path that is a prefix of
 ten others:
@@ -107,6 +113,17 @@ this screen can answer. Requests, requests per minute, distinct paths, cadence
 regularity (near zero is a metronome, which no person is), prior confirmations, and
 whether they hold clearance. **In feed** sends one to the live feed as an `actor:` filter,
 which makes it a shareable URL like every other view.
+
+This screen pages too, twenty-five at a time, busiest first. The registry holds far more
+clients than the feed's ring holds requests, and paging is what reaches them: the feed
+already shows you what is loudest, and the population behind it is the reason this screen
+exists. Ranking something that is still moving means a client can shift between pages
+while you read; the order is a snapshot of a live list, not a stable index.
+
+The **Actors tracked** counter above the tab strip is the way in: it is a button, so
+pressing it — or reaching it with the keyboard and pressing Enter — opens this screen.
+Where the `registry` section is switched off there is no Actors screen to open, and the
+counter stays an ordinary tile rather than offering to go somewhere that does not exist.
 
 **Statistics** — a traffic timeline (1m/5m/15m/1h) split by outcome, which says how
 much history the window actually holds rather than drawing a flat line through time it
@@ -382,6 +399,15 @@ capped at `maxEventsPerSecond` (100 by default, `0` to remove it). What is cappe
 *stream*: the ring keeps everything, so the preview, the export and anyone reconnecting
 still see every request, and the feed says how many were not streamed. A thinned feed
 must never look like a quiet one.
+
+**And it does not stop at saying so.** Next to that count is **Load them**, which fetches
+the ring and merges what is missing back into the feed, in the order it happened. Nothing
+was ever lost — the cap and the lag guard both keep entries off the *stream* and leave the
+ring alone — so this is the same data arriving by a different road. It is a button rather
+than something automatic on purpose: entries are skipped exactly when the origin is
+busiest, and a dashboard that answered every skip by re-fetching the whole ring would be a
+load amplifier pointed at the process it is watching, which is what the cap exists to
+prevent.
 
 **A viewer that stops reading is not allowed to cost you memory.** A socket that has
 stopped draining — a laptop that slept with the tab open, a phone in a tunnel, a proxy

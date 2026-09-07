@@ -374,7 +374,11 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
       case "/api/actors": {
         if (!sections.registry) return sectionOff(response, "registry");
         const limit = Math.min(MAX_ACTORS_LISTED, Math.max(1, Number(url.searchParams.get("limit") ?? 50) || 50));
-        const actors = handler.registry.top(limit, handler.config.clock.now()).map((actor) => ({
+        // Paging, so a dashboard can reach past the busiest `limit` actors rather than
+        // being told they are all there is. Clamped like the limit: an offset from a
+        // query string is a number somebody typed.
+        const offset = Math.max(0, Math.floor(Number(url.searchParams.get("offset") ?? 0) || 0));
+        const actors = handler.registry.top(limit, handler.config.clock.now(), offset).map((actor) => ({
           ...actor,
           key: maskIp ? (networkKey(actor.key) ?? actor.key) : actor.key,
         }));
