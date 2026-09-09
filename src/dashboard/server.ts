@@ -432,7 +432,7 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
           send(response, 400, "application/json; charset=utf-8", JSON.stringify({ error: body.error }));
           return;
         }
-        const payload = body.value as { key?: unknown; action?: unknown; forMs?: unknown } | null;
+        const payload = body.value as { key?: unknown; action?: unknown; forMs?: unknown; label?: unknown } | null;
         const key = typeof payload?.key === "string" ? payload.key.slice(0, 200) : "";
         const action = payload?.action;
         if (key === "") {
@@ -444,8 +444,13 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
         } else if (action === "clear") {
           const forMs = typeof payload?.forMs === "number" && Number.isFinite(payload.forMs) ? Math.min(24 * 60 * 60_000, Math.max(0, payload.forMs)) : DEFAULT_CLEARANCE_MS;
           handler.clearActor(key, forMs, { by });
+        } else if (action === "label") {
+          // A label is a note for whoever reads this next, and nothing in detection reads
+          // it — so it is gated with the other actor controls but cannot change a verdict.
+          const label = typeof payload?.label === "string" ? payload.label : undefined;
+          handler.labelActor(key, label, { by });
         } else {
-          sendError(response, 400, 'Expected `action` to be "forget" or "clear".');
+          sendError(response, 400, 'Expected `action` to be "forget", "clear" or "label".');
           return;
         }
         send(response, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true }));

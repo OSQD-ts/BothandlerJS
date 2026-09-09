@@ -17,10 +17,11 @@ import type { RedisLike } from "../src/stores/redis.js";
 /**
  * Redis, in memory, honestly.
  *
- * Written against the same five commands `RedisLike` declares, including the two
+ * Written against the same four commands `RedisLike` declares, including the two
  * behaviours the adapter's comments turn on: `SET … NX` returns `null` when the key
- * exists, and `SET` without `NX` overwrites. A double that returned `"OK"` for both
- * would agree with a broken store as readily as a correct one.
+ * exists — leaving its value and its lifetime alone — and `SET` without `NX`
+ * overwrites. A double that returned `"OK"` for both would agree with a broken store as
+ * readily as a correct one.
  */
 function fakeRedis(): RedisLike & { readonly keys: Map<string, { value: string; expiresAt: number | undefined }>; readonly calls: string[] } {
   const keys = new Map<string, { value: string; expiresAt: number | undefined }>();
@@ -33,12 +34,6 @@ function fakeRedis(): RedisLike & { readonly keys: Map<string, { value: string; 
       const next = Number(keys.get(key)?.value ?? "0") + 1;
       keys.set(key, { value: String(next), expiresAt: keys.get(key)?.expiresAt });
       return next;
-    },
-    async pexpire(key, ms) {
-      calls.push(`pexpire ${key} ${ms}`);
-      const entry = keys.get(key);
-      if (entry) entry.expiresAt = ms;
-      return 1;
     },
     async set(key, value, _mode, ttl, condition) {
       calls.push(`set ${key} ${condition ?? ""}`.trim());
@@ -74,11 +69,53 @@ describe("the redis store", () => {
   });
 
   /** Re-arming on every increment turns a fixed window into one that never expires under load. */
-  it("arms the expiry once per window, not once per request", async () => {
+  it("does not let traffic extend the window it is counted in", async () => {
     const client = fakeRedis();
-    const store = new RedisStore(client, { clock: new ManualClock(0) });
-    for (let i = 0; i < 5; i++) await store.increment("a", 60_000);
-    expect(client.calls.filter((call) => call.startsWith("pexpire"))).toHaveLength(1);
+    const clock = new ManualClock(0);
+    const store = new RedisStore(client, { clock });
+    await store.increment("a", 60_000);
+    const armed = [...client.keys.values()][0]?.expiresAt;
+    expect(armed).toBe(60_000);
+
+    for (let i = 0; i < 5; i++) {
+      clock.set(clock.now() + 1_000);
+      await store.increment("a", 60_000);
+    }
+    // Same deadline five requests later. The seed write is conditional, so a busy key
+    // is not a key that keeps pushing its own expiry out ahead of the traffic.
+    expect([...client.keys.values()][0]?.expiresAt).toBe(armed);
+  });
+
+  /** The lifetime is to the end of the bucket, not a full window from whenever it started. */
+  it("arms the expiry to the end of the window rather than a window from now", async () => {
+    const client = fakeRedis();
+    const store = new RedisStore(client, { clock: new ManualClock(59_999) });
+    await store.increment("a", 60_000);
+    expect([...client.keys.values()][0]?.expiresAt).toBe(1);
+  });
+
+  /**
+   * The bug this shape exists to prevent.
+   *
+   * `INCR` then `PEXPIRE` is two commands, and a process killed between them leaves a
+   * counter with no expiry that nothing will ever revisit — the next request is in the
+   * next bucket, under another key. Here the first command lands and the second does
+   * not, which is what that death looks like from inside the store.
+   */
+  it("leaves no key without an expiry when the connection dies mid-increment", async () => {
+    const client = fakeRedis();
+    let budget = 1;
+    const spend = (): boolean => budget-- > 0;
+    const dying: RedisLike = {
+      ...client,
+      incr: (key) => (spend() ? client.incr(key) : Promise.reject(new Error("connection reset"))),
+      set: (key, value, mode, ttl, condition) =>
+        spend() ? client.set(key, value, mode, ttl, condition) : Promise.reject(new Error("connection reset")),
+    };
+
+    await expect(new RedisStore(dying, { clock: new ManualClock(0) }).increment("a", 60_000)).rejects.toThrow("connection reset");
+    expect(client.keys.size, "the one command that landed created a key").toBe(1);
+    expect([...client.keys.values()].every((entry) => entry.expiresAt !== undefined)).toBe(true);
   });
 
   it("keeps separate keys separate", async () => {
@@ -174,6 +211,50 @@ describe("the memory store keeps the same promises", () => {
    * The bound is the point — an unbounded store is a client-controlled memory leak —
    * and the eviction it implies is documented on the class rather than hidden.
    */
+  /**
+   * The three promises below were asserted for the Redis store and not for this one.
+   * Two implementations of one interface drift when each is tested by its own hand-written
+   * block, and this pair had: nine cases against five. The `set` promise is the one that
+   * matters most, because the other implementation got it wrong once — an earlier
+   * `RedisStore.set` passed `NX`, which made every write after the first a silent no-op.
+   */
+  it("overwrites on set, the way the redis store does", async () => {
+    const clock = new ManualClock(1_000_000);
+    const store = new MemoryStore({ clock });
+    await store.set("k", "first", 60_000);
+    await store.set("k", "second", 60_000);
+    expect(await store.get("k")).toBe("second");
+  });
+
+  it("reports a missing key as undefined rather than null", async () => {
+    expect(await new MemoryStore({ clock: new ManualClock(1_000_000) }).get("absent")).toBeUndefined();
+  });
+
+  it("keeps separate keys separate", async () => {
+    const store = new MemoryStore({ clock: new ManualClock(1_000_000) });
+    await store.increment("a", 60_000);
+    await store.increment("a", 60_000);
+    expect(await store.increment("b", 60_000)).toBe(1);
+  });
+
+  /**
+   * Both stores bucket on `Math.floor(now / windowMs)` — absolute time, not time since
+   * the first increment. So a window boundary can fall in the middle of a burst, and two
+   * requests thirty seconds apart can land in different windows. That is deliberate and
+   * shared, and it is worth writing down: it looks like an off-by-one until you notice
+   * the other implementation does exactly the same thing.
+   */
+  it("buckets on absolute time, like the redis store", async () => {
+    const clock = new ManualClock(1_000_000);
+    const store = new MemoryStore({ clock });
+    expect(Math.floor(1_000_000 / 60_000)).toBe(16);
+    expect(await store.increment("w", 60_000)).toBe(1);
+    clock.advance(30_000); // 1,030,000 — bucket 17, a new window despite being 30s later
+    expect(await store.increment("w", 60_000)).toBe(1);
+    clock.advance(40_000); // 1,070,000 — still bucket 17
+    expect(await store.increment("w", 60_000)).toBe(2);
+  });
+
   it("stays bounded when a client sends unbounded distinct keys", async () => {
     const store = new MemoryStore({ maxCounters: 8, clock: new ManualClock(0) });
     for (let i = 0; i < 200; i++) await store.increment(`k${i}`, 60_000);

@@ -16,7 +16,7 @@ The library imports nothing but `node:` builtins, and CI fails if that ever stop
 true. Nothing here can hand your project a transitive advisory, an install script, or a
 version conflict with something you already run.
 
-Redis, if you use it, is your client passed in: `RedisStore` describes the five commands it
+Redis, if you use it, is your client passed in: `RedisStore` describes the four commands it
 needs structurally and imports neither `ioredis` nor `node-redis`.
 
 ```ts
@@ -31,7 +31,7 @@ new BotHandler({ store: new RedisStore(redis) });
 | `@osqd/bothandlerjs` | the engine, detectors, presets, robots, stores, notifiers, challenge, dashboard |
 | `@osqd/bothandlerjs/adapters` | [Express, Fastify, Koa, Fetch](../integration/adapters.md) |
 | `@osqd/bothandlerjs/client` | the browser-side [client signals](../detection/client-signals.md) script |
-| `@osqd/bothandlerjs/corpus` | [`runCorpus`](../testing/corpus.md) and all 526 cases |
+| `@osqd/bothandlerjs/corpus` | [`runCorpus`](../testing/corpus.md) and all 548 cases |
 | `@osqd/bothandlerjs/cli` | the [command line](../testing/cli.md) |
 
 ## Runtimes

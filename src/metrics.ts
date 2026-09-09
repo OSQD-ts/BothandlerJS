@@ -50,6 +50,22 @@ export interface MetricsSnapshot {
   /** How often each detector threw or timed out. */
   detectorFailures: Record<string, number>;
   /**
+   * How often each *shadowed* detector produced evidence, counted separately.
+   *
+   * Separately on purpose: a shadowed detector took no part in any verdict, so folding
+   * its firings into `detectorFirings` would put work into a chart of decisions that
+   * decided nothing. See {@link BotHandlerConfig.shadowDetectors}.
+   */
+  shadowFirings: Record<string, number>;
+  /**
+   * Assessments whose verdict the shadowed detectors would have changed.
+   *
+   * Keyed by the verdict they would have produced, so the number that matters is legible
+   * on its own: `suspected-bot` here, against a `human` count that did not move, is the
+   * shape of a detector about to start challenging people.
+   */
+  shadowChanges: Record<Verdict, number>;
+  /**
    * Time spent inside each detector, when `metrics.perDetectorTiming` is on.
    *
    * Empty otherwise, and empty is the default: timing every detector means two clock
@@ -121,6 +137,8 @@ export class Metrics {
   private readonly detectorFirings = new Map<string, number>();
   private readonly detectorFailures = new Map<string, number>();
   private readonly detectorTimings = new Map<string, { count: number; totalMs: number; maxMs: number }>();
+  private readonly shadowFirings = new Map<string, number>();
+  private readonly shadowChanges = zeroed(VERDICTS);
   private challengesIssued = 0;
   private challengesSolved = 0;
   private challengesRejected = 0;
@@ -161,6 +179,10 @@ export class Metrics {
 
     for (const item of assessment.evidence) bump(this.detectorFirings, item.detector);
     for (const item of assessment.humanEvidence) bump(this.detectorFirings, item.detector);
+    for (const item of assessment.shadowEvidence) bump(this.shadowFirings, item.detector);
+    if (assessment.shadowVerdict !== undefined && assessment.shadowVerdict.verdict !== assessment.verdict) {
+      this.shadowChanges[assessment.shadowVerdict.verdict]++;
+    }
     for (const failure of assessment.failures) bump(this.detectorFailures, failure.detector);
 
     const ms = assessment.durationMs;
@@ -250,6 +272,8 @@ export class Metrics {
       detectorFirings: Object.fromEntries(this.detectorFirings),
       detectorFailures: Object.fromEntries(this.detectorFailures),
       detectorTimings: Object.fromEntries([...this.detectorTimings].map(([id, timing]) => [id, { ...timing }])),
+      shadowFirings: Object.fromEntries(this.shadowFirings),
+      shadowChanges: { ...this.shadowChanges },
       challenges: { issued: this.challengesIssued, solved: this.challengesSolved, rejected: this.challengesRejected },
       clearances: Object.fromEntries(this.clearances),
       challengeRejections: Object.fromEntries(this.challengeRejections),
@@ -305,6 +329,11 @@ export function toPrometheus(snapshot: MetricsSnapshot, options: PrometheusOptio
   counter("downgrades_total", "Terminal actions the safety guard replaced for lack of proof.", [["", snapshot.downgrades]]);
   counter("proven_total", "Assessments resting on proven evidence.", [["", snapshot.proven]]);
   counter("detector_firings_total", "Evidence produced, by detector.", Object.entries(snapshot.detectorFirings).map(([detector, value]) => [`{detector="${escapeLabel(detector)}"}`, value]));
+  const shadowFirings = Object.entries(snapshot.shadowFirings);
+  if (shadowFirings.length > 0) {
+    counter("shadow_firings_total", "Evidence produced by shadowed detectors, which decided nothing.", shadowFirings.map(([detector, value]) => [`{detector="${escapeLabel(detector)}"}`, value]));
+    counter("shadow_verdict_changes_total", "Assessments the shadowed detectors would have moved, by the verdict they would have produced.", Object.entries(snapshot.shadowChanges).map(([verdict, value]) => [`{verdict="${verdict}"}`, value]));
+  }
   counter("detector_failures_total", "Detector errors and timeouts.", Object.entries(snapshot.detectorFailures).map(([detector, value]) => [`{detector="${escapeLabel(detector)}"}`, value]));
   const timings = Object.entries(snapshot.detectorTimings);
   if (timings.length > 0) {

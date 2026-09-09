@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { chromium } from "playwright";
+import { chromium, firefox, webkit } from "playwright";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer } from "node:http";
@@ -22,7 +22,18 @@ import type { DashboardServer } from "../../src/index.js";
  * does not have, and a suite that fails until you run `npx playwright install` is a
  * suite people learn to ignore. `npm run test:browser` runs it; CI runs it in a job
  * that installs the browser first.
+ *
+ * **Which engine.** `BROWSER_ENGINE` picks one — chromium by default, and CI runs all
+ * three. Testing one engine was how a real bug shipped: the tables collapsed their
+ * borders, which stops a sticky `th` sticking in WebKit, so the feed's column headers
+ * scrolled away in Safari while every test here passed. A page this size is mostly CSS,
+ * and CSS is where engines differ; a suite that only ever sees one of them is checking
+ * the half of the page that was never in doubt.
  */
+
+const ENGINES = { chromium, firefox, webkit } as const;
+const ENGINE_NAME = (process.env["BROWSER_ENGINE"] ?? "chromium") as keyof typeof ENGINES;
+const ENGINE = ENGINES[ENGINE_NAME] ?? chromium;
 
 let browser: Browser;
 let dashboard: DashboardServer;
@@ -76,7 +87,7 @@ beforeAll(async () => {
       }),
     );
   }
-  browser = await chromium.launch();
+  browser = await ENGINE.launch();
 }, 120_000);
 
 afterAll(async () => {
@@ -138,6 +149,102 @@ describe("moving between views", () => {
     expect(await tile.evaluate((node) => document.activeElement === node)).toBe(true);
     await page.keyboard.press("Enter");
     await expect.poll(() => page.locator("#view-actors").isVisible()).toBe(true);
+    await page.close();
+  });
+
+  /**
+   * The filter box completes what it accepts.
+   *
+   * The options come from the parser's own field map, so anything offered is something the
+   * language understands — the failure worth guarding against is teaching somebody a
+   * syntax that does not exist.
+   */
+  it("completes a filter term, and then its values", async () => {
+    const page = await open();
+    await page.click("#search");
+    await page.type("#search", "ver");
+    await expect.poll(() => page.locator("#search-suggest li").allTextContents(), { timeout: 10_000 }).toEqual(["verdict:"]);
+
+    // Keyboard alone: down to the option, Enter to take it.
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    expect(await page.inputValue("#search")).toBe("verdict:");
+    // Completing the field leaves the caret where the values are, so they are offered
+    // straight away rather than after another keystroke.
+    await expect.poll(() => page.locator("#search-suggest li").allTextContents()).toContain("verdict:confirmed-bot");
+
+    await page.keyboard.press("Escape");
+    await expect.poll(() => page.locator("#search-suggest").isHidden()).toBe(true);
+    await page.close();
+  });
+
+  /**
+   * `$not` replaces the Exclude button that used to live beside the search box.
+   *
+   * One mechanism rather than two, and it is in the URL like every other narrowing — so
+   * a hidden slice of traffic is now something a colleague can be sent a link to rather
+   * than a setting living in one person's browser.
+   */
+  it("hides traffic with $not, everywhere", async () => {
+    const page = await open();
+    await handler.handle(createFacts({ method: "GET", url: "/health", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.201" }));
+    await page.fill("#search", "path:/health");
+    await expect.poll(() => page.locator("#rows tr.row").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+    // Searching for what was hidden finds none of it. That is the assertion worth
+    // making: counting rows on a page cannot show it, because hiding one row out of a
+    // full page leaves a full page.
+    await page.fill("#search", "$not path:/health");
+    await expect.poll(() => page.locator("#rows tr.row").count(), { timeout: 10_000 }).toBeGreaterThan(0);
+    expect(await page.locator("#rows").textContent()).not.toContain("/health");
+
+    // The Exclude button is gone, and nothing is left behind pointing at it.
+    expect(await page.locator('#saved-filters button:has-text("Exclude this")').count()).toBe(0);
+    await page.close();
+  });
+
+  it("takes $or, $in and brackets from the search box", async () => {
+    const page = await open();
+    await page.fill("#search", "verdict:$in(confirmed-bot, suspected-bot) $and $not path:/health");
+    await expect.poll(() => page.locator("#rows tr.row").count(), { timeout: 15_000 }).toBeGreaterThanOrEqual(0);
+    expect(await page.locator("#rows").textContent()).not.toContain("/health");
+    // A half-typed query must not break the page — this is a live search box.
+    for (const half of ["$", "$no", "(", "verdict:$in(", "curl $or"]) {
+      await page.fill("#search", half);
+      await page.waitForTimeout(120);
+      expect(await page.locator("#rows").count()).toBe(1);
+    }
+    await page.close();
+  });
+
+  /**
+   * One control, three questions: from an incident until now, up to when something
+   * stopped, or between two moments. Either end may be left empty.
+   */
+  it("narrows the feed to a window with either end open", async () => {
+    const page = await open();
+    await expect.poll(() => page.locator("#rows tr.row").count(), { timeout: 10_000 }).toBeGreaterThan(0);
+    const all = await page.locator("#rows tr.row").count();
+
+    // A window that ended before this dashboard existed selects nothing, which is the
+    // clearest possible check that the bound is applied at all.
+    //
+    // Minute precision, not `…T00:00:00`. The input carries `step="1"`, so Chrome
+    // normalises a zero-seconds value back to the minute form, and Playwright compares
+    // what it typed against what the element reads back — so the seconds-precision string
+    // is rejected as malformed while `…T00:00:01` and `…T00:00` are both fine.
+    await page.fill("#to-at", "2000-01-01T00:00");
+    await expect.poll(() => page.locator("#rows tr.row").count(), { timeout: 10_000 }).toBe(0);
+    expect(await page.locator("#timeframe-clear").isVisible()).toBe(true);
+
+    // And one that started before it selects everything.
+    await page.fill("#to-at", "");
+    await page.fill("#from-at", "2000-01-01T00:00");
+    await expect.poll(() => page.locator("#rows tr.row").count(), { timeout: 10_000 }).toBe(all);
+
+    await page.click("#timeframe-clear");
+    await expect.poll(() => page.locator("#timeframe-clear").isHidden()).toBe(true);
+    expect(await page.locator("#rows tr.row").count()).toBe(all);
     await page.close();
   });
 
@@ -3089,6 +3196,259 @@ describe("the page's own guarantees still hold in a browser", () => {
     await page.locator("#tab-policy").click();
     await page.waitForTimeout(400);
     expect(problems).toEqual([]);
+    await page.close();
+  });
+});
+
+/**
+ * These run last on purpose.
+ *
+ * The handler, its feed ring and its actor registry are shared by every test in this
+ * file, so anything that sends traffic changes what the tests after it see — a new
+ * address becomes an actor, and an actor near the top reorders a table somebody else is
+ * reading the first row of. Adding to the end is the cheap way to stay out of that.
+ */
+describe("the feed's column headers", () => {
+  /**
+   * They stick under the page header while the rows scroll past.
+   *
+   * Guarded in a browser because this is a property no unit test can see and one CSS
+   * keyword can silently destroy. It already had been: the table collapsed its borders,
+   * and WebKit ignores `position: sticky` on a cell in a collapsed table — so in Safari
+   * the header scrolled away with the rows while Chromium and Firefox both held it, which
+   * is why it was reported as the header "having position absolute".
+   */
+  it("hold under the page header while the rows scroll", async () => {
+    const page = await open();
+    // Spread across addresses on purpose. The handler is shared with every other test in
+    // this file, and thirty requests from one address makes it the busiest actor — which
+    // reorders the Actors table under the tests that read its first row.
+    for (let i = 0; i < 30; i++) {
+      await handler.handle(createFacts({ method: "GET", url: `/sticky/${i}`, headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: `203.0.114.${100 + i}` }));
+    }
+    await expect.poll(() => page.locator("#rows tr.row").count(), { timeout: 15_000 }).toBeGreaterThan(5);
+
+    const readings = await page.evaluate(`(async () => {
+      const table = document.querySelector("#rows").closest("table");
+      const th = [...table.querySelectorAll("thead th")].filter((cell) => cell.getBoundingClientRect().height > 0)[0];
+      const headerH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--header-h")) || 0;
+      const tops = [];
+      for (const y of [400, 900]) {
+        window.scrollTo(0, y);
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        tops.push({ scrolled: Math.round(window.scrollY), top: Math.round(th.getBoundingClientRect().top) });
+      }
+      window.scrollTo(0, 0);
+      return { headerH: Math.round(headerH), tops, collapse: getComputedStyle(table).borderCollapse };
+    })()`) as { headerH: number; tops: Array<{ scrolled: number; top: number }>; collapse: string };
+
+    // The keyword itself, because it is the thing that breaks it.
+    expect(readings.collapse).toBe("separate");
+    for (const reading of readings.tops) {
+      // Only meaningful where the page actually scrolled — a short page cannot show it.
+      if (reading.scrolled === 0) continue;
+      expect(reading.top, `at scrollY ${reading.scrolled}`).toBeGreaterThanOrEqual(readings.headerH - 2);
+    }
+    await page.close();
+  });
+});
+
+describe("the Actors screen", () => {
+  /**
+   * The registry answers "who is hitting me hardest". Once a filter is on, the question
+   * in somebody's head is usually the other one — "who is in *this*" — and until this
+   * toggle existed the screen could not answer it.
+   */
+  it("switches between the registry and the actors in the feed", async () => {
+    const page = await open();
+    await handler.handle(createFacts({ method: "GET", url: "/scoped", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.77" }));
+
+    await page.click("#tab-actors");
+    await expect.poll(() => page.locator("#view-actors").isVisible()).toBe(true);
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    expect(await page.locator("#actors-scope-tracked").getAttribute("aria-pressed")).toBe("true");
+
+    await page.click("#actors-scope-feed");
+    await expect.poll(() => page.locator("#actors-scope-feed").getAttribute("aria-pressed")).toBe("true");
+    await expect.poll(() => page.locator("#actors-count").textContent()).toContain("in the feed you are looking at");
+    // The columns the feed cannot honestly answer say so rather than showing a zero.
+    await expect.poll(() => page.locator("#actor-rows tr").first().textContent(), { timeout: 10_000 }).toContain("—");
+    // Server paging belongs to the registry; a list built from rows on screen has none.
+    expect(await page.locator("#actors-pager").isVisible()).toBe(false);
+
+    await page.click("#actors-scope-tracked");
+    await expect.poll(() => page.locator("#actors-count").textContent()).toContain("tracked");
+    await page.close();
+  });
+
+  /**
+   * The two scopes are two different screens under one tab name. A link that cannot say
+   * which one you meant is a link to the wrong one half the time — and the reflex when a
+   * live screen looks stuck is to reload, which used to throw the choice away.
+   */
+  it("keeps the scope in the URL, through a reload and the back button", async () => {
+    const page = await open();
+    await handler.handle(createFacts({ method: "GET", url: "/urlscope", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.91" }));
+
+    await page.click("#tab-actors");
+    await expect.poll(() => page.locator("#view-actors").isVisible()).toBe(true);
+    // The default is absent from the URL rather than spelled out in it.
+    expect(new URL(page.url()).hash).not.toContain("a=");
+
+    await page.click("#actors-scope-feed");
+    await expect.poll(() => new URL(page.url()).hash).toContain("a=feed");
+
+    await page.reload();
+    await expect.poll(() => page.locator("#actors-scope-feed").getAttribute("aria-pressed"), { timeout: 15_000 }).toBe("true");
+    await expect.poll(() => page.locator("#actors-count").textContent()).toContain("in the feed you are looking at");
+
+    // Back walks to the entry before the toggle, which is the tracked registry.
+    await page.goBack();
+    await expect.poll(() => page.locator("#actors-scope-tracked").getAttribute("aria-pressed"), { timeout: 15_000 }).toBe("true");
+    await page.close();
+  });
+
+  /**
+   * Labelling used to call `prompt()`, which a sandboxed iframe blocks outright — so on
+   * an embedded dashboard the button did nothing at all, silently. It edits in place now.
+   */
+  it("names an actor from an input in the row", async () => {
+    const page = await open();
+    await handler.handle(createFacts({ method: "GET", url: "/named", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.78" }));
+    await page.click("#tab-actors");
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+    await page.click('#actor-rows tr:first-child button:has-text("Label")');
+    const input = page.locator("#actor-rows .label-input").first();
+    await expect.poll(() => input.count()).toBe(1);
+    await input.fill("the noisy one");
+    await input.press("Enter");
+
+    await expect.poll(() => page.locator("#actor-rows").textContent(), { timeout: 15_000 }).toContain("the noisy one");
+    await page.close();
+  });
+
+  /**
+   * Save and Cancel, where a `prompt()` used to put them.
+   *
+   * Three earlier attempts put the two buttons beside the row's existing four, and the
+   * cell does not wrap: the row grew wider than the panel and Save came to rest past its
+   * right edge, underneath the page — visible, and impossible to click. So the assertion
+   * is not that the buttons exist. It is that they are inside the panel, and that
+   * pressing Save saves.
+   */
+  it("saves a name from a button that is inside the panel", async () => {
+    const page = await open();
+    await handler.handle(createFacts({ method: "GET", url: "/buttoned", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.92" }));
+    await page.click("#tab-actors");
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+    await page.click('#actor-rows tr:first-child button:has-text("Label")');
+    const input = page.locator("#actor-rows .label-input").first();
+    await expect.poll(() => input.count()).toBe(1);
+
+    // The row's other actions stand aside while the editor is open, which is where the
+    // room comes from.
+    expect(await page.locator('#actor-rows tr:first-child button:has-text("Allowlist")').isVisible()).toBe(false);
+
+    const save = page.locator("#actor-rows .label-save").first();
+    expect(await save.isVisible()).toBe(true);
+    const button = (await save.boundingBox()) ?? { x: 0, width: 1e9 };
+    const panel = (await page.locator("#view-actors .panel").first().boundingBox()) ?? { x: 0, width: 0 };
+    expect(button.x + button.width, "Save is inside the panel, not hanging off the end of it").toBeLessThanOrEqual(panel.x + panel.width + 1);
+
+    await input.fill("named by button");
+    await save.click();
+    await expect.poll(() => page.locator("#actor-rows").textContent(), { timeout: 15_000 }).toContain("named by button");
+    await page.close();
+  });
+
+  /**
+   * The same two buttons from the keyboard. An earlier version bound them to
+   * `pointerdown`, which never fires for a keyboard activation — so Save worked with a
+   * mouse and silently did nothing with Tab and Enter. Tabbing out of the input also
+   * has to not read as clicking away, which would cancel before the button was reached.
+   */
+  it("saves a name reached with the Tab key", async () => {
+    const page = await open();
+    await handler.handle(createFacts({ method: "GET", url: "/tabbed", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.93" }));
+    await page.click("#tab-actors");
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+    await page.click('#actor-rows tr:first-child button:has-text("Label")');
+    const input = page.locator("#actor-rows .label-input").first();
+    await expect.poll(() => input.count()).toBe(1);
+    await input.fill("named by keyboard");
+
+    await input.press("Tab");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => page.locator("#actor-rows").textContent(), { timeout: 15_000 }).toContain("named by keyboard");
+    await page.close();
+  });
+
+  it("abandons a name from the Cancel button", async () => {
+    const page = await open();
+    await handler.handle(createFacts({ method: "GET", url: "/cancelled", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.94" }));
+    await page.click("#tab-actors");
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+    await page.click('#actor-rows tr:first-child button:has-text("Label")');
+    const input = page.locator("#actor-rows .label-input").first();
+    await expect.poll(() => input.count()).toBe(1);
+    await input.fill("thought better of it");
+    await page.locator('#actor-rows .label-edit button:has-text("Cancel")').first().click();
+
+    await expect.poll(() => page.locator("#actor-rows .label-input").count()).toBe(0);
+    expect(await page.locator("#actor-rows").textContent()).not.toContain("thought better of it");
+    // And the row has its own actions back.
+    await expect.poll(() => page.locator('#actor-rows tr:first-child button:has-text("Allowlist")').isVisible()).toBe(true);
+    await page.close();
+  });
+
+  /**
+   * The Actors table repaints on the counters frame — every two seconds — and a repaint
+   * rebuilds every row. With the editor open that does not merely reset a control: it
+   * removes the input and takes whatever had been typed into it, on a timer, while
+   * somebody is still typing. The table already held still for a half-pressed
+   * confirmation; the editor had simply never been counted as an interaction.
+   */
+  it("does not repaint the editor away while a name is being typed", async () => {
+    await handler.handle(createFacts({ method: "GET", url: "/typing", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.82" }));
+    const page = await open();
+    await page.click("#tab-actors");
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+    await page.click('#actor-rows tr:first-child button:has-text("Label")');
+    const input = page.locator("#actor-rows .label-input").first();
+    await expect.poll(() => input.count()).toBe(1);
+    await input.fill("half typed and still thinking");
+
+    // Comfortably past two repaint frames.
+    await page.waitForTimeout(5_000);
+    expect(await input.count(), "the editor survived the repaint").toBe(1);
+    expect(await input.inputValue()).toBe("half typed and still thinking");
+
+    await input.press("Escape");
+    await expect.poll(() => page.locator("#actor-rows .label-input").count()).toBe(0);
+    await page.close();
+  });
+
+  it("abandons a label on Escape", async () => {
+    await handler.handle(createFacts({ method: "GET", url: "/escape", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.81" }));
+    const page = await open();
+    await page.click("#tab-actors");
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    const before = await page.locator("#actor-rows").textContent();
+
+    await page.click('#actor-rows tr:first-child button:has-text("Label")');
+    const input = page.locator("#actor-rows .label-input").first();
+    await expect.poll(() => input.count()).toBe(1);
+    await input.fill("never saved");
+    await input.press("Escape");
+
+    await expect.poll(() => page.locator("#actor-rows .label-input").count()).toBe(0);
+    expect(await page.locator("#actor-rows").textContent()).not.toContain("never saved");
+    expect(before).not.toContain("never saved");
     await page.close();
   });
 });

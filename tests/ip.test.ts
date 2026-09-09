@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { IpRangeSet, formatIp, isSpecialUse, networkKey, normalizeIp, parseCidr, parseIp } from "../src/internal/ip.js";
+import { IpRangeSet, formatIp, isSpecialUse, networkKey, normalizeIp, parseCidr, parseIp, stripPort } from "../src/internal/ip.js";
+import { BotHandler } from "../src/index.js";
 
 describe("parseIp", () => {
   it("parses plain IPv4", () => {
@@ -115,5 +116,78 @@ describe("helpers", () => {
 
   it("formats v4 bytes back to dotted quad", () => {
     expect(formatIp(parseIp("203.0.113.9")!)).toBe("203.0.113.9");
+  });
+});
+
+/**
+ * Forwarded headers are not consistent about ports. Azure's Application Gateway and
+ * Front Door write `1.2.3.4:5678`, and RFC 7239 defines `[2001:db8::1]:5678` for IPv6.
+ * An entry carrying one used to parse as nothing, and because every entry in such a
+ * chain looks the same way the chain emptied and the whole internet collapsed onto the
+ * proxy's own address as one actor — so a single bot's rate limit locked out every real
+ * visitor, silently.
+ *
+ * The danger in the fix is the opposite mistake: a bare IPv6 address is made of colons
+ * and must never be read as a host and a port.
+ */
+describe("addresses that arrive with a port", () => {
+  it("removes a port where there is one", () => {
+    expect(stripPort("1.2.3.4:51234")).toBe("1.2.3.4");
+    expect(stripPort("[2001:db8::1]:443")).toBe("2001:db8::1");
+    expect(stripPort("[2001:db8::1]")).toBe("2001:db8::1");
+    expect(stripPort("  1.2.3.4:80  ")).toBe("1.2.3.4");
+  });
+
+  it("never mistakes an IPv6 address for a host and a port", () => {
+    for (const address of ["2001:db8::1", "::1", "::", "2001:db8:0:0:0:0:0:1", "::ffff:1.2.3.4", "fe80::1%eth0"]) {
+      expect(stripPort(address), address).toBe(address);
+    }
+  });
+
+  it("leaves alone what is not an address with a port", () => {
+    expect(stripPort("1.2.3.4")).toBe("1.2.3.4");
+    expect(stripPort("evil.test:80")).toBe("evil.test:80");
+    expect(stripPort(":8080")).toBe(":8080");
+    expect(stripPort("[2001:db8::1")).toBe("[2001:db8::1");
+  });
+});
+
+describe("resolving a client address behind a proxy that writes ports", () => {
+  const socket = "198.51.100.7";
+
+  it("reads a chain whose entries carry ports", () => {
+    const handler = new BotHandler({ onWarning: () => {}, proxy: { trustProxy: true } });
+    expect(handler.resolveIp(socket, { "x-forwarded-for": "1.2.3.4:51234" })).toBe("1.2.3.4");
+    expect(handler.resolveIp(socket, { "x-forwarded-for": "[2001:db8::1]:443" })).toBe("2001:db8::1");
+  });
+
+  it("does not collapse every client onto the proxy", () => {
+    // The bug this replaced: with an Azure-style proxy every request resolved to the
+    // socket address, so every visitor shared one actor and one rate-limit bucket.
+    const handler = new BotHandler({ onWarning: () => {}, proxy: { trustProxy: true } });
+    const seen = new Set<string>();
+    for (let i = 1; i < 20; i++) seen.add(handler.resolveIp(socket, { "x-forwarded-for": `203.0.113.${i}:4000` }));
+    expect(seen.size).toBe(19);
+    expect(seen.has(socket)).toBe(false);
+  });
+
+  it("still refuses to let a client choose its own address", () => {
+    // Understanding ports must not become a way to smuggle a chosen address in.
+    const hop = new BotHandler({ onWarning: () => {}, proxy: { trustProxy: true } });
+    expect(hop.resolveIp(socket, { "x-forwarded-for": "9.9.9.9:1, 8.8.8.8:2, 1.2.3.4:3" })).toBe("1.2.3.4");
+
+    const trusted = new BotHandler({ onWarning: () => {}, proxy: { trustProxy: true, trustedProxies: ["198.51.100.0/24"] } });
+    expect(trusted.resolveIp(socket, { "x-forwarded-for": "1.2.3.4:9, 198.51.100.9:80" })).toBe("1.2.3.4");
+    // Claiming to be the proxy, port and all, must not hide anyone.
+    expect(trusted.resolveIp(socket, { "x-forwarded-for": "198.51.100.9:1, 198.51.100.9:2" })).toBe(socket);
+
+    const hops = new BotHandler({ onWarning: () => {}, proxy: { trustProxy: true, hops: 2 } });
+    // Padding the left of the chain must not shift an index counted from the right.
+    expect(hops.resolveIp(socket, { "x-forwarded-for": "7.7.7.7, 6.6.6.6:1, 1.2.3.4, 5.6.7.8" })).toBe("1.2.3.4");
+  });
+
+  it("keeps the header ignored entirely when it is not trusted", () => {
+    const handler = new BotHandler({ onWarning: () => {} });
+    expect(handler.resolveIp(socket, { "x-forwarded-for": "1.2.3.4:5678" })).toBe(socket);
   });
 });

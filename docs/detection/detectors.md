@@ -165,6 +165,55 @@ query string.
 probeSignatureDetector({ extraPaths: ["/internal/admin"] })
 ```
 
+### `target-integrity`
+
+**cheap · always · ceiling `strong`**
+
+How was this target *spelled*?
+
+`probe-signature` above reads what a request asked for. This one reads how it asked, and it
+exists because the two are not the same question — and because the answer to the second is
+normally destroyed before any detector sees it.
+
+Every detector reads `facts.path`, which is normalised: decoded once, backslashes and
+doubled slashes collapsed, `.` and `..` resolved. That is not optional — a rule scoped to
+`/admin` has to hold against `/%61dmin` and `/./admin` or it is not a rule. It is also
+exactly what makes an evasive target arrive looking ordinary:
+
+```
+GET /%2e%2e%2f%2e%2e%2fapp/config.yml      →  facts.path = "/app/config.yml"
+```
+
+Which is a page nobody has, on no wordlist, indistinguishable from a broken link. So the
+target as it arrived is kept in `facts.rawPath` — and only when it differs from the
+normalised form, which on ordinary traffic it does not — and this reads it.
+
+| Spelling | Tier |
+| --- | ---: |
+| Encoded its own encoding, so one decoding pass leaves it still encoded | `strong` |
+| Wrote a traversal with its dots and slashes percent-encoded | `strong` |
+| Carried a control character, raw or encoded | `strong` |
+| Addressed the target to a proxy — `GET http://elsewhere/` at an origin server | `strong` |
+| Hid a path separator inside a segment | `moderate` |
+| Walked up out of the site root, written plainly | `moderate` |
+
+**Nothing here is `certain`, and the closest call says why.** A path segment that carries a
+URL as *data* — `/redirect/https%3A%2F%2Fexample.com%2Fa` — is encoded once to sit in a
+path and encoded again by whatever built the link around it. That is a real pattern on real
+sites and it produces `%252e` honestly. A deliberate act with no ordinary cause is not the
+same thing as one admitting no benign explanation, and only the second may close a door.
+
+The plain-traversal row is the one a *broken* client produces as readily as a hostile one,
+so it has a switch:
+
+```ts
+targetIntegrityDetector({ reportPlainTraversal: false })
+```
+
+All of these share the family `evasive-target`. One target usually trips several — a
+traversal is normally encoded and an encoded traversal is often double-encoded — and that
+is one act seen three ways, not three reasons.
+
 ### `tls-fingerprint`
 
 **cheap · always · ceiling `strong`**
@@ -243,6 +292,9 @@ would echo. Reaching one requires reading the page as data rather than as a page
 import { renderTrapLink, trapRobotsEntries, DEFAULT_TRAP_PATHS } from "@osqd/bothandlerjs";
 
 app.get("/", (_req, res) => res.send(page + renderTrapLink()));
+
+// And publish the same paths, so a crawler that obeys robots.txt never sees them.
+app.get("/robots.txt", (_req, res) => res.type("text/plain").send(trapRobotsEntries(DEFAULT_TRAP_PATHS)));
 ```
 
 The trap paths belong in your `robots.txt` as `Disallow`, which is what makes the evidence
@@ -297,6 +349,39 @@ walking a sitemap almost never revisits, so its ratio sits near one.
 `weak`, because a *welcome* crawler produces exactly this shape and so does a person on a
 first visit to a documentation site.
 
+### `blended-identity`
+
+**cheap · always · ceiling `strong`**
+
+What a *series* of claims says, as opposed to what one claim says.
+
+Every other identity check here reads a single request: this User-Agent names this bot, and
+that claim is either confirmable or it is not. The set of identities an actor has claimed
+over time is a different object, and some sets are self-contradictory in a way no member of
+them is.
+
+Three readings:
+
+- **Several security tools.** One address arriving as two or more named scanners is a scan,
+  not a coincidence.
+- **Several verifiable crawlers.** At most one of Googlebot, Bingbot and Yandex can be true
+  of an address, because each publishes a proof tied to addresses it controls. The
+  contradiction is visible from the claims alone — which matters most when DNS is
+  unreachable and neither claim can be refuted on its own.
+- **A crawler that also probes.** An actor that sent a scanner payload *and* claimed to be
+  a search crawler has told you which of the two is the lie.
+
+**These hold under the default address-based actor key**, which is why they are on by
+default and [`identity-rotation`](#identity-rotation) is not. A NAT gateway presents many
+browsers — that is exactly what makes counting User-Agents useless there — but it does not
+present sqlmap *and* nikto, and it does not claim to be Googlebot *and* Bingbot. The
+innocent explanation for a hundred browsers behind one address is an office; there is no
+corresponding one for these.
+
+`strong`, not `certain`. Trusting the wrong forwarded header collapses every client onto
+one address, and then two genuinely different crawlers produce this exact set — so it may
+contribute to a denial and may not be the whole of one.
+
 ### `id-enumeration`
 
 **cheap · always · ceiling `moderate`**
@@ -339,8 +424,11 @@ const { outcome } = await handler.handle(facts);
 handler.recordOutcome(facts, response.statusCode);
 ```
 
-The bundled Node adapter does this for you. Nothing else depends on it: every other
-detector works unchanged if you never call it, and this one is simply absent.
+Every bundled adapter does this for you — Node and Express on the response's `finish`,
+Fastify on the reply's, Koa from the status the middleware chain settled on, and the Fetch
+wrapper from the `Response` it returns. You only need the call above if you drive the
+engine yourself. Nothing else depends on it: every other detector works unchanged if you
+never call it, and this one is simply absent.
 
 Counts **404 and 410 only**. A 403 is usually this library's own doing, and counting it
 would let a rule that challenges an actor manufacture the evidence for having challenged
@@ -375,6 +463,14 @@ request looks like this — which is what `transportCoherenceDetector({ legacyHt
 is for. An all-HEAD visit is a stronger shape, but a link checker is a real and mostly
 harmless thing to be.
 
+**It cannot simply be made NAT-safe, and it is worth saying why.** A rotator changes the
+User-Agent and nothing else, so "several User-Agents behind a single header shape" looks
+like a clean way to separate it from a gateway. Measured, it is not: ten real browser
+profiles collapse to six stable header shapes, and Chrome, Edge, Opera and Chromium on
+Linux share one — they are the same engine sending the same headers in the same order. An
+office running Chrome and Edge produces that signature exactly. The narrower actor key is
+the fix; there is no header trick that substitutes for it.
+
 ### `parameter-sweep`
 
 **cheap · always · ceiling `weak`**
@@ -407,7 +503,9 @@ mid-session; something that does is cycling through a spoofing list.
 
 **Off by default, and think before enabling it.** With the default address-based actor
 key, a corporate NAT presents a hundred people's browsers as one actor with a hundred
-User-Agents — which is this detector's exact signature and is entirely innocent. Enable it
+User-Agents — which is this detector's exact signature and is entirely innocent. Switching
+it on without also narrowing `actorKey` raises a startup warning, because it is a decision
+whose consequences are invisible until real visitors are being challenged. Enable it
 when your `actorKey` identifies a session rather than a network.
 
 ### `session-integrity`
@@ -491,8 +589,46 @@ A resolver that is merely *unhappy* must reach a different verdict from one that
 
 ---
 
+## Detectors that arrive with something else
+
+Ten more exist and are not in the catalogue above, because none of them is installed by
+default: each reads a source that has to be configured before it exists at all, and a
+detector with nothing to read is a permanently silent entry in `describeDetectors()`.
+They are documented together in
+[correlating a client's own requests](correlation.md), which is also where the reasoning
+about what each is worth lives.
+
+**With `probe`** — a signed marker cookie this server issues and reads back, which
+identifies a *client* across requests rather than an address:
+
+| Detector | Ceiling |
+| --- | --- |
+| `identity-drift` | `strong` |
+| `marker-integrity` | `strong` |
+| `marker-fanout` | `moderate` |
+| `marker-persistence` | `moderate` |
+
+**With `challenge`** — reactions to a question this server chose to ask:
+
+| Detector | Ceiling |
+| --- | --- |
+| `challenge-reaction` | `strong` |
+| `challenge-integrity` | `moderate` |
+
+**With `site`** — a warmed-up baseline of what the rest of your traffic looks like:
+
+| Detector | Ceiling |
+| --- | --- |
+| `distributed-walk` | `moderate` |
+| `path-novelty` | `moderate` |
+| `miss-baseline` | `moderate` |
+| `path-campaign` | `moderate` |
+
+---
+
 ## Related
 
 - [How detection works](index.md) — the pipeline these run in
+- [Correlating a client's own requests](correlation.md) — the ten above, in detail
 - [Writing a detector](writing-a-detector.md) — the contract, and the rules on certainty
 - [Evidence and certainty](../concepts/evidence.md) — what the tiers mean

@@ -1,4 +1,6 @@
 import { ActorState } from "../src/state.js";
+import type { MarkerObservation } from "../src/probe/index.js";
+import type { SiteProfile } from "../src/site/index.js";
 import { ManualClock } from "../src/internal/clock.js";
 import { compileSignatures } from "../src/detectors/known-bots.js";
 import { createFacts } from "../src/facts.js";
@@ -40,6 +42,10 @@ export interface ContextOptions {
   ranges?: Record<string, string[]>;
   resolver?: DnsResolver;
   state?: ActorState;
+  marker?: MarkerObservation;
+  /** A JA3/JA4 handshake fingerprint, as an edge would forward it. */
+  tlsFingerprint?: string;
+  site?: SiteProfile;
   extra?: Record<string, unknown>;
 }
 
@@ -55,6 +61,7 @@ export function makeFacts(options: ContextOptions = {}): RequestFacts {
     protocol: options.protocol ?? "https",
     httpVersion: options.httpVersion ?? "1.1",
     ...(options.extra !== undefined ? { extra: options.extra } : {}),
+    ...(options.tlsFingerprint !== undefined ? { tlsFingerprint: options.tlsFingerprint } : {}),
   });
 }
 
@@ -71,6 +78,8 @@ export function makeContext(options: ContextOptions = {}): DetectionContext {
   return {
     facts,
     ua,
+    marker: options.marker,
+    site: options.site,
     actor: state.snapshot(facts.timestamp),
     state,
     clock: new ManualClock(facts.timestamp),

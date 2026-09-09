@@ -58,7 +58,7 @@ lesson 11.
 
 | | | |
 |-|-|-|
-| 5 | [The detectors](05-detectors.md) | All twenty: what each reads, what each costs, what each may conclude. |
+| 5 | [The detectors](05-detectors.md) | All twenty-two: what each reads, what each costs, what each may conclude. |
 | 6 | [Identity and verification](06-identity.md) | Recognising a crawler by name — and proving or refuting the claim. |
 | 7 | [Actors and behaviour](07-actors.md) | Who "the same client" is, and what watching one over time tells you. |
 | 8 | [Traps](08-traps.md) | The one detector that needs no statistics, and how to lay one properly. |

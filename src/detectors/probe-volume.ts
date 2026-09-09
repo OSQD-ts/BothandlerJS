@@ -48,6 +48,9 @@ export function probeVolumeDetector(options: ProbeVolumeOptions = {}): Detector 
         direction: "bot",
         certainty: "moderate",
         botClass: "scanner",
+        // `miss-baseline` reads the same misses relative to the site's own rate. One
+        // cause, so the stronger reading stands rather than the two summing.
+        family: "misses",
         metadata: { responses, misses, missRatio: Number(ratio.toFixed(3)) },
       };
     },

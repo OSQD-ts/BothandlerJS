@@ -434,6 +434,13 @@ export interface DashboardEntry {
   downgradedFrom?: ActionName | undefined;
   downgradeReason?: string | undefined;
   evidence: DashboardEvidence[];
+  /**
+   * What this request would have been had the shadowed detectors counted.
+   *
+   * Absent unless a shadowed detector found something, which is also when the `shadow`
+   * flag appears on one of the evidence entries above.
+   */
+  shadowVerdict?: { verdict: Verdict; botClass: BotClass; score: number; certain: boolean } | undefined;
   failures: Array<{ detector: string; reason: string; message: string }>;
   /** Actor history at the time of the request. Drives the actor drill-down. */
   actorStats: DashboardActor;
@@ -450,6 +457,8 @@ export interface DashboardEvidence {
   summary: string;
   certainty: Certainty;
   direction: EvidenceDirection;
+  /** From a shadowed detector: shown, counted, and part of no decision. */
+  shadow?: true | undefined;
   family?: string | undefined;
   deterministicBasis?: string | undefined;
   /**
@@ -518,7 +527,7 @@ export interface DashboardSnapshot {
   now: number;
   /** Absent when the handler has `metrics: false`, or when the `statistics` section is off. */
   metrics: import("../metrics.js").MetricsSnapshot | undefined;
-  detectors: Array<{ id: string; description: string; cost: string; stage: string }>;
+  detectors: Array<{ id: string; description: string; cost: string; stage: string; shadow?: true | undefined }>;
   rules: readonly string[];
   ranges: Array<{ name: string; size: number }>;
   /** Configuration a reader needs in order to interpret what they are looking at. */

@@ -8,6 +8,9 @@
  * they are structurally barred from reaching a terminal action.
  */
 
+import type { MarkerObservation } from "./probe/index.js";
+
+
 /** What kind of client we believe we are talking to. */
 export type BotClass =
   /** Positive evidence of a person driving a real browser. */
@@ -96,6 +99,15 @@ export interface Evidence {
   deterministicBasis?: string | undefined;
   /** Structured detail for logs and dashboards. Must be JSON-serialisable. */
   metadata?: Record<string, unknown> | undefined;
+  /**
+   * Set when this came from a detector named in {@link BotHandlerConfig.shadowDetectors}.
+   *
+   * It is a label rather than a mechanism: shadowed evidence never reaches scoring at
+   * all, because it is kept in {@link Assessment.shadowEvidence} rather than filtered out
+   * of {@link Assessment.evidence} later. The flag is here so that anything rendering the
+   * two lists together can say which is which.
+   */
+  shadow?: true | undefined;
 }
 
 /**
@@ -142,6 +154,21 @@ export interface RequestFacts {
   method: string;
   /** Path only, no query string. Always begins with `/`. */
   path: string;
+  /**
+   * The target as the client actually spelled it, present only when that is not how
+   * `path` reads.
+   *
+   * `path` is normalised — decoded once, backslashes and doubled slashes collapsed, dot
+   * segments resolved — because a rule scoped to `/admin` has to hold against `/%61dmin`
+   * and `/./admin` too. That normalisation is also the only thing that makes an evasive
+   * target look ordinary: `/%2e%2e%2f%2e%2e%2fapp/config.yml` becomes `/app/config.yml`.
+   * This is where the difference is kept, so `target-integrity` can read it.
+   *
+   * Absent on the overwhelming majority of requests, which is the whole reason it is
+   * cheap: its presence already means the target was spelled unusually, though not
+   * necessarily suspiciously — a trailing slash is enough.
+   */
+  rawPath?: string | undefined;
   /** Decoded query parameters. Null-prototype so `?__proto__=x` is visible, not swallowed. */
   query: Record<string, string>;
   /** Lowercased header names to values. Multi-value headers are joined with `, `. */
@@ -225,6 +252,13 @@ export interface ActorSnapshot {
    * Undefined when no path carried a number. `span` is inclusive, so ids 1 to 30 span 30.
    */
   walk?: { template: string; count: number; span: number } | undefined;
+  /**
+   * A name somebody gave this actor. Never read by detection.
+   *
+   * An address is not a memory: whoever worked out that one belongs to a partner's price
+   * feed should be able to write it where the next person will see it.
+   */
+  label?: string | undefined;
   /** First and last sighting, ms since epoch. */
   firstSeen: number;
   lastSeen: number;
@@ -267,6 +301,31 @@ export interface Assessment {
   evidence: Evidence[];
   /** Every human-pointing observation. These rebut and dampen the score. */
   humanEvidence: Evidence[];
+  /**
+   * What the shadowed detectors said, in both directions, and what none of it did.
+   *
+   * A detector listed in {@link BotHandlerConfig.shadowDetectors} runs exactly as it
+   * otherwise would and its findings land here instead of in `evidence` — so they are
+   * counted, charted and readable, and they took no part in the verdict, the score, the
+   * class, the identity, or any rule. Not "weighted at zero": kept out of the arithmetic
+   * altogether, because a `certain` finding does not go through the arithmetic and a
+   * weight of zero would not have stopped it.
+   *
+   * This is how a new detector, or a threshold nobody is sure of yet, is answered with a
+   * week of your own traffic rather than with an argument.
+   */
+  shadowEvidence: Evidence[];
+  /**
+   * What this assessment would have been had the shadowed detectors been counted.
+   *
+   * Present only when a shadowed detector actually found something, which is what keeps
+   * the second pass off the hot path for the requests it would say nothing about.
+   *
+   * "It fired 312 times" is not the question anybody has. The question is what turning it
+   * on would *do*, and the only honest form of that is the verdict this request would
+   * have received — including, and especially, when it is a person.
+   */
+  shadowVerdict?: { verdict: Verdict; botClass: BotClass; score: number; certain: boolean } | undefined;
   actor: ActorSnapshot;
   /**
    * Set when detection was skipped rather than performed. `undefined` means every
@@ -280,6 +339,14 @@ export interface Assessment {
   /** Detectors that threw or timed out. Detection continues without them. */
   failures: DetectorFailure[];
   facts: RequestFacts;
+  /**
+   * What the marker cookie on this request turned out to be, when the probe is on.
+   *
+   * An input rather than a conclusion, kept here for the same reason `facts` is: the
+   * action path needs it to decide whether this response should carry a new marker, and
+   * recomputing it would mean verifying the same HMAC twice on every request.
+   */
+  marker?: MarkerObservation | undefined;
 }
 
 /** Why an assessment skipped detection. */

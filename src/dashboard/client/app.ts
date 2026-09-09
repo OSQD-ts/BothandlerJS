@@ -17,8 +17,13 @@ export interface App {
   /** Redraws immediately, for the cases where a click has to be reflected before the next frame. */
   drawNow: () => void;
   showTab: (tab: TabName, options?: { focus?: boolean; replace?: boolean; push?: boolean }) => void;
-  /** Puts the feed's filter state into the URL, so a view can be sent to somebody. */
-  syncUrl: () => void;
+  /**
+   * Puts the feed's filter state and the Actors scope into the URL, so a view can be
+   * sent to somebody. `replace: false` for a discrete choice a click made, which the
+   * back button should undo; the default replaces, because a history entry per keystroke
+   * of the search box is not history.
+   */
+  syncUrl: (options?: { replace?: boolean }) => void;
 }
 
 export const app: App = {

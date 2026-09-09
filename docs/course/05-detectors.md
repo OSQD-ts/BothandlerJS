@@ -1,6 +1,6 @@
 # Lesson 5 — The detectors
 
-**Goal:** know what each of the twenty detectors reads, what it costs, and what it is
+**Goal:** know what each of the detectors reads, what it costs, and what it is
 allowed to conclude — then turn one off and watch the score move.
 
 ← [Course](index.md) · Prev: [The guard](04-the-guard.md) · Next: [Identity and verification](06-identity.md)
@@ -36,7 +36,7 @@ browsing-coherence     cheap  always
 crawler-verification   io     confirming
 ```
 
-**Sixteen of twenty ship on by default.** The other four —
+**Twenty-two ship on by default.** The others —
 `identity-rotation`, `tls-fingerprint`, `clearance`, `client-signals` — each need something
 from you, and you will switch three of them on later in the course.
 
@@ -61,7 +61,7 @@ fails closed is an outage with extra steps.
 
 | Detector | Ceiling | Reads |
 | -------- | ------- | ----- |
-| `self-identified` | `certain` | 161 signatures, 389 tokens, in one Aho–Corasick pass. Also catches unrecognised crawlers that name a contact URL, and bare client tokens with no browser preamble |
+| `self-identified` | `certain` | 205 signatures, 389 tokens, in one Aho–Corasick pass. Also catches unrecognised crawlers that name a contact URL, and bare client tokens with no browser preamble |
 | `crawler-verification` | `certain` | Forward-confirmed reverse DNS, or published address ranges. **Confirms and refutes** |
 
 ### Single-request consistency
@@ -84,8 +84,9 @@ fails closed is an outage with extra steps.
 | `crawl-breadth` | `weak` | Distinct paths against total requests: reading a site against enumerating it |
 | `parameter-sweep` | `weak` | Distinct query strings against the paths they sit on. Catches the collection that leaves the path unchanged — `?page=1..200` |
 | `session-integrity` | `moderate` | A "browser" that never carries a cookie |
+| `blended-identity` | `strong` | The *set* of identities one actor claimed: two scanners, or two crawlers that cannot both be true |
 | `id-enumeration` | `moderate` | A contiguous run of numeric ids under one path shape — walking `/user/1..n` rather than following links |
-| `probe-volume` | `moderate` | The share of an actor's requests answered 404. Needs `recordOutcome`; the Node adapter wires it up |
+| `probe-volume` | `moderate` | The share of an actor's requests answered 404. Needs `recordOutcome`; every bundled adapter wires it up |
 | `transport-coherence` | `moderate` | The HTTP version and the verbs across a visit: a "Chrome" on HTTP/1.0, a visit made only of HEAD |
 | `identity-rotation` | `moderate` | One actor, several User-Agents. **Off by default** — under an IP actor key this fires on every corporate NAT |
 | `browsing-coherence` | `moderate` | The only detector arguing *for* the client. Human-pointing, so it discounts |
@@ -167,7 +168,7 @@ IP-based actor key.
 
 ## What you learned
 
-- Sixteen of twenty detectors are on by default; the rest need something from you
+- Twenty-one detectors are on by default; the rest need something from you — a marker probe, a challenge, a site baseline, or data only you have
 - `cost` and `stage` decide when a detector runs, and confirming work is skipped when
   nothing claimed an identity
 - A failing detector is dropped, never the request

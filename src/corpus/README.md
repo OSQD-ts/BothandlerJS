@@ -1,6 +1,6 @@
 # The traffic corpus
 
-526 shapes of real web traffic — 739 requests, 6,002 header lines — paired with what
+545 shapes of real web traffic — 1,232 requests, 12,769 header lines — paired with what
 the library ought to conclude about each, and a harness that runs them against
 **your** configuration.
 

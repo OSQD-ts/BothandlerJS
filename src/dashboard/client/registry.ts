@@ -4,7 +4,7 @@ import { actorActions, isConfirming } from "./actions.js";
 import { app } from "./app.js";
 import { clockStamp, n } from "./format.js";
 import { getJson } from "./api.js";
-import { setSearch, state } from "./store.js";
+import { matchingRows, setSearch, state } from "./store.js";
 import { renderPager } from "./pager.js";
 import type { ActorRow } from "./types.js";
 
@@ -52,6 +52,10 @@ export function trackActors(): void {
   void loadActors();
   timer = setInterval(() => {
     if (state.tab !== "actors" || state.paused || isConfirming()) return;
+    // The feed's actors are derived from rows the page already has, and the draw loop
+    // redraws them. Fetching the registry to render a list that does not come from it
+    // would be a request every four seconds for nothing.
+    if (state.actorScope === "feed") return;
     void loadActors();
   }, 4000);
 }
@@ -107,6 +111,98 @@ function drawActorsPager(full: boolean): void {
   }
 }
 
+/**
+ * The actors visible in the feed you are looking at.
+ *
+ * The registry answers "who is hitting me hardest", which is a different question from
+ * "who is in *this*" — and once a filter is on, the second one is usually what somebody
+ * has in mind. Derived from the rows the feed is already showing, so it narrows with the
+ * filter, the timeframe and the search without another request.
+ *
+ * Three columns are left blank on purpose. `Per min`, `Cadence` and `Unsolved` are
+ * properties of the whole actor as the engine sees it, and the feed's ring holds a few
+ * hundred requests rather than a client's history — computing them from that slice would
+ * put a confident number under a heading that means something else. A dash says "ask the
+ * registry", which is the button next to it.
+ */
+export function feedActors(): ActorRow[] {
+  const byKey = new Map<string, { rows: number; paths: Set<string>; agents: Set<string>; first: number; last: number; stats?: { requests: number; distinctPaths: number; priorConfirmations: number; cleared: boolean; firstSeen: number } | undefined }>();
+  for (const row of matchingRows()) {
+    const entry = row.entry;
+    let seen = byKey.get(entry.actor);
+    if (seen === undefined) {
+      seen = { rows: 0, paths: new Set(), agents: new Set(), first: entry.at, last: entry.at };
+      byKey.set(entry.actor, seen);
+    }
+    seen.rows++;
+    seen.paths.add(entry.path);
+    seen.agents.add(entry.userAgent);
+    if (entry.at < seen.first) seen.first = entry.at;
+    if (entry.at > seen.last) seen.last = entry.at;
+    // The newest row's snapshot is the closest thing the feed has to the engine's view.
+    seen.stats = entry.actorStats ?? seen.stats;
+  }
+
+  // A feed entry does not carry the actor's label, so it is taken from the registry list
+  // when that actor happens to be on it. Better a name where one is known than none.
+  const labels = new Map(state.actors.filter((actor) => actor.label !== undefined).map((actor) => [actor.key, actor.label as string]));
+  const out: ActorRow[] = [];
+  for (const [key, seen] of byKey) {
+    const label = labels.get(key);
+    out.push({
+      key,
+      ...(label === undefined ? {} : { label }),
+      requests: seen.rows,
+      recentRate: Number.NaN,
+      distinctPaths: seen.paths.size,
+      distinctUserAgents: seen.agents.size,
+      cadenceCv: undefined,
+      // A dash where the feed cannot know, like the three columns below it. A confident
+      // zero under a heading that means "how many times has this client been proven a bot"
+      // is worse than an admission, and it was the only column here still guessing.
+      priorConfirmations: seen.stats?.priorConfirmations ?? Number.NaN,
+      unsolvedChallenges: Number.NaN,
+      cleared: seen.stats?.cleared ?? false,
+      firstSeen: seen.stats?.firstSeen ?? seen.first,
+      lastSeen: seen.last,
+    });
+  }
+  // Busiest first, like the registry, so the two lists read the same way.
+  return out.sort((a, b) => b.requests - a.requests);
+}
+
+/**
+ * Moves the toggle to `scope` and redraws, without touching the URL.
+ *
+ * Separate from the click handler because the URL is also an input: opening a link and
+ * pressing Back both arrive here, and neither should write the address they just read.
+ */
+export function applyActorScope(scope: "tracked" | "feed"): void {
+  if (!SECTIONS.registry) return;
+  state.actorScope = scope;
+  for (const [id, on] of [
+    ["actors-scope-tracked", scope === "tracked"],
+    ["actors-scope-feed", scope === "feed"],
+  ] as const) {
+    byId<HTMLButtonElement>(id).className = on ? "on" : "";
+    byId<HTMLButtonElement>(id).setAttribute("aria-pressed", String(on));
+  }
+  drawActors();
+}
+
+/** Wires the tracked/shown toggle. Called once. */
+export function initActorScope(): void {
+  if (!SECTIONS.registry) return;
+  const choose = (scope: "tracked" | "feed"): void => {
+    applyActorScope(scope);
+    // Pushed rather than replaced: this is a deliberate switch between two screens, the
+    // same shape of act as clicking a tab, and the back button should undo it.
+    app.syncUrl({ replace: false });
+  };
+  $("actors-scope-tracked").addEventListener("click", () => choose("tracked"));
+  $("actors-scope-feed").addEventListener("click", () => choose("feed"));
+}
+
 export function drawActors(): void {
   if (!SECTIONS.registry) return;
   // A repaint replaces every button in the table, including a confirmation somebody is
@@ -115,16 +211,30 @@ export function drawActors(): void {
   const body = byId<HTMLTableSectionElement>("actor-rows");
   clear(body);
 
-  const actors = state.actors;
-  $("actors-count").textContent = `${n(actors.length)} shown · ${n(state.actorsTracked)} tracked`;
-  drawActorsPager(actors.length === state.actorsPageSize);
+  const fromFeed = state.actorScope === "feed";
+  const actors = fromFeed ? feedActors() : state.actors;
+  $("actors-count").textContent = fromFeed
+    ? `${n(actors.length)} in the feed you are looking at · ${n(state.actorsTracked)} tracked`
+    : `${n(actors.length)} shown · ${n(state.actorsTracked)} tracked`;
+  // The pager belongs to the registry's server-side paging. The feed's actors are a
+  // client-side list of whatever is on screen, so there is nothing to page through.
+  drawActorsPager(!fromFeed && actors.length === state.actorsPageSize);
+  if (fromFeed) for (const id of ["actors-pager-top", "actors-pager"]) byId<HTMLElement>(id).hidden = true;
   byId<HTMLElement>("actors-empty").hidden = actors.length > 0;
 
   for (const actor of actors) {
     const row = el("tr");
-    row.appendChild(el("td", "who", actor.key));
+    // The label first when there is one, with the key beneath it: somebody who named this
+    // actor did so because the key was not the useful part.
+    const who = el("td", "who");
+    if (actor.label === undefined) who.textContent = actor.key;
+    else {
+      who.appendChild(el("div", "label", actor.label));
+      who.appendChild(el("div", "sub", actor.key));
+    }
+    row.appendChild(who);
     row.appendChild(el("td", "num tnum", n(actor.requests)));
-    row.appendChild(el("td", "num tnum", n(actor.recentRate)));
+    row.appendChild(el("td", "num tnum", Number.isNaN(actor.recentRate) ? "—" : n(actor.recentRate)));
     row.appendChild(el("td", "num tnum", n(actor.distinctPaths)));
 
     // The coefficient of variation of the gaps between requests. Near zero is a
@@ -134,11 +244,11 @@ export function drawActors(): void {
     if (actor.cadenceCv !== undefined && actor.cadenceCv < 0.15) cadence.className += " warn-text";
     row.appendChild(cadence);
 
-    row.appendChild(el("td", "num tnum", n(actor.priorConfirmations)));
+    row.appendChild(el("td", "num tnum", Number.isNaN(actor.priorConfirmations) ? "—" : n(actor.priorConfirmations)));
 
     // Outstanding challenges. Amber past two, because one abandoned challenge is a
     // person having a moment and three is a client that does not answer.
-    const unsolved = el("td", "num tnum", n(actor.unsolvedChallenges));
+    const unsolved = el("td", "num tnum", Number.isNaN(actor.unsolvedChallenges) ? "—" : n(actor.unsolvedChallenges));
     if (actor.unsolvedChallenges >= 3) unsolved.className += " warn-text";
     row.appendChild(unsolved);
 
@@ -163,7 +273,7 @@ export function drawActors(): void {
       app.syncUrl();
     });
     actions.appendChild(inFeed);
-    for (const button of actorActions(actor.key, () => void loadActors())) actions.appendChild(button);
+    for (const button of actorActions(actor.key, () => void loadActors(), actor.label)) actions.appendChild(button);
     row.appendChild(actions);
 
     body.appendChild(row);

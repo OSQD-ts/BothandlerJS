@@ -97,6 +97,7 @@ function isDenial(action: ActionName): boolean {
 export function assessmentFromEntry(entry: DashboardEntry): Assessment {
   const evidence: Evidence[] = [];
   const humanEvidence: Evidence[] = [];
+  const shadowEvidence: Evidence[] = [];
 
   for (const item of entry.evidence) {
     const rebuilt: Evidence = {
@@ -109,8 +110,13 @@ export function assessmentFromEntry(entry: DashboardEntry): Assessment {
       ...(item.family !== undefined ? { family: item.family } : {}),
       // `category` is read off metadata by the matcher, so it has to go back there.
       ...(item.category !== undefined ? { metadata: { category: item.category } } : {}),
+      ...(item.shadow === true ? { shadow: true as const } : {}),
     };
-    (item.direction === "human" ? humanEvidence : evidence).push(rebuilt);
+    // A shadowed finding took no part in the decision this entry records, so it takes no
+    // part in re-deciding it either. Previewing a rule against it would answer a question
+    // about a configuration nobody is running.
+    if (item.shadow === true) shadowEvidence.push(rebuilt);
+    else (item.direction === "human" ? humanEvidence : evidence).push(rebuilt);
   }
 
   return {
@@ -123,6 +129,8 @@ export function assessmentFromEntry(entry: DashboardEntry): Assessment {
     certain: entry.certain,
     evidence,
     humanEvidence,
+    shadowEvidence,
+    ...(entry.shadowVerdict === undefined ? {} : { shadowVerdict: entry.shadowVerdict }),
     actor: {
       key: entry.actor,
       requests: entry.actorStats.requests,

@@ -21,6 +21,17 @@ export function consoleNotifier(options: ConsoleNotifierOptions = {}): Notifier 
         return;
       }
       const { assessment, decision } = event;
+      // An error carries its own account of what went wrong, and nothing else on the
+      // event describes it. Without this branch `event.error` was unreachable through
+      // this sink in every case: an error with no assessment fell into the anomaly line
+      // below and printed `error unknown — ` with the source and message discarded, and
+      // one that did carry an assessment printed the request's evidence instead. This is
+      // the sink an operator gets by default, and errors are how the library reports a
+      // detector, a sink or a store failing.
+      if (event.error !== undefined) {
+        target.error(`[bothandler] error ${event.error.source} — ${event.error.message}`);
+        return;
+      }
       if (assessment === undefined) {
         // An anomaly is about a window, not a request. One line, same shape.
         target.warn(`[bothandler] ${event.type} ${event.anomaly?.id ?? "unknown"} — ${event.anomaly?.summary ?? ""}`);

@@ -33,6 +33,9 @@
  * is not a guard at all.
  */
 import { BotHandler, createFacts } from "../src/index.js";
+import { identityShape, newMarker } from "../src/probe/marker.js";
+import { issueToken } from "../src/challenge/token.js";
+import { parseUserAgent } from "../src/internal/ua.js";
 
 const ITERATIONS = Number(process.env["ITERATIONS"] ?? 4000);
 const ROUNDS = Number(process.env["ROUNDS"] ?? 5);
@@ -73,6 +76,25 @@ function buildCases(): ReadonlyArray<{ label: string; maxRatio: number; run: () 
   };
   const rawHeaders = Object.entries(headers).flat();
   const clean = createFacts({ method: "GET", url: "/products/12", headers, rawHeaders, ip: "203.0.113.5" });
+  const longPath = `/${Array.from({ length: 60 }, (_, i) => `segment${i}`).join("/")}/42`;
+  const deep = createFacts({ method: "GET", url: longPath, headers, rawHeaders, ip: "203.0.113.6" });
+  const manyKeys = Array.from({ length: 200 }, (_, i) => `key${i}=value${i}`).join("&");
+  const wide = createFacts({ method: "GET", url: `/search?${manyKeys}`, headers, rawHeaders, ip: "203.0.113.7" });
+
+  // A handler with the probe on, and a request carrying a marker it would have issued.
+  // Minted directly rather than by round-tripping a response, so this stays synchronous.
+  const markerSecret = "a-bench-marker-secret-long-enough-to-pass";
+  const probed = new BotHandler({ probe: { secrets: [markerSecret], secure: false } });
+  const shape = identityShape(clean, parseUserAgent(headers["user-agent"]));
+  const token = issueToken(newMarker(shape, 12 * 60 * 60_000, Date.now()), [markerSecret]);
+  const profiled = new BotHandler({ site: { warmupRequests: 1 } });
+  const marked = createFacts({
+    method: "GET",
+    url: "/products/12",
+    headers: { ...headers, cookie: `__bh_m=${encodeURIComponent(token)}` },
+    rawHeaders,
+    ip: "203.0.113.8",
+  });
 
   // Measured at 24–25x, 30x and 7.0–7.5x across repeated runs, moving about 3% between
   // them — which is what makes a ratio usable as a budget at all. Each is set at roughly
@@ -83,6 +105,22 @@ function buildCases(): ReadonlyArray<{ label: string; maxRatio: number; run: () 
     { label: "assess — clean browser", maxRatio: 50, run: () => handler.assess(clean) },
     { label: "handle — clean browser", maxRatio: 60, run: () => handler.handle(clean) },
     { label: "createFacts", maxRatio: 15, run: () => createFacts({ method: "GET", url: "/products/12?ref=x", headers, rawHeaders, ip: "203.0.113.5" }) },
+    // A request costs whatever its URL says it costs, and the URL is written by the
+    // client. Both of these were regressions found by measuring rather than by reading:
+    // building a walk template out of a sixty-segment path cost 3.65us against 199ns for
+    // an ordinary one, an eighteen-fold tax anyone could levy by sending a long URL, and
+    // folding two hundred query keys meant sorting two hundred keys per request. Both are
+    // bounded now, and the budgets are here so they stay bounded.
+    { label: "assess — very long path", maxRatio: 60, run: () => handler.assess(deep) },
+    { label: "assess — many query keys", maxRatio: 60, run: () => handler.assess(wide) },
+    // The marker probe is opt-in, and what it costs an ordinary request is the number
+    // that decides whether anyone opts in. Verifying a marker is an HMAC; a session
+    // presents the same cookie every time, so the verification is cached and this
+    // measures the cached path, which is the one real traffic takes.
+    { label: "assess — marker held", maxRatio: 60, run: () => probed.assess(marked) },
+    // The site profile is opt-in and touches three bounded tables per request. What it
+    // costs an ordinary request is the number that decides whether anyone turns it on.
+    { label: "assess — site profile on", maxRatio: 60, run: () => profiled.assess(clean) },
   ];
 }
 

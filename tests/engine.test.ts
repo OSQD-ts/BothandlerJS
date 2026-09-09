@@ -5,6 +5,7 @@ import { ManualClock } from "../src/internal/clock.js";
 import { CHROME_HEADERS, CHROME_HEADER_ORDER, fakeResolver, failingResolver, makeFacts } from "./helpers.js";
 import type { BotEvent } from "../src/notify/types.js";
 import type { Detector } from "../src/detectors/types.js";
+import { withTimeout } from "../src/internal/async.js";
 
 const SECRET = "s".repeat(32);
 
@@ -372,5 +373,75 @@ describe("regressions", () => {
     handler.registry.clearUntil(handler.actorKeyFor(facts), Date.now() + 60_000);
     const result = await handler.handle(facts);
     expect(result.outcome.kind).toBe("continue");
+  });
+});
+
+/**
+ * The wrapper every I/O detector runs inside.
+ *
+ * Detection is inline on the request path, so an unbounded await is an availability bug —
+ * a stalled reverse-DNS lookup or a hung Redis round trip would hold the response open.
+ * Only the timeout path was exercised, through one engine test; the rest of this had no
+ * coverage at all, including the branch that decides what happens when the work *rejects*.
+ * That branch is the one that keeps a detector's failure from becoming the request's.
+ */
+describe("bounding work that may not come back", () => {
+  it("returns the value when the work finishes in time", async () => {
+    await expect(withTimeout(Promise.resolve("done"), 1000, "fallback")).resolves.toBe("done");
+  });
+
+  it("returns the fallback when the work rejects, rather than rejecting", async () => {
+    await expect(withTimeout(Promise.reject(new Error("dns is unhappy")), 1000, "fallback")).resolves.toBe("fallback");
+  });
+
+  it("swallows a rejection that arrives after the timeout has already given up", async () => {
+    // The dangerous shape: the wrapper has resolved and moved on, and the original promise
+    // fails afterwards with nobody holding it. Unhandled, that takes the process down on
+    // Node's default settings — from a detector that was already written off.
+    const unhandled: unknown[] = [];
+    const watch = (reason: unknown): void => void unhandled.push(reason);
+    process.on("unhandledRejection", watch);
+    try {
+      const late = new Promise<string>((_resolve, reject) => setTimeout(() => reject(new Error("too late")), 30));
+      await expect(withTimeout(late, 5, "fallback")).resolves.toBe("fallback");
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", watch);
+    }
+  });
+
+  it("runs unbounded when asked for no bound at all", async () => {
+    // `0` and a non-finite budget both mean "do not impose one", which is what an operator
+    // setting `detectorTimeoutMs: 0` is asking for.
+    for (const budget of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expect(withTimeout(Promise.resolve("through"), budget, "fallback")).resolves.toBe("through");
+    }
+  });
+
+  it("does not hold a process open waiting for a timer", () => {
+    // The timer is unref'd where the runtime supports it, so a pending detection timer is
+    // never the reason a CLI run or a serverless invocation stays alive.
+    const timers: Array<{ unrefCalled: boolean }> = [];
+    const original = globalThis.setTimeout;
+    (globalThis as { setTimeout: unknown }).setTimeout = ((fn: () => void, ms: number) => {
+      const handle = original(fn, ms) as unknown as { unref?: () => void };
+      const record = { unrefCalled: false };
+      timers.push(record);
+      const realUnref = handle.unref?.bind(handle);
+      handle.unref = () => {
+        record.unrefCalled = true;
+        realUnref?.();
+        return handle as never;
+      };
+      return handle as never;
+    }) as unknown as typeof globalThis.setTimeout;
+    try {
+      void withTimeout(Promise.resolve("x"), 1000, "fallback");
+    } finally {
+      (globalThis as { setTimeout: unknown }).setTimeout = original;
+    }
+    expect(timers.length).toBe(1);
+    expect(timers[0]?.unrefCalled).toBe(true);
   });
 });

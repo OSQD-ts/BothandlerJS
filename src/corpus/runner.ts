@@ -253,6 +253,34 @@ function checkExpectations(item: TrafficCase, result: RequestResult, assertActio
   return failures;
 }
 
+/**
+ * Adds cookies to a request, merged into the header it already has.
+ *
+ * Appending a second `Cookie` header would be the obvious way and is wrong: a browser
+ * sends one, and the parser under test joins repeated fields with "; " precisely because
+ * that is what HTTP/2 requires — so a case built with two would be testing a shape no
+ * client produces on HTTP/1.1, which is what the corpus otherwise models.
+ */
+function withExtraCookies(request: CaseRequest, extra: readonly string[]): CaseRequest {
+  const headers: Array<[string, string]> = [];
+  let merged = false;
+  for (const [name, value] of request.headers) {
+    if (!merged && name.toLowerCase() === "cookie") {
+      headers.push([name, [value, ...extra].join("; ")]);
+      merged = true;
+    } else {
+      headers.push([name, value]);
+    }
+  }
+  if (!merged) headers.push(["Cookie", extra.join("; ")]);
+  return { ...request, headers };
+}
+
+/** Whether this request models a client with a cookie jar — it sent one of its own. */
+function keepsCookies(request: CaseRequest): boolean {
+  return request.headers.some(([name]) => name.toLowerCase() === "cookie");
+}
+
 export async function runCase(handler: BotHandler, clock: ManualClock, item: TrafficCase, startedAt: number, provides: ReadonlySet<string>, assertActions = true): Promise<CaseResult> {
   const missing = (item.requires ?? []).filter((capability) => !provides.has(capability));
   if (missing.length > 0) {
@@ -281,15 +309,48 @@ export async function runCase(handler: BotHandler, clock: ManualClock, item: Tra
     clearanceCookie = handler.grantClearance(seed, item.clearance)?.split(";")[0];
   }
 
+  // Established before the first request, so the detectors reading it see a client with
+  // this history rather than one that acquired it midway through the case.
+  if (item.challengeHistory !== undefined) {
+    clock.set(startedAt);
+    const seed = toFacts(item.requests[0] as CaseRequest, fallbackIp, clock.now());
+    const key = handler.actorKeyFor(seed);
+    // `observe` rather than `peek`: the actor does not exist until something has been
+    // recorded against it, and this runs before the first request.
+    const state = handler.registry.observe(key, seed);
+    for (let i = 0; i < (item.challengeHistory.replayedSolutions ?? 0); i++) state.noteChallengeAnomaly("replay");
+    for (let i = 0; i < (item.challengeHistory.implausibleSolves ?? 0); i++) state.noteChallengeAnomaly("implausible-speed");
+  }
+
+  // Cookies the handler set on an earlier response in this case, which a client that
+  // keeps cookies would send back.
+  //
+  // Returned only to a case that *demonstrates* a cookie jar by sending a cookie of its
+  // own, because that is the difference the corpus is modelling: a browser puts every
+  // first-party cookie in the jar, while a client that sends none keeps none. Without
+  // this the harness makes every browsing session look like a client that was handed a
+  // marker and threw it away, which is a thing real browsers never do — measured, it put
+  // +24 on three ordinary human cases and made the corpus useless as a test of the
+  // marker features.
+  let issuedCookies: string | undefined;
+
   for (const request of item.requests) {
     clock.set(startedAt + (request.atMs ?? 0));
-    const withClearance: CaseRequest =
-      clearanceCookie === undefined ? request : { ...request, headers: [...request.headers, ["Cookie", clearanceCookie]] };
-    const facts = toFacts(withClearance, fallbackIp, clock.now());
+    const extraCookies = [clearanceCookie, (item.keepsCookies ?? keepsCookies(request)) ? issuedCookies : undefined].filter((value) => value !== undefined);
+    const withCookies = extraCookies.length === 0 ? request : withExtraCookies(request, extraCookies);
+    const facts = toFacts(withCookies, fallbackIp, clock.now());
     const { assessment, decision, outcome } = await handler.handle(facts);
+    const setCookie = outcome.kind === "continue" ? outcome.responseHeaders?.["set-cookie"] : outcome.kind === "respond" ? outcome.headers["set-cookie"] : undefined;
+    if (setCookie !== undefined) issuedCookies = setCookie.split(";")[0];
     // Reported back the way an adapter would, so a case can be about what the application
     // answered rather than only about what arrived.
-    if (request.status !== undefined) handler.recordOutcome(facts, request.status);
+    //
+    // Defaulted to 200 rather than skipped, because an application answers every request
+    // with something and a corpus that reports only its failures describes a scanner log
+    // rather than a site. Measured before this: every status the corpus declared was a
+    // 404, so the site-wide miss rate was 1.0 and nothing could ever be unusual against
+    // it — `miss-baseline` was structurally unable to fire.
+    handler.recordOutcome(facts, request.status ?? 200);
     requests.push({ assessment, decision, outcome });
   }
 

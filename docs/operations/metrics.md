@@ -67,8 +67,26 @@ nineteen together.
 
 Switch metrics off entirely with `metrics: false`.
 
+## The counters that appear only when something is shadowed
+
+A detector named in [`shadowDetectors`](../detection/shadow-mode.md) runs and decides
+nothing, so its firings are counted apart from the ones that decided something. Folding
+them together would put work into a chart of decisions that made none.
+
+```
+bothandler_shadow_firings_total{detector="path-novelty"} 312
+bothandler_shadow_verdict_changes_total{verdict="suspected-bot"} 41
+```
+
+The second is the one to read. It counts the assessments the shadowed detectors *would
+have moved*, keyed by the verdict they would have produced — so forty-one would-be
+`suspected-bot`s against a `human` count that did not move is the shape of a detector
+about to start challenging people. Both are absent from the output entirely while nothing
+is shadowed, rather than sitting at zero.
+
 ## Related
 
 - [The audit](audit.md) — because a counter cannot tell you a number is *unusual*
 - [The guard](../concepts/the-guard.md) — what `bothandler_downgrades_total` is counting
+- [Shadow mode](../detection/shadow-mode.md) — running a detector without letting it decide
 - [The dashboard](dashboard.md) — these numbers, drawn

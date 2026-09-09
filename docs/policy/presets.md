@@ -241,4 +241,4 @@ npx @osqd/bothandlerjs check --preset protect-auth
 - [Rules](rules.md) — the grammar these are written in
 - [Actions](actions.md) — what each rule can ask for
 - [Choosing a policy](../start/choosing-a-policy.md) — the decision, start to finish
-- [The corpus](../testing/corpus.md) — 526 cases, including the ones these presets get wrong
+- [The corpus](../testing/corpus.md) — 548 cases, including the ones these presets get wrong

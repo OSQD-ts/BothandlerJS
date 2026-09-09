@@ -43,7 +43,7 @@ npx @osqd/bothandlerjs check --preset protect-content
 ```
 
 ```
-  protect-content against 522 shapes of real traffic
+  protect-content against 548 shapes of real traffic
 
   human            181 cases   3 tag, 175 allow, 3 challenge
   benign-bot       144 cases   6 allow, 86 tag, 48 block, 2 challenge, 2 rate-limit
@@ -111,6 +111,12 @@ bothandlerjs detectors --preset protect-api
 Lists what a configuration actually installs, with each detector's cost and stage. Useful
 for the question "is `identity-rotation` on?", which has caused more confusion than any
 other single setting.
+
+A preset selects *rules*, so it does not change this list — the flag is there because the
+command builds a real handler, not because the answer moves. What does change it is
+`challenge`, `probe` and `site`, each of which installs the detectors that read it. The
+command says so on stderr, so redirecting the list somewhere stays clean. An unknown preset
+is refused rather than quietly answered for the default configuration.
 
 ## Related
 

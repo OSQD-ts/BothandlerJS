@@ -180,6 +180,12 @@ export function withBotHandler(
     const decision = await evaluate(request, context);
     if (decision.response) return decision.response;
     const response = await next(decision.request, context);
+    // What the application answered is the one thing detection cannot see for itself,
+    // and it feeds `probe-volume`: an actor whose requests are almost all misses is
+    // looking for something rather than reading anything. Recorded here for the same
+    // reason the Node adapter records it on `finish` — without it that detector is
+    // installed and silently inert on every Fetch runtime.
+    if (decision.result !== undefined) handler.recordOutcome(decision.result.assessment.facts, response.status);
     const extra = decision.result?.outcome.kind === "continue" ? decision.result.outcome.responseHeaders : undefined;
     if (!extra) return response;
     const merged = new Response(response.body, response);

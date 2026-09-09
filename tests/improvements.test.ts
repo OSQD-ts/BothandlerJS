@@ -41,7 +41,6 @@ describe("RedisStore", () => {
     const calls: string[] = [];
     const client: RedisLike = {
       incr: async () => 1,
-      pexpire: async () => 1,
       get: async () => null,
       del: async () => 1,
       set: async (key, value, _mode, _ttl, condition) => {
@@ -286,6 +285,8 @@ describe("metrics", () => {
       botClasses: { human: 0, "verified-bot": 0, "declared-bot": 0, automation: 0, "http-client": 0, scanner: 0, scraper: 0, impersonator: 0, unknown: 1 },
       actions: { allow: 1, tag: 0, log: 0, delay: 0, "rate-limit": 0, challenge: 0, redirect: 0, block: 0, drop: 0, custom: 0 },
       downgrades: 0, proven: 0, detectorFirings: { 'we"ird': 3 }, detectorFailures: {}, detectorTimings: {},
+      shadowFirings: { 'we"ird': 1 },
+      shadowChanges: { 'confirmed-bot': 0, 'verified-bot': 0, 'suspected-bot': 1, human: 0, unknown: 0 },
       challenges: { issued: 0, solved: 0, rejected: 0 },
       clearances: {}, challengeRejections: {}, interactionScores: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
       scores: { count: 1, totalScore: 12, buckets: [0, 1, 1, 1, 1, 1, 1, 1, 1, 1] },
@@ -478,6 +479,53 @@ describe("fetching published crawler ranges", () => {
     (async () => new Response(body, { status })) as unknown as typeof globalThis.fetch;
 
   const google = JSON.stringify({ creationTime: "2026-01-01", prefixes: [{ ipv4Prefix: "66.249.64.0/27" }, { ipv6Prefix: "2001:4860:4801:10::/64" }] });
+
+  /**
+   * The size cap used to be checked after `await response.text()`, which decided whether
+   * to *use* an oversized list without ever declining to *hold* one. A publisher sending
+   * gigabytes — compromised, misconfigured, or an operator's typo in the URL — was met
+   * with the whole thing in memory and an error afterwards.
+   */
+  describe("refusing a list that is too big to be one", () => {
+    it("stops reading rather than reading it all and complaining", async () => {
+      const chunk = new TextEncoder().encode(`${"1.2.3.4/32\n".repeat(10_000)}`);
+      let sent = 0;
+      const endless: typeof globalThis.fetch = (async () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              sent += chunk.byteLength;
+              // Far more than the cap if it were ever read to the end.
+              if (sent > 512 * 1024 * 1024) controller.close();
+              else controller.enqueue(chunk);
+            },
+          }),
+        )) as unknown as typeof globalThis.fetch;
+
+      await expect(fetchAddressList({ id: "denylist", url: "https://example.invalid/feed.txt" }, { fetch: endless })).rejects.toThrow(/not a list of prefixes/);
+      // The cap is 4 MB. Stopping near it is the whole point; reading half a gigabyte
+      // and then objecting is the bug this replaced.
+      expect(sent).toBeLessThan(16 * 1024 * 1024);
+    });
+
+    it("declines on a declared length before it looks at the body", async () => {
+      // The body is a perfectly good list. If the declared length were not consulted
+      // first this would parse and return, so the rejection is the proof.
+      const body = "10.0.0.0/24\n";
+      const lying: typeof globalThis.fetch = (async () =>
+        new Response(body, { headers: { "content-length": String(64 * 1024 * 1024) } })) as unknown as typeof globalThis.fetch;
+
+      await expect(fetchAddressList({ id: "denylist", url: "https://example.invalid/feed.txt" }, { fetch: lying })).rejects.toThrow(/declares/);
+      await expect(fetchAddressList({ id: "denylist", url: "https://example.invalid/feed.txt" }, { fetch: respond(body) })).resolves.toEqual(["10.0.0.0/24"]);
+    });
+
+    it("still reads a list of an ordinary size", async () => {
+      const body = `${"# a comment\n"}${Array.from({ length: 500 }, (_, i) => `10.${i % 256}.0.0/24`).join("\n")}\n`;
+      const prefixes = await fetchAddressList({ id: "denylist", url: "https://example.invalid/feed.txt" }, { fetch: respond(body) });
+      expect(prefixes.length).toBe(500);
+      expect(prefixes[0]).toBe("10.0.0.0/24");
+    });
+  });
 
   it("reads the JSON shape every major crawler publishes", async () => {
     const prefixes = await fetchCrawlerRanges({ id: "googlebot", url: "https://example.invalid/googlebot.json" }, { fetch: respond(google) });

@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { parseRequest } from "../src/dashboard/parse-request.js";
 import { corpusCase, replayFile, replayLine } from "../src/dashboard/client/replay.js";
 import { draftRule } from "../src/dashboard/client/draft.js";
-import { matchesFilter, matchesQuery, parseQuery, searchableText } from "../src/dashboard/client/query.js";
+import { FIELD_NAMES, OPERATORS, matches as matchesFilterExpression, matchesFilter, parseFilter, searchableText, suggestFor } from "../src/dashboard/client/query.js";
 import { actionKind, outcome, provenBots, verdictBadge } from "../src/dashboard/client/outcome.js";
-import { clearFeed, feedPage, goToFeedPage, ingest, resetPaging, sortRows, state } from "../src/dashboard/client/store.js";
+import { clearFeed, feedPage, goToFeedPage, ingest, matches, resetPaging, setSearch, setTimeframe, sortRows, state } from "../src/dashboard/client/store.js";
 import { clockDate, clockStamp, clockTime, n, pct, rangeLabel, uptime, windowLabel } from "../src/dashboard/client/format.js";
 import type { DashboardEntry } from "../src/dashboard/types.js";
 
@@ -63,8 +63,8 @@ describe("the feed's search", () => {
   ];
 
   function search(query: string): string[] {
-    const terms = parseQuery(query);
-    return rows.filter((row) => matchesQuery(terms, row, searchableText(row))).map((row) => row.requestId);
+    const filter = parseFilter(query);
+    return rows.filter((row) => matchesFilterExpression(filter, row, searchableText(row))).map((row) => row.requestId);
   }
 
   it("matches a bare word anywhere, the way it always did", () => {
@@ -98,12 +98,95 @@ describe("the feed's search", () => {
   });
 
   it("keeps a quoted phrase together", () => {
-    expect(parseQuery('"GET /api/v2"')).toEqual([{ field: undefined, value: "get /api/v2", negated: false }]);
+    expect(parseFilter('"GET /api/v2"')).toEqual({ kind: "term", term: { field: undefined, value: "get /api/v2", negated: false } });
   });
 
   /** A path can contain a colon, and so can a User-Agent. Only known names make a field. */
   it("treats an unknown prefix as an ordinary word", () => {
-    expect(parseQuery("weird:thing")).toEqual([{ field: undefined, value: "weird:thing", negated: false }]);
+    expect(parseFilter("weird:thing")).toEqual({ kind: "term", term: { field: undefined, value: "weird:thing", negated: false } });
+  });
+
+  /**
+   * The operators. `$or` is the reason the parser produces a tree at all: a flat list of
+   * terms cannot express it, which the previous version communicated by silently
+   * ignoring the word.
+   */
+  it("ors two terms together", () => {
+    expect(search("path:/health $or path:/api/items").sort()).toEqual(["a", "b"]);
+  });
+
+  it("binds $and tighter than $or, the conventional way round", () => {
+    // Reads as `curl $or (path:/health $and score:<50)`. Grouped the other way it would
+    // be empty, because nothing here is both curl and /health.
+    expect(search("curl $or path:/health $and score:<50").sort()).toEqual(["a", "b"]);
+  });
+
+  it("takes brackets when that is not what you meant", () => {
+    expect(search("(curl $or path:/health) $and score:<50")).toEqual(["b"]);
+  });
+
+  it("spells negation as $not as well as a dash", () => {
+    expect(search("$not curl").sort()).toEqual(["b", "c"]);
+    expect(search("actor:203.0.113.4 $not path:/health")).toEqual(["a"]);
+    expect(search("$not (curl $or path:/health)")).toEqual(["c"]);
+  });
+
+  it("reads $and as the juxtaposition it already was", () => {
+    expect(search("actor:203.0.113.4 $and path:/health")).toEqual(search("actor:203.0.113.4 path:/health"));
+  });
+
+  it("matches a set with $in and refuses one with $notin", () => {
+    expect(search("path:$in(/health, /api/items)").sort()).toEqual(["a", "b"]);
+    expect(search("path:$notin(/health)").sort()).toEqual(["a", "c"]);
+    // Spacing inside the brackets is somebody's habit, not a syntax.
+    expect(search("path:$in(/health,/api/items)").sort()).toEqual(["a", "b"]);
+  });
+
+  it("matches nothing for an empty set rather than everything", () => {
+    // Half-typed input is the normal state of a live search box, and a filter that
+    // widens while somebody is still typing it is a filter that lies.
+    expect(search("path:$in()")).toEqual([]);
+  });
+
+  /**
+   * Every one of these is a query somebody is in the middle of typing. None may throw,
+   * and none may match a set the typed part does not describe.
+   */
+  it("survives half-written input", () => {
+    for (const half of ["$", "$n", "$not", "$or", "(", "(curl", "curl $or", "path:$in(", "path:$in(/health", ")", "((a)", "$and $and", "-", '"']) {
+      expect(() => search(half), half).not.toThrow();
+    }
+    expect(search("$not")).toEqual(["a", "b", "c"]);
+    expect(search("curl $or")).toEqual(["a"]);
+    expect(search("(curl")).toEqual(["a"]);
+  });
+
+  /**
+   * The parser is recursive descent over input somebody can paste, and it runs on every
+   * keystroke *and* on load, because the query lives in the URL. Five thousand nested
+   * brackets overflowed the stack and threw a `RangeError` out of `setSearch` — which
+   * from a shared link breaks the dashboard for whoever opens it, and contradicts the
+   * promise written above this function that nothing here throws.
+   */
+  it("survives brackets nested past any reasonable depth", () => {
+    for (const depth of [32, 5_000, 200_000]) {
+      const nested = `${"(".repeat(depth)}curl${")".repeat(depth)}`;
+      expect(() => search(nested), `depth ${depth}`).not.toThrow();
+    }
+    // And ordinary grouping is untouched by the cap.
+    expect(search("(curl $or path:/health)").sort()).toEqual(["a", "b"]);
+    expect(search("(path:/nope $or path:/health)")).toEqual(["b"]);
+  });
+
+  it("does not turn an ordinary word into an operator", () => {
+    // The reason the operators carry a `$`. "or" and "not" appear in User-Agents and
+    // paths, and a language where a search word silently becomes an operator lies about
+    // what it matched.
+    expect(OPERATORS.every((name) => name.startsWith("$"))).toBe(true);
+    // "or" is a substring of "header-order", and it stays a search word: the row that
+    // mentions it matches, and the two either side of it are not or-ed together.
+    expect(search("or")).toEqual(["c"]);
+    expect(search("path:/health or path:/api/items")).toEqual([]);
   });
 
   it("matches everything when it is empty", () => {
@@ -505,5 +588,113 @@ describe("how the dashboard writes times and dates", () => {
       expect(stamp).not.toMatch(/[ap]m/i);
       expect(stamp).toMatch(/^\d{2}:\d{2}:\d{2}$/);
     }
+  });
+});
+
+/**
+ * Completing a filter as it is typed.
+ *
+ * The options come from the parser's own field map rather than a list kept beside it, so
+ * a field added to the language is offered the day it exists — and one that never existed
+ * is never offered, which is the failure that would teach somebody a syntax the parser
+ * does not have.
+ */
+describe("suggesting filter terms", () => {
+  it("completes a field name from what has been typed", () => {
+    const { options } = suggestFor("ver", 3);
+    expect(options).toEqual(["verdict:"]);
+  });
+
+  it("completes the values of a field whose set is closed", () => {
+    const { options } = suggestFor("verdict:con", 11);
+    expect(options).toEqual(["verdict:confirmed-bot"]);
+  });
+
+  it("offers nothing for a field that takes anything", () => {
+    // `rule`, `identity` and `path` are open sets. Guessing there would be inventing
+    // options rather than completing them.
+    expect(suggestFor("rule:no-", 8).options).toEqual([]);
+    expect(suggestFor("path:/ap", 8).options).toEqual([]);
+  });
+
+  it("keeps a negation on the front of what it completes", () => {
+    expect(suggestFor("-verd", 5).options).toEqual(["-verdict:"]);
+    expect(suggestFor("-verdict:hum", 12).options).toEqual(["-verdict:human"]);
+  });
+
+  it("completes only the token the caret is in", () => {
+    const input = "actor:203.0.113.4 ver";
+    const { options, from, to } = suggestFor(input, input.length);
+    expect(options).toEqual(["verdict:"]);
+    // The replacement covers `ver` and nothing before it.
+    expect(input.slice(from, to)).toBe("ver");
+  });
+
+  it("only offers names the parser actually accepts", () => {
+    for (const name of FIELD_NAMES) expect(suggestFor(name.slice(0, 2), 2).options.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Traffic somebody never wants to see, and the window they are looking at.
+ *
+ * Both narrow what `matches` accepts, so both apply to the feed, the counts and the export
+ * together — "hidden" has to mean the same thing everywhere or the export quietly disagrees
+ * with the screen.
+ */
+describe("exclusions and the timeframe", () => {
+  const at = 1_700_000_000_000;
+  const rows = (): void => {
+    clearFeed();
+    state.rows = [];
+    state.byId = new Map();
+    // Reset the narrowing too. A failing assertion leaves whatever it set behind, and a
+    // leaked filter fails the *next* test with a message about the wrong thing.
+    setSearch("");
+    setTimeframe(undefined, undefined);
+    ingest(entry({ requestId: "a", at, path: "/health" }));
+    ingest(entry({ requestId: "b", at: at + 60_000, path: "/products" }));
+    ingest(entry({ requestId: "c", at: at + 120_000, path: "/health" }));
+    ingest(entry({ requestId: "d", at: at + 180_000, path: "/checkout" }));
+  };
+
+  it("hides everything $not matches", () => {
+    // What the Exclude button used to do, said in the query language instead. One
+    // mechanism rather than two, and it is in the URL like every other narrowing.
+    rows();
+    setSearch("$not path:/health");
+    expect(state.rows.filter(matches).map((row) => row.entry.requestId)).toEqual(["b", "d"]);
+    setSearch("");
+    expect(state.rows.filter(matches)).toHaveLength(4);
+  });
+
+  it("hides two things with a set", () => {
+    // The old exclusion list treated its entries as "either", which is what a set does.
+    rows();
+    setSearch("path:$notin(/health, /checkout)");
+    expect(state.rows.filter(matches).map((row) => row.entry.requestId)).toEqual(["b"]);
+    setSearch("");
+  });
+
+  it("answers all three questions people ask about a window", () => {
+    rows();
+    setTimeframe(at + 120_000, undefined);
+    expect(state.rows.filter(matches).map((row) => row.entry.requestId)).toEqual(["c", "d"]);
+
+    setTimeframe(undefined, at + 60_000);
+    expect(state.rows.filter(matches).map((row) => row.entry.requestId)).toEqual(["a", "b"]);
+
+    setTimeframe(at + 60_000, at + 120_000);
+    expect(state.rows.filter(matches).map((row) => row.entry.requestId)).toEqual(["b", "c"]);
+
+    setTimeframe(undefined, undefined);
+    expect(state.rows.filter(matches)).toHaveLength(4);
+  });
+
+  it("selects nothing when the window runs backwards, rather than everything", () => {
+    rows();
+    setTimeframe(at + 180_000, at);
+    expect(state.rows.filter(matches)).toHaveLength(0);
+    setTimeframe(undefined, undefined);
   });
 });

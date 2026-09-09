@@ -8,6 +8,127 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Shadow mode: run a detector and let it decide nothing.** `shadowDetectors: ["path-novelty"]`
+  runs the named detectors on every request exactly as they otherwise would and keeps their
+  findings out of the verdict, the score, the class, the identity and every rule. They land
+  in `assessment.shadowEvidence`, counted and charted next to the evidence that did decide.
+  This is deliberately not a weight of zero: a weight is consulted only on the probabilistic
+  path, and `certain` evidence never reaches that path, so a shadowed detector emitting it
+  would have blocked people with its weight sitting at zero the whole time.
+
+  `assessment.shadowVerdict` carries what the verdict *would* have been, computed only when
+  a shadowed detector actually found something. "It fired 312 times" is not a number anybody
+  can act on; "it would have moved 41 requests to `suspected-bot`" is. Prometheus gains
+  `bothandler_shadow_firings_total` and `bothandler_shadow_verdict_changes_total`, both
+  absent entirely while nothing is shadowed.
+
+  The correlation sources are why this exists: several of their detectors fire at `moderate`
+  on real people by design — a phone roaming between networks, a crowd on a broken link,
+  somebody tapping "Request desktop site" — and whether the thresholds are right *for your
+  site* is not a thing this library can know. See `docs/detection/shadow-mode.md`.
+
+- **`target-integrity`, and the raw request target it reads.** `facts.path` is normalised so
+  that a rule scoped to `/admin` holds against `/%61dmin` and `/./admin`. That normalisation
+  is also what makes an evasive target look ordinary: `/%2e%2e%2f%2e%2e%2fapp/config.yml`
+  arrives as `/app/config.yml`, which is on no wordlist and reads like a broken link.
+  `facts.rawPath` now keeps the target as it was spelled — and only when it differs from the
+  normalised form, so ordinary traffic pays nothing for it.
+
+  The detector reports encoded traversals, double encoding, encoded control characters,
+  absolute-form targets addressed to a proxy, and separators hidden inside a segment. None
+  of it is `certain` and the closest call says why: a path segment carrying a URL as *data*
+  is encoded once to sit in a path and again by whatever built the link around it, which
+  produces `%252e` honestly on a site that has done nothing wrong.
+
+- **The feed filter takes `$and`, `$or`, `$not`, `$in` and `$notin`.** Adjacent terms
+  still mean `AND` and `-term` still negates, so every existing query and saved filter
+  reads the same — but the parser produces a tree now rather than a flat list, which is
+  what `$or` needs and what the previous version communicated by silently ignoring the
+  word. `$not` binds tightest, then `$and`, then `$or`, and brackets group. Operators
+  carry a `$` because a bare `or` appears in User-Agents and paths, and a language where
+  an ordinary search word becomes an operator lies about what it matched. Nothing throws:
+  an unclosed bracket, a dangling `$or` and a half-typed `$in(` are all the normal state
+  of a live search box.
+
+- **The Actors screen lists either the registry or the actors in the feed.** A toggle
+  above the table. The registry answers "who is hitting me hardest"; once a filter is on,
+  the question is usually the other one — "who is in *this*" — and the screen could not
+  answer it. The feed-derived list leaves `Per min`, `Cadence` and `Unsolved` blank rather
+  than computing them from a few hundred requests, because those are properties of a
+  client's whole history and a confident number under the wrong heading is worse than a
+  dash.
+
+### Changed
+
+- **The browser suite runs on Chromium, Firefox and WebKit.** `BROWSER_ENGINE` picks one
+  locally (`npm run test:browser:firefox`, `:webkit`); CI runs all three as a matrix.
+  Testing a single engine is how the Safari header bug shipped, and Firefox earned its
+  place on the first run by catching the challenge page's CSP error.
+
+- **The feed's column headers stick in Safari.** The tables collapsed their borders, which
+  is a long-standing sore point for sticky table cells in WebKit — the CSSWG has an open
+  issue on collapsed borders not following a cell when it sticks, and Safari is widely
+  reported to drop the stickiness of a `th` outright. The header held in Chromium and
+  Firefox and was reported adrift in Safari, which is what a sticky element that has
+  stopped sticking looks like. They separate their
+  borders with zero spacing now, which no border in these tables relied on: the only
+  measurable difference is the accent column starting two pixels earlier, because
+  collapsing left half of that 3px border outside the cell. A browser test scrolls the
+  page and asserts the header holds, since one keyword can undo this silently.
+
+- **The feed's Exclude button is gone; `$not` replaces it.** It kept a hidden list in one
+  person's browser, which meant a view with the noise taken out could not be shared. A
+  `$not` lives in the URL like every other narrowing.
+
+- **Labelling an actor edits in place instead of calling `prompt()`.** A sandboxed iframe
+  blocks `prompt()` outright, so on an embedded dashboard the Label button did nothing at
+  all, with no error and no way to tell.
+
+- **Correlating a client's own requests, through a marker cookie.** `probe` is a new,
+  opt-in source: the engine issues a signed first-party cookie and reads it back, so two
+  requests can be attributed to one *client* rather than to one address. That closes a gap
+  the library had documented and declined to guess at — `identity-rotation` reads "one
+  actor, several User-Agents" as lying, and under an address-derived actor key that
+  describes every office and carrier on the internet, so it has always shipped switched
+  off. A marker carries an HMAC only this server can produce, which makes the same
+  observation evidence instead of speculation.
+
+  Four detectors arrive with it. `identity-drift` compares the identity claimed now with
+  the one claimed when the marker was issued, weighing a changed *browser family* at
+  `strong` and a changed platform at `moderate` — because "Request desktop site" on a
+  phone does the latter and the person doing it is a person. `marker-integrity` reports a
+  marker signed with a key we do not have. `marker-fanout` counts the networks one marker
+  has been presented from. `marker-persistence` reports a client that sends cookies but
+  never ours, deliberately narrower than `session-integrity`, which already covers a
+  client that sends none.
+
+  It is off by default and sets a cookie only when the client holds no valid one, so an
+  ordinary visitor is issued one on the first request of a session and no other. `secrets`
+  is required and has no default: a secret generated at startup would read every marker
+  minted by another replica as forged.
+
+- **Reading what a client does when it is challenged.** `challenge-reaction` reports an
+  identity that changes within seconds of a challenge, and a client challenged repeatedly
+  that has never answered. It is the only detector here whose stimulus this library chose,
+  which is what lets it reach `strong` — and it reports the same observation a tier lower
+  when only an address ties the two requests together, because that is how much less an
+  address-based join is worth. `challenge-integrity` reports solutions that were replayed,
+  or returned faster than the proof of work can be computed in a browser.
+
+- **Comparing a client with the rest of your traffic.** `site` is a second opt-in source
+  holding a bounded, warmed-up baseline of what a site normally serves. `distributed-walk`
+  finds a numeric range walked across many clients where none walks enough of it alone —
+  the one threat per-actor thresholds miss by construction. `path-novelty` is a
+  self-maintaining wordlist. `path-campaign` reports a path the site never served that
+  many unrelated clients suddenly want, requiring the miss rate so that a successful
+  launch is not reported as an attack. `miss-baseline` is `probe-volume` measured against
+  the site's own rate rather than a fixed threshold.
+
+  Nothing is reported until `warmupRequests` have been observed, because every path is
+  rare when nothing has been seen. Walk ids are held as a coarsening bitmap and marker
+  fan-out as a 128-bit sketch, so neither table grows with what a client chooses to
+  request.
+
 - **`indexers-only`, a preset for sites that want search traffic and nothing else.**
   Serves a bot only when its identity has been confirmed by DNS or a published range
   *and* it is a `search` or `social` crawler; refuses every other proven bot; challenges
@@ -105,6 +226,90 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 ### Fixed
+
+- **`RedisStore.increment` could leave a counter key that never expired.** `INCR` then
+  `PEXPIRE` is two commands, and a process killed between them orphaned a key nothing would
+  ever revisit — the next request falls into the next bucket, under another key. The expiry
+  is now armed by the command that *creates* the key: `SET … PX … NX` issued without waiting
+  for its reply, then `INCR`, so both are on the wire together and this stays one round trip.
+  Not a Lua script, because `eval` is the one command `ioredis` and `node-redis` spell
+  differently enough that `RedisLike` could not describe both. `pexpire` has left that
+  interface, which needs four commands now rather than five.
+
+- **The interaction challenge marked down somebody who paused mid-movement, twice over.**
+  Samples arriving more than a quarter of a second apart are dropped before anything is
+  measured, because the distance across a pause is not a distance a hand travelled — but
+  `fractionalShare` was dividing the samples it kept by the count of everything that
+  arrived, reporting *fewer* sub-pixel coordinates than the samples it was computed from
+  actually had. That reads as "these coordinates are integers", which is the signature of an
+  interpolated path. Separately, whether a path was measurable at all was decided from the
+  raw array length while the scoring judged the kept samples: four pointer samples with a
+  pause before each one were four to the array and none to the analysis, so the report was
+  called measurable and then scored at zero. Both cost the reading pattern most likely to
+  produce them — move the pointer, stop to read, move again.
+
+- **Save and Cancel on the actor label editor, which three earlier attempts could not fit.**
+  `input[type="text"] { width: 100% }` outranks a bare class selector, so the editor's
+  `width: 15ch` had never applied: the box filled its shrink-to-fit container and pushed the
+  buttons past the right edge of the panel, where they could be seen and not clicked.
+  Qualifying the selector fixed the cause; the row's other actions now stand aside while the
+  editor is open, which is also the right thing on its own — Allowlist and Forget are not
+  what somebody naming a client is reaching for.
+
+- **The Actors scope was not in the URL.** `#actors?a=feed`, pushed rather than replaced,
+  because switching between the registry and the feed is a discrete act like clicking a tab
+  and the back button should undo it. The feed-scoped list also shows a dash for
+  `Confirmations` like the three columns beside it, rather than a confident zero under a
+  heading that means "how many times has this client been proven a bot".
+
+- **`bothandlerjs detectors --preset <typo>` answered anyway.** An unknown preset fell
+  through to a handler with no preset and printed the default list at exit code 0 — a
+  confident wrong answer to the one question the command exists for, while `robots` in the
+  same file refused the same typo. It is refused now, with the same message. The command
+  also notes that a preset selects rules rather than detectors, and that `challenge`,
+  `probe` and `site` are what change the list; the note goes to stderr, so redirecting the
+  list stays clean.
+
+- **The default notification sink discarded the content of every error.** `consoleNotifier`
+  never referenced `event.error`. An error carrying no assessment fell into the branch
+  written for anomalies and printed `[bothandler] error unknown — ` at *warning* level, with
+  the failing source and the message both dropped; one that did carry an assessment printed
+  the request's evidence instead. Errors are how a failed detector, sink or store is
+  reported, and this is the sink an operator gets without configuring one — so the default
+  way to find out that a detector had been throwing showed neither which one nor why.
+
+- **Every person shown a challenge page in Firefox got a security error in their
+  console.** The page declares no icon, so the browser asks for `/favicon.ico` by itself;
+  under `default-src 'none'` that request is refused, and Firefox reports the refusal as a
+  CSP violation on a page whose entire purpose is to reassure somebody that nothing is
+  wrong. The page now declares an empty icon so the request is never made, and the policy
+  allows `img-src data:` — which permits nothing off the machine, a `data:` URI being
+  inline by definition — so that declaration is honoured. Found by running the browser
+  suite on Firefox for the first time.
+
+- **Cookies split across several header fields were misparsed, losing every cookie after
+  the first.** HTTP/2 permits a client to send its cookies as separate header fields and
+  Node's `http2` surfaces them as an array; RFC 9113 §8.2.3 says a receiver concatenates
+  them with `"; "`. They were joined with `", "` like every other header, which parses as
+  one cookie whose value is the rest of the line — so a clearance token in the second
+  field was invisible, and an HTTP/2 visitor who had solved a challenge was challenged
+  again on every request.
+
+- **`X-Forwarded-For` entries carrying a port were dropped.** Azure's Application Gateway
+  and Front Door write `1.2.3.4:5678`, and RFC 7239 spells IPv6 as `[2001:db8::1]:5678`.
+  Neither parsed, and because every entry in such a chain carries a port the whole chain
+  emptied and every client behind that proxy resolved to the proxy's own address — sharing
+  one actor, one history and one rate-limit bucket, so a single bot could lock out every
+  real visitor.
+
+- **Evidence summaries quoted client-controlled text without neutralising it.** A request
+  path containing CRLF came back inside an `id-enumeration` summary exactly as sent, which
+  forges log lines; escape sequences repainted terminals. Summaries and operator labels are
+  now cleaned centrally, so detectors written elsewhere are covered too.
+
+- **`probe-volume` was inert on three of the four adapters.** Only the Node adapter
+  reported the status the application answered, so on Fastify, Koa and every Fetch runtime
+  the detector was installed, listed, and structurally unable to fire.
 
 - **The "N not streamed" badge outlived the feed it described.** The badge adds two
   counts: the server's rate-cap `skipped`, which `FeedRing.clear()` resets, and the
@@ -281,7 +486,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   looks like a challenge that worked, which is why it needed saying. `AuditWindow` gains
   `challengesSolved` and `challengeSolveRate`.
 
-- **`bothandlerjs check` — your policy against 526 shapes of real traffic.** The question
+- **`bothandlerjs check` — your policy against 545 shapes of real traffic.** The question
   the library is organised around, asked offline and before a deploy: *if I point this
   configuration at the actual internet, who gets hurt?* It exits non-zero if any case
   marked `human` is denied service, which is what makes it a CI step rather than a

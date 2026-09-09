@@ -626,6 +626,52 @@ export const HUMAN_CASES: TrafficCase[] = [
   }),
 
   human({
+    id: "request-desktop-site-mid-visit",
+    title: "Somebody switching their phone to the desktop version of a site",
+    category: "mangled-by-infrastructure",
+    provenance:
+      "`Request desktop site` rewrites the User-Agent to claim a Mac. The browser is the same Safari and the cookie jar is the same jar, so the marker comes back — which means the library can see, correctly, that one client has now described itself two different ways.",
+    requires: ["marker-probe"],
+    notes:
+      "The reason `identity-drift` weighs a changed *browser family* at `strong` and a changed platform only at `moderate`. Software does not change what it is; a platform changes when a person taps a menu item, and this is that person.",
+    requests: [
+      ...humanPaced({ ...browser("safariIos"), ip: "203.0.115.24", headers: [...browser("safariIos").headers, ["Cookie", "sid=phone-session"] as [string, string]] }, [
+        "/",
+        "/collections/lamps",
+        "/products/brass-desk-lamp",
+        "/products/brass-desk-lamp/reviews",
+      ]),
+      // The same person, same session, having tapped "Request desktop site".
+      ...humanPaced(
+        { ...browser("safariMac"), ip: "203.0.115.24", headers: [...browser("safariMac").headers, ["Cookie", "sid=phone-session"] as [string, string]] },
+        ["/products/brass-desk-lamp", "/delivery", "/products/brass-desk-lamp", "/basket"],
+      ).map((request) => ({ ...request, atMs: (request.atMs ?? 0) + 47_000 })),
+    ],
+    expect: { certain: false, action: ["allow", "tag", "log", "delay", "challenge", "rate-limit"] },
+    tags: ["known-cost"],
+  }),
+
+  human({
+    id: "broken-link-shared-widely",
+    title: "A crowd of people following one mistyped link",
+    category: "mangled-by-infrastructure",
+    provenance:
+      "Somebody shares a URL with a typo in it and thousands of real people follow it within the hour. From the server this is a path the site has never served, requested by many unrelated clients, and answered `not found` to every one of them — which is the exact shape `path-campaign` reads.",
+    requires: ["site-baseline"],
+    notes:
+      "The known cost of comparing a client with the rest of the traffic: most of the evidence is about what *other* people did, and a person following a bad link is indistinguishable here from one running a list. It is capped at `moderate` for this case specifically, and the guarantee it must keep is this one — reported, never refused.",
+    requests: Array.from({ length: 16 }, (_, index) => ({
+      ...browser("chromeWindows", { kind: "cross-site-navigate", referer: "https://social.example/" }),
+      ip: `203.0.114.${index + 1}`,
+      path: "/blog/anouncing-our-new-thing",
+      status: 404,
+      atMs: index * 4000,
+    })),
+    expect: { certain: false, action: ["allow", "tag", "log", "delay", "challenge", "rate-limit"] },
+    tags: ["known-cost"],
+  }),
+
+  human({
     id: "cgnat-shared-address",
     title: "Many people behind one carrier-grade NAT address",
     category: "mangled-by-infrastructure",

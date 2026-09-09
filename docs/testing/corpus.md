@@ -1,6 +1,6 @@
 # The traffic corpus
 
-526 cases, 739 requests, 6,002 header lines, 55 categories of real web traffic — and a
+548 cases, 1,235 requests, 12,802 header lines, 58 categories of real web traffic — and a
 harness that runs them against *your* configuration.
 
 ← [Documentation](../index.md) · [Testing](index.md)
@@ -21,11 +21,15 @@ npm run corpus -- --audience human --verbose
 ```
 
 ```
-  monitor-only     526/526 cases pass  ·  0 false positives
-  protect-content  526/526 cases pass  ·  0 false positives
-  protect-data     525/526 cases pass  ·  0 false positives
-  protect-auth     511/526 cases pass  ·  0 false positives
+  monitor-only     539/539 cases pass  ·  0 false positives
+  protect-content  539/539 cases pass  ·  0 false positives
+  protect-data     538/539 cases pass  ·  0 false positives
+  protect-auth     524/539 cases pass  ·  0 false positives
 ```
+
+539 rather than 548 because nine cases name a source this configuration does not provide —
+a marker probe or a site baseline — and a verdict about a marker from a handler that issues
+none is a verdict about nothing. Those are *skipped*, and named, rather than failed.
 
 The two strict presets do not pass everything, and **the gap is the documentation rather
 than a defect**: [`protect-auth`](../policy/presets.md#protect-auth) blocks proven
@@ -38,11 +42,11 @@ corpus keeps the receipts.
 
 | Audience | Cases | Examples |
 | -------- | ----: | -------- |
-| **human** | 182 | 30 browser profiles across Chromium, Gecko and WebKit · desktop, mobile, tablet, console, television · 40 in-app WebViews (Instagram, TikTok, WeChat, KakaoTalk, LINE, VK, banking and airline apps) · Electron desktop apps · Tor, `resistFingerprinting`, Sec-GPC · Lynx, w3m, screen readers · IE11, Android 4.4, a car's infotainment screen · corporate proxies, carrier transcoders, CGNAT, iCloud Private Relay · an author signing in at `/wp-login.php` and a developer searching a docs site for SQL syntax |
+| **human** | 186 | 30 browser profiles across Chromium, Gecko and WebKit · desktop, mobile, tablet, console, television · 40 in-app WebViews (Instagram, TikTok, WeChat, KakaoTalk, LINE, VK, banking and airline apps) · Electron desktop apps · Tor, `resistFingerprinting`, Sec-GPC · Lynx, w3m, screen readers · IE11, Android 4.4, a car's infotainment screen · corporate proxies, carrier transcoders, CGNAT, iCloud Private Relay · an author signing in at `/wp-login.php` and a developer searching a docs site for SQL syntax |
 | **benign-bot** | 144 | Googlebot and Bingbot verified by DNS · 30 regional crawlers (Naver, Seznam, Coc Coc, Sogou, 360, Shenma, Qwant, Mojeek) · Google's and Microsoft's specialist fleets · 12 link unfurlers · monitoring · feed and podcast clients · academic and archival crawlers · ad verification · email link scanners |
 | **declared-bot** | 32 | The AI fleet split by job — training, search, fetch-for-a-user — plus an agentic browser |
-| **unwanted-bot** | 106 | SEO and market-intelligence crawlers · **50 HTTP clients in their real header orders**, across Python, Node, JVM, Go, Rust, PHP, Ruby, .NET, Perl · headless runtimes · fabricated User-Agents from a randomiser (Chrome on an iPhone, Windows and macOS at once, Firefox on WebKit) |
-| **hostile** | 29 | Forged Googlebot four ways · scanners · credential stuffing · traps · protocol abuse and request-smuggling framing · forwarding-header injection · wordlist probes for `/.env`, `/.git`, JNDI and TRACE |
+| **unwanted-bot** | 116 | SEO and market-intelligence crawlers · **50 HTTP clients in their real header orders**, across Python, Node, JVM, Go, Rust, PHP, Ruby, .NET, Perl · headless runtimes · fabricated User-Agents from a randomiser (Chrome on an iPhone, Windows and macOS at once, Firefox on WebKit) |
+| **hostile** | 37 | Forged Googlebot four ways · scanners · credential stuffing · traps · protocol abuse and request-smuggling framing · forwarding-header injection · wordlist probes for `/.env`, `/.git`, JNDI and TRACE · traversals spelled in percent-encoding and encoded twice over · open-proxy probing |
 | **infrastructure** | 33 | CDN origin pulls (Cloudflare, Fastly, Akamai, CloudFront) · API gateways and service meshes · k8s and ELB probes · webhooks · browser prefetch |
 
 Every request is built the way the client actually builds it — the Client Hints block, the

@@ -6,6 +6,8 @@ import type { ActorState } from "../state.js";
 import type { Clock } from "../internal/clock.js";
 import type { IpRangeSet } from "../internal/ip.js";
 import type { DnsResolver } from "../internal/dns.js";
+import type { MarkerObservation } from "../probe/index.js";
+import type { SiteProfile } from "../site/index.js";
 
 /**
  * Everything a detector is allowed to see.
@@ -33,6 +35,21 @@ export interface DetectionContext {
   readonly resolver: DnsResolver;
   /** Named IP range sets from config: `allowlist`, `denylist`, `datacenter`, and per-crawler ranges. */
   readonly ranges: ReadonlyMap<string, IpRangeSet>;
+  /**
+   * What the marker cookie on this request turned out to be, when the probe is on.
+   *
+   * `undefined` means the probe is not configured, which is the default — a detector
+   * reading this must treat absence as "no information" and never as "no marker".
+   */
+  readonly marker: MarkerObservation | undefined;
+  /**
+   * What the rest of the site's traffic looks like, when a profile is configured.
+   *
+   * `undefined` means no profile, which is the default. A profile that exists may still
+   * be cold — every reader must check `warm` before believing a count, because during
+   * warmup every path looks rare and every client looks unique.
+   */
+  readonly site: SiteProfile | undefined;
   /** Scratch space shared between detectors within one request. Cleared afterwards. */
   readonly shared: Map<string, unknown>;
 }

@@ -11,7 +11,6 @@ import type { Clock } from "../internal/clock.js";
  */
 export interface RedisLike {
   incr(key: string): Promise<number>;
-  pexpire(key: string, ms: number): Promise<unknown>;
   /**
    * `SET key value PX ttl [NX]`.
    *
@@ -62,13 +61,44 @@ export class RedisStore implements BotHandlerStore {
     this.clock = options.clock ?? systemClock;
   }
 
+  /**
+   * Counts one request into the fixed window `key` is bucketed by.
+   *
+   * This used to be `INCR`, then `PEXPIRE` when the count came back as 1 — which is
+   * correct only if the process survives long enough to send the second command. A
+   * deploy, an OOM kill or a dropped connection in between left a counter key behind
+   * with no expiry at all, and nothing would ever clean it up: the next request falls
+   * into the next bucket, under a different key, so the orphan is never touched again.
+   * One per unlucky restart is nothing; the point is that it accumulates forever, in a
+   * Redis the operator may well be running with `noeviction`.
+   *
+   * So the expiry is armed by the command that *creates* the key rather than by a
+   * follow-up. `SET … PX … NX` writes the seed only if nothing is there, always with a
+   * lifetime, and does nothing at all once the bucket exists — so it neither costs a
+   * count nor re-arms a window under load. The `INCR` is issued without waiting for its
+   * reply, so both commands are on the wire together and this stays one round trip.
+   * Ordering holds because a Redis client writes commands to its connection in call
+   * order and Redis executes them in arrival order, which means the key has a lifetime
+   * from the instant it exists.
+   *
+   * Not a Lua script, which would make it a single command: `eval` is the one thing
+   * `ioredis` and `node-redis` spell differently enough that this interface could not
+   * describe both, and staying client-agnostic is worth more than the last round trip.
+   */
   async increment(key: string, windowMs: number): Promise<number> {
     const bucket = Math.floor(this.clock.now() / windowMs);
     const full = `${this.prefix}c:${key}:${bucket}`;
+    // To the end of this bucket, not a full window from now. A key first touched in the
+    // last millisecond of its window would otherwise sit there for another whole one.
+    const remaining = (bucket + 1) * windowMs - this.clock.now();
+    const ttl = Number.isFinite(remaining) && remaining > 0 ? remaining : windowMs;
+
+    const armed = this.client.set(full, "0", "PX", ttl, "NX");
+    // Handled below, but claimed now: if the `INCR` rejects first, an unhandled
+    // rejection from this one would take the process down with it.
+    armed.catch(() => {});
     const count = await this.client.incr(full);
-    // Only the first increment needs to arm the expiry. Re-arming on every request
-    // would turn a fixed window into a sliding one that never expires under load.
-    if (count === 1) await this.client.pexpire(full, windowMs);
+    await armed;
     return count;
   }
 

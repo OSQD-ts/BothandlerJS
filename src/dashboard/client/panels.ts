@@ -180,6 +180,16 @@ export function drawStatsPanels(): void {
       ["Actors tracked", n(metrics.actorsTracked)],
       ["Guard stops", n(metrics.downgrades)],
     ];
+    // What the shadowed detectors would have done, next to what was actually done. The
+    // row is absent entirely when nothing is shadowed, rather than showing a row of zeros
+    // that invites somebody to wonder what it means.
+    const shadowed = pairs(metrics.shadowFirings);
+    if (shadowed.length > 0) {
+      const moved = Object.entries(metrics.shadowChanges).filter(([, count]) => count > 0);
+      rows.push(["Shadowed findings", n(shadowed.reduce((total, [, count]) => total + count, 0))]);
+      for (const [verdict, count] of moved) rows.push([`Would have become ${verdict}`, n(count)]);
+      if (moved.length === 0) rows.push(["Verdicts they would have changed", "none"]);
+    }
     const failures = pairs(metrics.detectorFailures);
     for (const [detector, count] of failures) rows.push([`Detector failures — ${detector}`, n(count)]);
     for (const [key, value] of rows) health.appendChild(statRow(key, value));
@@ -198,14 +208,20 @@ export function drawStatsPanels(): void {
   clear(list);
   $("detector-count").textContent = `${snapshot.detectors.length} installed`;
   for (const detector of snapshot.detectors) {
-    const row = el("div", "det");
+    const row = el("div", `det${detector.shadow === true ? " shadow" : ""}`);
     const left = el("div");
     left.appendChild(el("div", "mono", detector.id));
     left.appendChild(el("div", "d", detector.description));
     row.appendChild(left);
-    const fires = metrics?.detectorFirings[detector.id] ?? 0;
+    // A shadowed detector's firings are counted elsewhere and mean something else, so
+    // they are read from elsewhere and labelled. Showing them in the same column as the
+    // rest would say this detector had been deciding things, which is the one claim the
+    // whole feature exists to avoid making. Read off the detector rather than off the
+    // counter, so one that is shadowed and has never fired still says so — "0" under a
+    // heading that means "times this decided something" is exactly the wrong reassurance.
+    const fires = (detector.shadow === true ? metrics?.shadowFirings[detector.id] : metrics?.detectorFirings[detector.id]) ?? 0;
     const timing = metrics?.detectorTimings[detector.id];
-    let right = `${n(fires)} · ${detector.cost} · ${detector.stage}`;
+    let right = `${n(fires)}${detector.shadow === true ? " shadowed" : ""} · ${detector.cost} · ${detector.stage}`;
     // Only when the operator asked for timing; the field is empty otherwise.
     if (timing !== undefined && timing.count > 0) right += ` · ${ms(timing.totalMs / timing.count)} avg`;
     row.appendChild(el("div", "n", right));

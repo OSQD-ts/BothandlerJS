@@ -332,6 +332,33 @@ button.tile {
   cursor: pointer; appearance: none; transition: border-color .12s, box-shadow .12s;
 }
 button.tile:hover { border-color: var(--focus); }
+/* The suggestion list under the search box, positioned against the search wrapper. */
+.search { position: relative; }
+.suggest {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; margin: 0; padding: 4px;
+  list-style: none; min-width: 220px; max-height: 260px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 9px; box-shadow: var(--shadow);
+}
+.suggest li { padding: 4px 9px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.suggest li[aria-selected="true"] { background: color-mix(in srgb, var(--focus) 18%, transparent); }
+
+/* Saved filters: a list of small removable things. Quiet, because it is not what
+   somebody came to the page to look at. */
+.saved { display: flex; align-items: center; gap: 6px; }
+/* Two open-ended bounds rather than a list of durations: "from the incident until now",
+   "everything up to when it stopped" and "between these two moments" are the same control
+   with one end left empty. */
+.timeframe { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); }
+.timeframe label { display: inline-flex; align-items: center; gap: 4px; }
+.timeframe input {
+  font: inherit; font-size: 11.5px; padding: 2px 5px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+}
+.timeframe button { font: inherit; font-size: 11.5px; padding: 3px 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+.saved select { font: inherit; font-size: 11.5px; padding: 3px 6px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); max-width: 170px; }
+.saved button { font: inherit; font-size: 11.5px; padding: 3px 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+.saved button:hover { border-color: var(--focus); }
+
 /* The badge's companion: fetches the entries the stream skipped. Sits inline with the
    heading, so it is styled to read as part of the sentence rather than as a form control. */
 .load-skipped {
@@ -353,6 +380,10 @@ button.tile:hover { border-color: var(--focus); }
 .pager button:hover:not(:disabled) { border-color: var(--focus); }
 .pager button:disabled { opacity: .45; cursor: default; }
 .pager .where { font-variant-numeric: tabular-nums; }
+/* A labelled actor leads with its name and keeps the key underneath: whoever named it did
+   so because the key was not the useful part, and the key is still what you search for. */
+td.who .label { font-weight: 560; }
+td.who .sub { color: var(--muted); font-size: 11px; }
 .pager.pager-top { padding: 2px 2px 9px; border-bottom: 1px solid var(--line); margin-bottom: 9px; }
 /* The feed's upper pager rides in the toolbar rather than owning a row of its own, which
    was thirty-six pixels of mostly empty rule above every screenful of requests. */
@@ -473,7 +504,29 @@ input[type="search"] {
 }
 input[type="search"]::placeholder { color: var(--muted); }
 
-table { width: 100%; border-collapse: collapse; }
+/* separate with zero spacing rather than collapse, and the difference is the whole
+   reason the column headers work in Safari.
+
+   Collapsed borders and sticky table cells are a long-standing sore point in WebKit: the
+   CSSWG has an open issue on collapsed borders not following a cell when it sticks
+   (csswg-drafts#3136), and Safari is widely reported to drop the stickiness of a th
+   altogether under a collapsed table. Separating the borders is the standard remedy.
+
+   What was actually measured: the header sticks correctly in Chromium and in Firefox,
+   both before and after this change, and it was reported adrift in Safari — which is what
+   a sticky element that has stopped sticking looks like. WebKit could not be run on the
+   machine this was written on, so the Safari half of it rests on that report and on the
+   documented behaviour rather than on a measurement taken here.
+
+   The rendering is all but unchanged. Every border in these tables is a bottom border on
+   the cell itself, plus the per-cell left accent on td.edge; no border is shared between
+   two cells, so there is nothing for collapsing to merge and nothing for separating to
+   double, and zero spacing keeps the cells touching. The one measurable difference is the
+   accent column, which moves two pixels: collapsing centres that 3px border on the cell
+   edge and leaves half of it outside the box, while separating puts all of it inside.
+   Measured rather than assumed, and the leftmost column starting two pixels earlier is
+   both imperceptible and the more correct of the two. */
+table { width: 100%; border-collapse: separate; border-spacing: 0; }
 thead th {
   /* Measured at runtime — see trackHeaderHeight(). The literal is the fallback for
      the instant before the first measurement, and for the tab strip wrapping. */
@@ -765,9 +818,44 @@ input::placeholder { color: color-mix(in srgb, var(--muted) 80%, transparent); }
 #actor-rows td { font-size: 12.5px; }
 #actor-rows td.who { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
 #actor-rows td.acts { text-align: right; white-space: nowrap; }
+/* The tracked/shown toggle above the actors table. A segmented pair rather than a
+   dropdown: there are two answers and both are worth reading at a glance. */
+.scope { display: flex; gap: 6px; padding: 0 14px 10px; }
+.scope button { font-size: 11.5px; padding: 4px 10px; }
+.scope button.on { background: var(--accent); color: var(--on-accent, #fff); border-color: var(--accent); }
+
 #actor-rows td.acts button { font-size: 11px; padding: 3px 8px; margin-left: 4px; }
+/* The Label control, which becomes a text box with a Save and a Cancel in place.
+
+   The cell does not wrap, so an editor that sat beside the row's other four buttons put
+   Save off the right edge of the panel, where it could be seen and not clicked. While
+   the editor is open it stands in for those buttons instead — which is also the right
+   thing on its own, since Allowlist and Forget are not what somebody naming a client is
+   reaching for. */
+.acts.editing > :not(.label-edit), .bar-actions.editing > :not(.label-edit) { display: none; }
+/* inline-flex rather than inline-block: the row is three fixed-size controls and a flex
+   line is the layout that cannot spill them past its own edge. */
+.label-edit { display: inline-flex; align-items: center; gap: 4px; }
+.label-edit button { flex: 0 0 auto; }
+#actor-rows td.acts .label-save, #actor-actions .label-save { border-color: var(--accent); color: var(--accent); }
+/* Qualified with the element name on purpose: input[type="text"] { width: 100% } above
+   outranks a bare class, so the width here was quietly ignored and the box grew to fill
+   whatever it was in — which is what put Save and Cancel outside the panel. */
+input.label-input {
+  font: inherit; font-size: 11px; padding: 3px 8px; width: 15ch; flex: 0 0 auto; box-sizing: border-box;
+  color: var(--ink); background: var(--surface); border: 1px solid var(--accent); border-radius: 6px;
+}
+input.label-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* A tag, not a warning: a cleared actor is a decision somebody made, and a metronomic
    one is a measurement. Neither is a verdict, so neither gets a verdict's colour. */
+/* A shadowed finding: shown at full detail, and visibly not part of the decision. Dimmed
+   and set behind a rule rather than coloured, because every colour on this page already
+   means something about a verdict and this one took no part in a verdict. */
+.det.shadow { opacity: 0.72; }
+.ev-item.shadow { opacity: 0.72; border-left: 2px dashed var(--line); padding-left: 8px; }
+.shadow-verdict { margin-top: 8px; font-style: italic; }
+.shadow-verdict.changed { color: var(--ink-2); font-style: normal; }
 .tagline { font-size: 11px; color: var(--muted); }
 .tagline b { color: var(--ink-2); font-weight: 600; }
 
@@ -872,8 +960,16 @@ export const DASHBOARD_MARKUP = String.raw`
         <div class="toolbar">
           <div class="filters" id="filters"></div>
           <div class="search">
-            <input type="search" id="search" placeholder="path:/api  actor:203.0.113.4  -rule:allow-crawlers" spellcheck="false" autocomplete="off">
+            <input type="search" id="search" placeholder="path:/api  actor:203.0.113.4  -rule:allow-crawlers" spellcheck="false" autocomplete="off"
+                   role="combobox" aria-expanded="false" aria-controls="search-suggest" aria-autocomplete="list">
             <kbd aria-hidden="true">/</kbd>
+            <ul class="suggest" id="search-suggest" role="listbox" aria-label="Filter suggestions" hidden></ul>
+          </div>
+          <div class="saved" id="saved-filters"></div>
+          <div class="timeframe" id="timeframe">
+            <label>From <input type="datetime-local" id="from-at" step="1"></label>
+            <label>To <input type="datetime-local" id="to-at" step="1"></label>
+            <button type="button" id="timeframe-clear" hidden>Clear</button>
           </div>
           <button id="feed-export" title="Download every request matching this filter as replay JSONL">Export</button>
           <div class="pager pager-inline" id="feed-pager-top" hidden></div>
@@ -937,6 +1033,12 @@ export const DASHBOARD_MARKUP = String.raw`
       <div class="note" id="actors-note">Everyone the engine is currently remembering, busiest first — a far larger
          population than the feed's ring, which holds requests rather than clients. This is
          what <code>cadence</code>, <code>crawl-breadth</code> and <code>rate-anomaly</code> are reading.</div>
+      <div class="scope" role="group" aria-label="Which actors to list">
+        <button id="actors-scope-tracked" class="on" aria-pressed="true"
+          title="Every client the engine is remembering, busiest first">Tracked</button>
+        <button id="actors-scope-feed" aria-pressed="false"
+          title="Only the clients that appear in the feed you are looking at, after its filter">Shown in the feed</button>
+      </div>
       <div class="pager pager-top" id="actors-pager-top" hidden></div>
       <div class="feed-scroll">
         <table>

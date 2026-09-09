@@ -24,21 +24,50 @@ import type { ChallengeService } from "../challenge/index.js";
  * The token is bound to the actor and signed, so it cannot be lifted from one client
  * and replayed by another under a different actor key.
  */
-export function clearanceDetector(service: ChallengeService): Detector {
+/** Distinct clients presenting one clearance token before that is worth reporting. */
+const DEFAULT_SHARING_THRESHOLD = 12;
+
+/** Keeps the clearance evidence and the sharing evidence together when both apply. */
+function withShared(shared: Evidence | undefined, primary: Evidence): Evidence | Evidence[] {
+  return shared === undefined ? primary : [primary, shared];
+}
+
+export function clearanceDetector(service: ChallengeService, sharingThreshold = DEFAULT_SHARING_THRESHOLD): Detector {
   return {
     id: "clearance",
     description: "Reads a signed clearance token proving the client previously passed a check",
     cost: "cheap",
     stage: "always",
 
-    inspect(ctx: DetectionContext): Evidence | undefined {
-      const claims = service.read(ctx.actor.key, ctx.facts.cookies);
-      if (!claims) return undefined;
+    inspect(ctx: DetectionContext): Evidence | Evidence[] | undefined {
+      const { claims, boundElsewhere, presentedBy } = service.inspect(ctx.actor.key, ctx.facts.cookies);
+
+      // One clearance token turning up under a great many actors is a token being handed
+      // around. The threshold is high because the innocent version of this is ordinary:
+      // the subject is derived from the address, so one person's phone moving between
+      // networks presents the same token under a new actor every time it moves.
+      const shared: Evidence | undefined =
+        presentedBy >= sharingThreshold
+          ? {
+              detector: "clearance",
+              summary: `The clearance token presented here has now been presented by ${presentedBy} different clients`,
+              direction: "bot",
+              certainty: "moderate",
+              botClass: "scraper",
+            }
+          : undefined;
+
+      if (!claims) {
+        // Ours, but issued to somebody else. On its own that is an address that changed,
+        // which is why it is only worth reporting once it has happened at scale.
+        void boundElsewhere;
+        return shared;
+      }
 
       const ageMs = ctx.facts.timestamp - claims.iat;
 
       if (claims.lvl === "operator") {
-        return {
+        return withShared(shared, {
           detector: "clearance",
           summary: "Client holds an operator-granted clearance token",
           direction: "human",
@@ -46,21 +75,21 @@ export function clearanceDetector(service: ChallengeService): Detector {
           deterministicBasis:
             "The application issued this clearance itself, on evidence it holds and this library cannot see. It is an assertion by the operator, not an inference from the request, and the token's signature binds it to this actor.",
           metadata: { level: claims.lvl, ageMs },
-        };
+        });
       }
 
       if (claims.lvl === "interaction") {
-        return {
+        return withShared(shared, {
           detector: "clearance",
           summary: "Client holds a clearance token granted after a trusted input event",
           direction: "human",
           certainty: "strong",
           weight: 0.7,
           metadata: { level: claims.lvl, ageMs },
-        };
+        });
       }
 
-      return {
+      return withShared(shared, {
         detector: "clearance",
         summary: "Client holds a clearance token granted for a completed proof of work",
         direction: "human",
@@ -71,7 +100,7 @@ export function clearanceDetector(service: ChallengeService): Detector {
           ageMs,
           note: "Proof of work demonstrates a JavaScript engine and spent CPU. It does not demonstrate a person.",
         },
-      };
+      });
     },
   };
 }

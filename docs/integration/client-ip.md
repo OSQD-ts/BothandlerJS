@@ -56,6 +56,22 @@ holds.
 Invalid CIDRs throw at construction rather than matching silently. A range that matches
 nothing is a control you believe you have and do not.
 
+## Ports in the forwarded header
+
+Most proxies write a bare address. Azure's Application Gateway and Front Door write
+`1.2.3.4:5678`, and RFC 7239 spells IPv6 as `[2001:db8::1]:5678`. Both are read correctly:
+the port is removed before the address is parsed.
+
+This matters more than it sounds. Every entry in such a chain carries a port, so an
+implementation that cannot read one reads *none* of them — the chain empties, and every
+client behind that proxy resolves to the proxy's own address. They then share one actor,
+one history and one rate-limit bucket, so a single bot is enough to lock out every real
+visitor, and nothing about it looks like a failure.
+
+A bare IPv6 address is made of colons, so only two shapes are treated as carrying a port:
+a bracketed host, and a single colon whose left side is an IPv4 address. `2001:db8::1` and
+`::1` are addresses, not hosts with ports.
+
 ## The peer is checked too
 
 The connecting peer counts as the first hop and is checked the same way.

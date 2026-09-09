@@ -99,4 +99,5 @@ want the raw event, take it here.
 
 - [Metrics](metrics.md) · [The audit](audit.md) · [Notifications](notifications.md)
 - [The dashboard](dashboard.md) — all of the above, rendered
+- [The feed filter](filters.md) — the query language, saved filters and exclusions
 - [Configuration reference](../reference/configuration.md)

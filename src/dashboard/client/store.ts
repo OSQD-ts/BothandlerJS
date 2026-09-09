@@ -1,7 +1,7 @@
-import { matchesFilter, matchesQuery, parseQuery, searchableText } from "./query.js";
+import { matches as matchesFilterExpression, matchesFilter, parseFilter, searchableText } from "./query.js";
 import { outcome } from "./outcome.js";
 import type { EditorRule } from "./draft.js";
-import type { FilterName, Term } from "./query.js";
+import type { Filter, FilterName } from "./query.js";
 import type { ActorRow, DashboardEntry, Policy, Row, Snapshot, TabName } from "./types.js";
 
 /** Requests the page keeps. The server's ring is smaller; this is the ceiling, not the target. */
@@ -18,10 +18,13 @@ export interface State {
   /** The Actors screen's list, fetched rather than streamed. See `registry.ts`. */
   actors: ActorRow[];
   actorsTracked: number;
+  /** Which population the Actors screen is listing. See `registry.feedActors`. */
+  actorScope: "tracked" | "feed";
   paused: boolean;
   filter: FilterName;
   search: string;
-  terms: Term[];
+  /** The parsed search. A tree, so `$or` means something. */
+  query: Filter;
   tab: TabName;
   open: Set<string>;
   actor: string | undefined;
@@ -57,6 +60,15 @@ export interface State {
   feedPageSize: number;
   actorsPageSize: number;
   /**
+   * The window somebody asked to look at, as absolute instants.
+   *
+   * Either end may be left open, which is what makes one control answer all three of the
+   * questions people actually ask: from an incident until now, from the beginning until
+   * something stopped, or between two moments.
+   */
+  fromMs: number | undefined;
+  toMs: number | undefined;
+  /**
    * How many skipped entries have already been fetched back and merged.
    *
    * The server's `skipped` only ever grows, so the badge subtracts this to say how many
@@ -72,10 +84,11 @@ export const state: State = {
   policy: undefined,
   actors: [],
   actorsTracked: 0,
+  actorScope: "tracked",
   paused: false,
   filter: "all",
   search: "",
-  terms: [],
+  query: { kind: "all" },
   tab: "live",
   open: new Set(),
   actor: undefined,
@@ -92,6 +105,8 @@ export const state: State = {
   actorsPage: 0,
   feedPageSize: 50,
   actorsPageSize: 25,
+  fromMs: undefined,
+  toMs: undefined,
   caughtUp: 0,
 };
 
@@ -146,9 +161,16 @@ export function clearFeed(): void {
 
 export function setSearch(value: string): void {
   state.search = value;
-  state.terms = parseQuery(value);
+  state.query = parseFilter(value);
   // A narrower search over a frozen page-three is somebody reading rows their filter no
   // longer selects. Any change to what matches goes back to the live first page.
+  resetPaging();
+}
+
+/** Sets the window somebody is looking at. Either end may be left open. */
+export function setTimeframe(from: number | undefined, to: number | undefined): void {
+  state.fromMs = from;
+  state.toMs = to;
   resetPaging();
 }
 
@@ -176,7 +198,11 @@ export function sortRows(): void {
 }
 
 export function matches(row: Row): boolean {
-  return matchesFilter(state.filter, row.entry) && matchesQuery(state.terms, row.entry, textOf(row));
+  // The timeframe first, because it is a number comparison and the cheapest thing here to
+  // fail on.
+  if (state.fromMs !== undefined && row.entry.at < state.fromMs) return false;
+  if (state.toMs !== undefined && row.entry.at > state.toMs) return false;
+  return matchesFilter(state.filter, row.entry) && matchesFilterExpression(state.query, row.entry, textOf(row));
 }
 
 /**

@@ -9,7 +9,7 @@ a name alone is worth so little.
 
 ## A name is a claim, not a fact
 
-`self-identified` matches 161 signatures across search, AI, SEO, social, monitoring,
+`self-identified` matches 205 signatures across search, AI, SEO, social, monitoring,
 feeds, archives, security tooling, HTTP libraries and headless runtimes. When it fires you
 get an `identity` — `"googlebot"`, `"gptbot"` — and a `category`.
 

@@ -580,11 +580,25 @@ function robots(flags: Map<string, string>): number {
 
 function detectors(flags: Map<string, string>): number {
   const preset = flags.get("preset") as PresetName | undefined;
-  const handler = new BotHandler(preset !== undefined && preset in PRESETS ? { preset } : {});
-  for (const entry of handler.describeDetectors()) {
+  // Refused rather than ignored, the way `robots` above refuses it. An unknown preset
+  // used to fall through to a handler with no preset at all and print the default list
+  // as though it were the answer — so a typo produced a confident wrong answer to the
+  // one question this command exists for.
+  if (preset !== undefined && !(preset in PRESETS)) {
+    process.stderr.write(`Unknown preset "${preset}". One of: ${Object.keys(PRESETS).join(", ")}\n`);
+    return 1;
+  }
+  const handler = new BotHandler(preset !== undefined ? { preset } : {});
+  const installed = handler.describeDetectors();
+  for (const entry of installed) {
     process.stdout.write(`${entry.id.padEnd(24)} ${entry.cost.padEnd(6)} ${entry.stage.padEnd(11)} ${entry.description}\n`);
   }
-  process.stdout.write(`\n${handler.describeDetectors().length} detectors installed.\n`);
+  process.stdout.write(`\n${installed.length} detectors installed.\n`);
+  // A preset is a set of rules, so it does not change this list — which the flag's
+  // presence implies and which is worth saying rather than leaving somebody to infer
+  // from two identical outputs. What does change it is on stderr, so a redirect of the
+  // list stays clean.
+  process.stderr.write("note: a preset selects rules, not detectors. `challenge`, `probe` and `site` are what add to this list.\n");
   return 0;
 }
 

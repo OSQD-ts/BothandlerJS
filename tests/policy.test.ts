@@ -16,6 +16,7 @@ function assessment(overrides: Partial<Assessment> = {}): Assessment {
     certain: false,
     evidence: [{ detector: "header-integrity", summary: "no Accept header", direction: "bot", certainty: "strong" }],
     humanEvidence: [],
+    shadowEvidence: [],
     actor: { key: facts.ip, requests: 3, distinctPaths: 3, distinctQueries: 0, queriesSaturated: false, methodsSeen: ["GET"], responses: 0, misses: 0, firstSeen: 0, lastSeen: 0, priorConfirmations: 0, unsolvedChallenges: 0, cleared: false },
     durationMs: 1,
     failures: [],

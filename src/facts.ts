@@ -4,6 +4,14 @@ import type { RequestFacts } from "./types.js";
 
 /** Longest URL we will parse. Anything beyond this is a payload, not a path. */
 const MAX_URL_LENGTH = 8192;
+/**
+ * Cap on the retained raw target.
+ *
+ * Shorter than the URL bound because this one only exists to be *read*: everything that
+ * makes a target evasive is at its front, and the rest is a payload somebody would like
+ * this process to spend memory on.
+ */
+const MAX_RAW_PATH = 512;
 /** Cap on query parameters kept. */
 const MAX_QUERY_PARAMS = 64;
 
@@ -60,19 +68,39 @@ export function createFacts(input: FactsInput): RequestFacts {
 
   const headers: Record<string, string | undefined> = Object.create(null) as Record<string, string | undefined>;
   for (const [name, value] of Object.entries(input.headers)) {
-    const joined = joinHeaderValue(value);
-    if (joined !== undefined) headers[name.toLowerCase()] = joined;
+    const lower = name.toLowerCase();
+    // `cookie` is the one header that is not comma-joined, and getting it wrong is not
+    // cosmetic. HTTP/2 explicitly permits a client to split its cookies across several
+    // header fields — Node's `http2` hands them over as an array — and RFC 9113 §8.2.3
+    // says a receiver concatenates them with "; ". Joining with ", " instead produced
+    // `sid=abc, __bh_clearance=token`, which parses as *one* cookie named `sid` whose
+    // value is the rest of the line. Every cookie after the first was invisible, so an
+    // HTTP/2 visitor who had solved a challenge was re-challenged forever.
+    const joined = lower === "cookie" && Array.isArray(value) ? value.join("; ") : joinHeaderValue(value);
+    if (joined !== undefined) headers[lower] = joined;
   }
 
+  const normalized = normalizePath(rawPath);
   const facts: RequestFacts = {
     method: (input.method ?? "GET").toUpperCase(),
-    path: normalizePath(rawPath),
+    path: normalized,
     query: parseQuery(queryStart === -1 ? "" : url.slice(queryStart + 1)),
     headers,
     headerOrder: extractOrder(input.rawHeaders, headers),
     ip: normalizeIp(input.ip) ?? input.ip,
     timestamp: input.timestamp ?? Date.now(),
   };
+
+  // How the target was spelled, when that is not how it reads.
+  //
+  // Normalisation is what makes a policy hold — `/admin` and `/%61dmin` must be one path
+  // to a rule — but it also destroys the evidence that somebody spelled it the second
+  // way. `/%2e%2e%2f%2e%2e%2fapp/config.yml` arrives here and leaves as
+  // `/app/config.yml`, which looks like an ordinary page nobody has, and the one fact
+  // that made it interesting is gone. So the original is kept for `target-integrity` to
+  // read — and only when it differs, because on ordinary traffic it does not, and a
+  // second copy of every path is a string per request to say nothing.
+  if (rawPath !== normalized) facts.rawPath = rawPath.length > MAX_RAW_PATH ? rawPath.slice(0, MAX_RAW_PATH) : rawPath;
 
   // Only parse cookies that exist. Most bot traffic carries none, and building an
   // empty bag for every one of those requests is pure garbage.
@@ -127,11 +155,43 @@ function parseQuery(search: string): Record<string, string> {
   const query: Record<string, string> = Object.create(null) as Record<string, string>;
   if (search.length === 0) return query;
   let count = 0;
-  for (const [key, value] of new URLSearchParams(search)) {
+  for (const [key, value] of new URLSearchParams(boundedSearch(search))) {
     if (count++ >= MAX_QUERY_PARAMS) break;
     query[key] = value.length > 1024 ? value.slice(0, 1024) : value;
   }
   return query;
+}
+
+/**
+ * The leading part of a query string that can hold at most `MAX_QUERY_PARAMS` of them.
+ *
+ * `URLSearchParams` parses and percent-decodes its whole input up front, so the cap in
+ * `parseQuery` bounded how many parameters were *kept* and not how many were *parsed*.
+ * A URL carrying a thousand of them paid for a thousand decodes to keep sixty-four, and
+ * a request cost five times an ordinary one for as long as the client cared to make it.
+ * `MAX_URL_LENGTH` capped that at eight kilobytes of parsing rather than at sixty-four
+ * parameters, which is a ceiling but not a bound worth having.
+ *
+ * Cutting the string first keeps the parser — and with it every rule about `+`, about a
+ * half-written `%E4`, about a repeated key — while giving it only what it can use. The
+ * cut lands on a separator, so no escape and no multi-byte character is split, and empty
+ * pairs are skipped here for the same reason `URLSearchParams` skips them: they are not
+ * parameters and must not spend the budget.
+ */
+function boundedSearch(search: string): string {
+  let seen = 0;
+  // `URLSearchParams` strips one leading "?" before it splits, so counting it as a
+  // segment would spend a parameter of the budget on something that never becomes one.
+  // Reachable from a URL of "/p??a=1", and found by differential fuzzing against the
+  // parser this stands in front of — every disagreement was a query beginning "?&".
+  let at = search.charCodeAt(0) === 63 ? 1 : 0;
+  while (at < search.length) {
+    let end = search.indexOf("&", at);
+    if (end === -1) end = search.length;
+    if (end !== at && ++seen > MAX_QUERY_PARAMS) return search.slice(0, at - 1);
+    at = end + 1;
+  }
+  return search;
 }
 
 /**

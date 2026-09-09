@@ -1,5 +1,7 @@
 import { $, byId, clear, cssEscape, el, rootNode } from "./dom.js";
-import { feedPage, goToFeedPage, ingest, matchingCount, matchingRows, resetPaging, setSearch, sortRows, state } from "./store.js";
+import { feedPage, goToFeedPage, ingest, matchingCount, matchingRows, resetPaging, setSearch, setTimeframe, sortRows, state } from "./store.js";
+import { deleteFilter, saveFilter, savedFilters } from "./saved.js";
+import { suggestFor } from "./query.js";
 import { getJson } from "./api.js";
 import { renderPager } from "./pager.js";
 import { SECTIONS } from "./boot.js";
@@ -65,7 +67,11 @@ export function initFeed(): void {
     setSearch(search.value.trim());
     app.syncUrl();
     app.drawNow();
+    showSuggestions(search);
   });
+  initSuggestions(search);
+  initTimeframe();
+  initSavedFilters(search);
 
   // Downloading the window is the bulk half of what the per-row buttons do one request
   // at a time. It exports what is on screen rather than everything held, because the
@@ -130,6 +136,204 @@ export async function loadSkipped(): Promise<void> {
     added > 0 ? `Loaded ${n(added)}` : "Nothing left to load",
     added > 0 ? "They are in the feed now, in the order they happened." : "The window no longer holds them; the ring had already rotated past.",
   );
+}
+
+
+/**
+ * Completion for the filter box.
+ *
+ * The options come from the parser's own field map rather than a list kept beside it, so
+ * a field added to the language is offered the day it exists and one removed stops being
+ * offered. Values are completed only where the set is genuinely closed — `rule`,
+ * `identity` and `path` take anything, and guessing there would be inventing options
+ * rather than completing them.
+ */
+let highlighted = -1;
+
+function suggestionList(): HTMLElement {
+  return $("search-suggest");
+}
+
+function closeSuggestions(input: HTMLInputElement): void {
+  const list = suggestionList();
+  list.hidden = true;
+  clear(list);
+  highlighted = -1;
+  input.setAttribute("aria-expanded", "false");
+}
+
+function showSuggestions(input: HTMLInputElement): void {
+  const caret = input.selectionStart ?? input.value.length;
+  const { options, from, to } = suggestFor(input.value, caret);
+  const list = suggestionList();
+  if (options.length === 0 || input.value.slice(from, to) === options[0]) {
+    closeSuggestions(input);
+    return;
+  }
+  clear(list);
+  highlighted = -1;
+  options.slice(0, 12).forEach((option, index) => {
+    const item = el("li", null, option);
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", "false");
+    // `mousedown` rather than `click`: the input loses focus first on a click, and the
+    // blur handler closes the list out from under the pointer.
+    item.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      apply(input, option, from, to);
+    });
+    item.dataset["index"] = String(index);
+    list.appendChild(item);
+  });
+  list.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+}
+
+function apply(input: HTMLInputElement, option: string, from: number, to: number): void {
+  const before = input.value.slice(0, from);
+  const after = input.value.slice(to);
+  input.value = `${before}${option}${after}`;
+  const caret = before.length + option.length;
+  input.setSelectionRange(caret, caret);
+  setSearch(input.value.trim());
+  app.syncUrl();
+  app.drawNow();
+  closeSuggestions(input);
+  // Completing a field name leaves the caret after the colon, where the values are — so
+  // offer them straight away rather than making somebody type a character to see them.
+  showSuggestions(input);
+  input.focus();
+}
+
+function initSuggestions(input: HTMLInputElement): void {
+  input.addEventListener("keydown", (event) => {
+    const list = suggestionList();
+    const items = Array.from(list.querySelectorAll("li"));
+    if (list.hidden || items.length === 0) return;
+    if (event.key === "Escape") {
+      closeSuggestions(input);
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      highlighted = (highlighted + (event.key === "ArrowDown" ? 1 : items.length - 1) + (highlighted === -1 && event.key === "ArrowUp" ? 1 : 0)) % items.length;
+      items.forEach((item, index) => item.setAttribute("aria-selected", String(index === highlighted)));
+      return;
+    }
+    if ((event.key === "Enter" || event.key === "Tab") && highlighted >= 0) {
+      const chosen = items[highlighted]?.textContent ?? "";
+      const caret = input.selectionStart ?? input.value.length;
+      const { from, to } = suggestFor(input.value, caret);
+      event.preventDefault();
+      apply(input, chosen, from, to);
+    }
+  });
+  input.addEventListener("blur", () => {
+    setTimeout(() => closeSuggestions(input), 120);
+  });
+  input.addEventListener("focus", () => showSuggestions(input));
+}
+
+/** The saved-filter control: a list to load from, and buttons to add and remove. */
+function initSavedFilters(input: HTMLInputElement): void {
+  const host = $("saved-filters");
+  const redraw = (): void => {
+    clear(host);
+    const entries = savedFilters();
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "Saved filters");
+    const first = document.createElement("option");
+    first.value = "";
+    first.textContent = entries.length === 0 ? "No saved filters" : "Saved filters…";
+    select.appendChild(first);
+    for (const entry of entries) {
+      const option = document.createElement("option");
+      option.value = entry.name;
+      option.textContent = entry.name;
+      select.appendChild(option);
+    }
+    select.addEventListener("change", () => {
+      const chosen = entries.find((entry) => entry.name === select.value);
+      if (chosen === undefined) return;
+      input.value = chosen.query;
+      setSearch(chosen.query);
+      state.filter = chosen.filter as typeof state.filter;
+      reflectFilterButtons();
+      resetPaging();
+      app.syncUrl();
+      app.drawNow();
+    });
+    host.appendChild(select);
+
+    const save = el("button", null, "Save");
+    (save as HTMLButtonElement).type = "button";
+    save.title = "Save this filter, in this browser, under a name";
+    save.addEventListener("click", () => {
+      const name = prompt("Save this filter as:")?.trim();
+      if (name === undefined || name === "") return;
+      saveFilter({ name, query: input.value.trim(), filter: state.filter });
+      redraw();
+      toast("ok", "Filter saved", `"${name}" is in this browser. It is not shared with anybody else.`);
+    });
+    host.appendChild(save);
+
+    if (select.value !== "") {
+      const remove = el("button", null, "Delete");
+      (remove as HTMLButtonElement).type = "button";
+      remove.addEventListener("click", () => {
+        deleteFilter(select.value);
+        redraw();
+      });
+      host.appendChild(remove);
+    }
+
+  };
+  redraw();
+}
+
+
+
+
+/**
+ * The window somebody is looking at.
+ *
+ * `datetime-local` reads and writes local wall-clock time, which is what the feed's own
+ * timestamps show — so the value in the box means the same thing as the value in the
+ * rows. Either end may be left empty, and that is the whole design: one control answers
+ * "from the incident until now", "everything up to when it stopped" and "between these
+ * two moments" without three sets of buttons.
+ */
+function initTimeframe(): void {
+  const from = byId<HTMLInputElement>("from-at");
+  const to = byId<HTMLInputElement>("to-at");
+  const clearButton = byId<HTMLButtonElement>("timeframe-clear");
+
+  const read = (input: HTMLInputElement): number | undefined => {
+    if (input.value === "") return undefined;
+    const parsed = new Date(input.value).getTime();
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+
+  const apply = (): void => {
+    const start = read(from);
+    const end = read(to);
+    // A backwards range selects nothing and looks like a broken dashboard, so say what
+    // happened rather than showing an empty feed.
+    if (start !== undefined && end !== undefined && end < start) {
+      toast("warn", "That window runs backwards", "The end is before the start, so nothing can fall inside it.");
+    }
+    setTimeframe(start, end);
+    clearButton.hidden = start === undefined && end === undefined;
+    app.drawNow();
+  };
+
+  from.addEventListener("change", apply);
+  to.addEventListener("change", apply);
+  clearButton.addEventListener("click", () => {
+    from.value = "";
+    to.value = "";
+    apply();
+  });
 }
 
 /** Page sizes the feed offers. */
@@ -237,6 +441,9 @@ export function drawFeed(): void {
   // the window and the pager says where in it you are.
   $("feed-count").textContent = matching === total ? `${n(total)} in this window` : `${n(matching)} of ${n(total)}`;
   drawPager(paged);
+  // Redrawn with the feed rather than once at start-up: its whole message is a count of
+  // what is being hidden *now*, and drawn once it said "hiding 0 of 0" for the rest of
+  // the session because the rows had not arrived yet.
   // `#feed-window` carries the `win` class, so `updateWindowLabels` fills it — one
   // owner for a label that appears on eight panels.
 
@@ -370,18 +577,37 @@ function buildDetail(entry: DashboardEntry): HTMLTableRowElement {
   } else {
     const list = el("div", "ev");
     for (const item of entry.evidence) {
-      const row = el("div", `ev-item${item.direction === "human" ? " human" : ""}`);
+      const row = el("div", `ev-item${item.direction === "human" ? " human" : ""}${item.shadow === true ? " shadow" : ""}`);
       row.appendChild(el("div", `tier t-${item.certainty}`, item.certainty));
       const body = el("div");
       body.appendChild(el("div", null, item.summary));
       let meta = `${item.detector} · points to ${item.direction}`;
       if (item.family !== undefined) meta += ` · family “${item.family}”, counted once with its siblings`;
+      // Said on every shadowed line rather than once at the top. A reader scanning the
+      // list is looking at one row at a time, and a row that reads like evidence and was
+      // not evidence is the single most misleading thing this page could show.
+      if (item.shadow === true) meta += " · shadowed: counted, and part of no decision";
       body.appendChild(el("div", "ev-meta", meta));
       if (item.deterministicBasis !== undefined) body.appendChild(el("div", "basis", item.deterministicBasis));
       row.appendChild(body);
       list.appendChild(row);
     }
     cell.appendChild(list);
+  }
+
+  // The counterfactual, in the one place somebody is already asking "why this verdict".
+  if (entry.shadowVerdict !== undefined) {
+    const would = entry.shadowVerdict;
+    const changed = would.verdict !== entry.verdict;
+    cell.appendChild(
+      el(
+        "div",
+        `ev-meta shadow-verdict${changed ? " changed" : ""}`,
+        changed
+          ? `With the shadowed detectors counted, this request would have been ${would.verdict} at ${would.score} instead of ${entry.verdict} at ${entry.score}.`
+          : `With the shadowed detectors counted, this request would still have been ${would.verdict}${would.score === entry.score ? "" : `, at ${would.score} rather than ${entry.score}`}.`,
+      ),
+    );
   }
 
   for (const failure of entry.failures) {

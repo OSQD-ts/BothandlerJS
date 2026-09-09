@@ -143,6 +143,41 @@ describe("measuring a pointer path", () => {
     expect(scoreMovement(analyseMovement([{ dx: 3, dy: 1, dt: 12 }]))).toBe(0);
     expect(analyseMovement([]).samples).toBe(0);
   });
+
+  /**
+   * The share is of what was looked at, not of what arrived.
+   *
+   * Discontinuities are dropped before anything is measured, so dividing by the raw
+   * sample count reports a lower fractional share than the samples it was computed from
+   * actually had. It reads as "these coordinates are integers", which is the signature of
+   * an interpolated path, when in fact most of the coordinates were never examined — and
+   * the clients with pauses to drop are people, not scripts.
+   */
+  it("measures the fractional share over the samples it kept", () => {
+    // Six samples, three of them beyond the continuity gap. Every kept sample has
+    // sub-pixel coordinates, so the honest answer is all of them.
+    const path: PointerSample[] = [
+      { dx: 3.5, dy: 1.25, dt: 16 },
+      { dx: 60, dy: 60, dt: 900 },
+      { dx: 2.75, dy: 4.5, dt: 16 },
+      { dx: 40, dy: 40, dt: 1200 },
+      { dx: 5.25, dy: 2.5, dt: 16 },
+      { dx: 55, dy: 20, dt: 800 },
+    ];
+    const analysis = analyseMovement(path);
+    expect(analysis.samples, "three continuous samples were kept").toBe(3);
+    expect(analysis.fractionalShare, "and all three had sub-pixel coordinates").toBe(1);
+  });
+
+  /** Nothing to divide by is nothing to report, rather than a NaN. */
+  it("reports no fractional share when every sample was a discontinuity", () => {
+    const analysis = analyseMovement([
+      { dx: 60, dy: 60, dt: 900 },
+      { dx: 40, dy: 40, dt: 1200 },
+    ]);
+    expect(analysis.samples).toBe(0);
+    expect(analysis.fractionalShare).toBe(0);
+  });
 });
 
 describe("reading a report off the wire", () => {
@@ -203,6 +238,31 @@ describe("what an interaction is worth", () => {
 
   it("refuses a report with no interaction in it at all", () => {
     expect(verifyInteraction(undefined, 5000)).toMatchObject({ ok: false });
+  });
+
+  /**
+   * Somebody who moved the pointer, stopped to read, and moved again.
+   *
+   * The analysis drops any sample arriving more than a quarter of a second after the last
+   * one, because the distance across a pause is not a distance a hand travelled. That is
+   * right. What was wrong was deciding whether a path is *measurable* from the length of
+   * the array instead: four samples with a pause before each one are four samples to the
+   * array and none to the analysis, so the report was called measurable and then scored
+   * at zero — the worst mark available, handed to the reading pattern most likely to
+   * produce it. Graded on capabilities, like the keyboard and the tap, is the answer.
+   */
+  it("does not score a paused pointer at zero for having paused", () => {
+    const paused = [
+      { dx: 34.2, dy: 11.7, dt: 900 },
+      { dx: 12.6, dy: 40.1, dt: 1100 },
+      { dx: 28.9, dy: 3.4, dt: 800 },
+      { dx: 7.1, dy: 19.8, dt: 1200 },
+      { dx: 15.5, dy: 6.2, dt: 950 },
+    ];
+    const outcome = verifyInteraction({ ...person, path: paused, msToActivate: 4800 }, 6000);
+    expect(outcome.ok, "a full browser that paused is still a full browser").toBe(true);
+    expect(outcome.notes?.some((note) => note.includes("too little movement to judge"))).toBe(true);
+    expect(outcome.notes?.some((note) => note.includes("movement 0%")), "never measured at zero").toBe(false);
   });
 
   it("refuses a client that claims to have taken longer than the challenge existed", () => {

@@ -1,8 +1,8 @@
 import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { BotHandler } from "../src/index.js";
+import { BotHandler, createFacts } from "../src/index.js";
 import { botHandler } from "../src/adapters/node.js";
-import { createFetchAdapter } from "../src/adapters/fetch.js";
+import { createFetchAdapter, withBotHandler } from "../src/adapters/fetch.js";
 import { fastifyBotHandler } from "../src/adapters/fastify.js";
 import { koaBotHandler } from "../src/adapters/koa.js";
 import { MAX_VERIFY_BODY, parseJson, readBoundedBody } from "../src/adapters/shared.js";
@@ -89,9 +89,19 @@ interface FakeResponse {
   ended: boolean;
   setHeader(name: string, value: string): void;
   end(body?: unknown): void;
+  once(event: string, listener: () => void): void;
+  finish(): void;
 }
 
+/**
+ * `once` is part of the contract, not decoration. The adapter registers a `finish`
+ * listener to report the status the application answered, and a double without one made
+ * that call throw — so the "request continues" tests were passing through the adapter's
+ * fail-open error path rather than its ordinary one, and the outcome reporting had no
+ * coverage at all while appearing to have some.
+ */
 function nodeResponse(): FakeResponse {
+  const listeners: Array<() => void> = [];
   const it: FakeResponse = {
     statusCode: 200,
     headersSent: false,
@@ -105,6 +115,13 @@ function nodeResponse(): FakeResponse {
       it.body = body;
       it.ended = true;
       it.headersSent = true;
+    },
+    once(event, listener): void {
+      if (event === "finish") listeners.push(listener);
+    },
+    // What Node does when the response is actually flushed.
+    finish(): void {
+      for (const listener of listeners.splice(0)) listener();
     },
   };
   return it;
@@ -166,6 +183,7 @@ interface FastifyState {
   body: unknown;
   sent: boolean;
   hijacked: boolean;
+  rawReply: { statusCode: number; finish(): void };
 }
 
 function fastifyPair(options: RequestOptions = {}): FastifyState {
@@ -177,7 +195,19 @@ function fastifyPair(options: RequestOptions = {}): FastifyState {
     sent: false,
     hijacked: false,
   };
-  const reply: FastifyLikeReply = {
+  const finishers: Array<() => void> = [];
+  const rawReply = {
+    statusCode: 200,
+    once(event: "finish", listener: () => void): unknown {
+      if (event === "finish") finishers.push(listener);
+      return rawReply;
+    },
+    finish(): void {
+      for (const listener of finishers.splice(0)) listener();
+    },
+  };
+  const reply: FastifyLikeReply & { raw: typeof rawReply } = {
+    raw: rawReply,
     code(status: number): FastifyLikeReply {
       state.status = status;
       return reply;
@@ -201,7 +231,7 @@ function fastifyPair(options: RequestOptions = {}): FastifyState {
     headers: raw.headers,
     raw,
   };
-  return Object.assign(state, { request, reply });
+  return Object.assign(state, { request, reply, rawReply });
 }
 
 describe("a refusal, in each adapter's own vocabulary", () => {
@@ -477,5 +507,158 @@ describe("the bounded body reader", () => {
     expect(parseJson("{not json")).toBeUndefined();
     expect(parseJson("x".repeat(MAX_VERIFY_BODY + 1))).toBeUndefined();
     expect(parseJson('{"ok":true}')).toEqual({ ok: true });
+  });
+});
+
+/**
+ * What the application answered.
+ *
+ * The verdict is reached before the response exists, so the status is the one thing
+ * detection cannot see for itself — and `probe-volume` is built entirely on it: an actor
+ * whose requests are almost all misses is looking for something rather than reading
+ * anything. Only the Node adapter ever reported it, so on Fastify, Koa and every Fetch
+ * runtime that detector was installed, listed by `describeDetectors`, and silently
+ * incapable of ever firing.
+ *
+ * Each case drives one adapter past the detector's threshold and then asks the engine
+ * what it now knows, which is the only assertion that distinguishes "reported" from
+ * "reported somewhere nothing reads".
+ */
+describe("reporting the status the application answered", () => {
+  const MISSES = 25;
+  const scanner = { host: "shop.example", "user-agent": CURL, accept: "*/*" };
+
+  /**
+   * Asks the engine what it now knows about this actor.
+   *
+   * Deliberately a recording assessment: `record: false` hands the detectors a detached
+   * actor with no past, which is the right answer for a dry run and the wrong instrument
+   * for a question about history.
+   */
+  async function sawProbeVolume(handler: BotHandler): Promise<boolean> {
+    const assessment = await handler.assess(createFacts({ method: "GET", url: "/probe", headers: scanner, ip: "203.0.113.7" }));
+    return assessment.evidence.some((item) => item.detector === "probe-volume");
+  }
+
+  it("node reports it when the response finishes", async () => {
+    const handler = engine();
+    for (let i = 0; i < MISSES; i++) {
+      const response = nodeResponse();
+      await runNode(handler, nodeRequest({ url: `/missing-${i}` }), response);
+      response.statusCode = 404;
+      response.finish();
+    }
+    expect(await sawProbeVolume(handler)).toBe(true);
+  });
+
+  it("koa reports the status the middleware chain settled on", async () => {
+    const handler = engine();
+    for (let i = 0; i < MISSES; i++) {
+      const { context } = koaContext({ url: `/missing-${i}` });
+      await koaBotHandler(handler)(context, async () => {
+        context.status = 404;
+      });
+    }
+    expect(await sawProbeVolume(handler)).toBe(true);
+  });
+
+  it("fastify reports it when the reply finishes", async () => {
+    const handler = engine();
+    for (let i = 0; i < MISSES; i++) {
+      const state = fastifyPair({ url: `/missing-${i}` });
+      await fastifyBotHandler(handler)(state.request, state.reply);
+      state.rawReply.statusCode = 404;
+      state.rawReply.finish();
+    }
+    expect(await sawProbeVolume(handler)).toBe(true);
+  });
+
+  it("fetch reports the status of the response it returns", async () => {
+    const handler = engine();
+    const wrapped = withBotHandler(handler, async () => new Response("gone", { status: 404 }));
+    for (let i = 0; i < MISSES; i++) {
+      // `cf-connecting-ip` is one of the headers this adapter trusts by default; the
+      // socket address is not something a Fetch runtime exposes.
+      await wrapped(new Request(`https://shop.example/missing-${i}`, { headers: { ...scanner, "cf-connecting-ip": "203.0.113.7" } }));
+    }
+    expect(await sawProbeVolume(handler)).toBe(true);
+  });
+
+  it("says nothing about an actor the application is answering normally", async () => {
+    // The detector must stay quiet on a client that is finding what it asks for,
+    // otherwise reporting the status has made things worse rather than better.
+    const handler = engine();
+    for (let i = 0; i < MISSES; i++) {
+      const response = nodeResponse();
+      await runNode(handler, nodeRequest({ url: `/page-${i}` }), response);
+      response.statusCode = 200;
+      response.finish();
+    }
+    expect(await sawProbeVolume(handler)).toBe(false);
+  });
+});
+
+/**
+ * The marker probe reaches a client only through an adapter.
+ *
+ * The engine returns a `Set-Cookie` on the outcome and each adapter has its own way of
+ * putting one on a response — `setHeader`, a Koa `set`, a chained Fastify reply, a
+ * returned `Response`. A marker that never leaves the process is a feature that appears
+ * to work in every unit test and does nothing at all in production, so this checks the
+ * last inch for each of the four.
+ */
+describe("handing the marker to a client, in each adapter's own vocabulary", () => {
+  const SECRET = "an-adapter-test-marker-secret-long-enough";
+  const probed = (): BotHandler => engine({ probe: { secrets: [SECRET], secure: false } });
+  const markerIn = (value: string | undefined): boolean => value !== undefined && value.includes("__bh_m=");
+
+  it("node sets it on the response", async () => {
+    const response = nodeResponse();
+    const reached = await runNode(probed(), nodeRequest(), response);
+    expect(reached).toBe(true);
+    expect(markerIn(response.headers["set-cookie"])).toBe(true);
+  });
+
+  it("koa sets it on the context", async () => {
+    const { context, headers } = koaContext();
+    await koaBotHandler(probed())(context, async () => {});
+    expect(markerIn(headers["set-cookie"])).toBe(true);
+  });
+
+  it("fastify sets it on the reply", async () => {
+    const state = fastifyPair();
+    await fastifyBotHandler(probed())(state.request, state.reply);
+    expect(markerIn(state.headers["set-cookie"])).toBe(true);
+  });
+
+  it("fetch sets it on the response it returns", async () => {
+    const wrapped = withBotHandler(probed(), async () => new Response("ok"));
+    const response = await wrapped(new Request("https://shop.example/", { headers: { "user-agent": CURL, accept: "*/*" } }));
+    expect(markerIn(response.headers.get("set-cookie") ?? undefined)).toBe(true);
+  });
+
+  it("rides along with a refusal, so a blocked client is still recognisable next time", async () => {
+    const handler = new BotHandler({
+      resolver: failingResolver(),
+      metrics: false,
+      probe: { secrets: [SECRET], secure: false },
+      rules: [{ id: "block-bots", match: { verdict: "confirmed-bot" }, action: "block", params: { status: 403, body: "no" } }],
+    });
+    const response = nodeResponse();
+    await runNode(handler, nodeRequest(), response);
+    expect(response.statusCode).toBe(403);
+    expect(markerIn(response.headers["set-cookie"])).toBe(true);
+  });
+
+  it("never displaces a Set-Cookie the operator's own rule set", async () => {
+    const handler = new BotHandler({
+      resolver: failingResolver(),
+      metrics: false,
+      probe: { secrets: [SECRET], secure: false },
+      rules: [{ id: "tag-bots", match: { verdict: "confirmed-bot" }, action: "tag", params: { headers: { "set-cookie": "app=theirs; Path=/" } } }],
+    });
+    const response = nodeResponse();
+    await runNode(handler, nodeRequest(), response);
+    expect(response.headers["set-cookie"]).toBe("app=theirs; Path=/");
   });
 });

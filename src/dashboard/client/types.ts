@@ -52,6 +52,8 @@ export interface Snapshot extends DashboardSnapshot {}
  * of the store came to fail on `HTMLInputElement`.
  */
 export interface ActorRow {
+  /** A name somebody gave this actor. Never read by detection. */
+  label?: string | undefined;
   key: string;
   requests: number;
   recentRate: number;

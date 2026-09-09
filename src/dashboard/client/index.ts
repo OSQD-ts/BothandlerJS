@@ -7,7 +7,7 @@ import { connectStream, loadInitialSnapshot } from "./stream.js";
 import { drawAudit, drawChanges, drawChips, drawLivePanels, drawNoticeBadge, drawNotices, drawPeers, drawStatsPanels, drawTiles, updateWindowLabels } from "./panels.js";
 import { drawFeed, initFeed, reflectFilterButtons, resetFeedCache } from "./feed.js";
 import { drawLatency, drawScores, drawTraffic } from "./charts.js";
-import { drawActors, trackActors } from "./registry.js";
+import { applyActorScope, drawActors, initActorScope, trackActors } from "./registry.js";
 import { drawPolicyTab, initPolicy, loadPolicy } from "./policy.js";
 import { loadRanges } from "./ranges.js";
 import { initTester } from "./tester.js";
@@ -144,13 +144,17 @@ function initHeader(): void {
 // ---- navigation -------------------------------------------------------------
 
 /**
- * The view, the filter and the search live in the URL.
+ * The view, the filter, the search and the Actors scope live in the URL.
  *
- * The view already did. The other two are what make a screen shareable — "look at the
+ * The view already did. The rest are what make a screen shareable — "look at the
  * guard stops on /export" is a link now rather than a set of instructions — and what
  * survives the refresh that is everybody's reflex when a live feed looks stuck.
  * `replaceState` for the filter and the search, because a back button that walks
  * backwards through every keystroke is not a back button.
+ *
+ * The scope is the same argument one step on: "the actors in *this* feed" and "every
+ * actor being tracked" are two different screens under one tab name, and a link that
+ * cannot say which of them you meant is a link to the wrong one half the time.
  */
 function syncUrl(replace = true): void {
   // Embedded, the URL belongs to the page around us. Writing a tab into it rewrites
@@ -160,13 +164,14 @@ function syncUrl(replace = true): void {
   const params = new URLSearchParams();
   if (state.filter !== "all") params.set("f", state.filter);
   if (state.search !== "") params.set("q", state.search);
+  if (state.actorScope !== "tracked") params.set("a", state.actorScope);
   const query = params.toString();
   const hash = `#${state.tab}${query === "" ? "" : `?${query}`}`;
   if (location.hash === hash) return;
   history[replace ? "replaceState" : "pushState"]({ tab: state.tab }, "", hash);
 }
 
-function readUrl(): { tab: TabName; filter: FilterName; search: string } {
+function readUrl(): { tab: TabName; filter: FilterName; search: string; actorScope: "tracked" | "feed" } {
   // And it is not ours to read either: a host page using hash routing would otherwise
   // decide which tab this opens on.
   const raw = isEmbedded() ? "" : location.hash.slice(1);
@@ -178,6 +183,9 @@ function readUrl(): { tab: TabName; filter: FilterName; search: string } {
     tab: isTab(name) ? name : FIRST,
     filter: filter as FilterName,
     search: params.get("q") ?? "",
+    // Anything but the one alternative reads as the default rather than as an error:
+    // a hand-edited URL should land somewhere, and this is the somewhere it lands.
+    actorScope: params.get("a") === "feed" ? "feed" : "tracked",
   };
 }
 
@@ -227,6 +235,7 @@ function initTabs(): void {
     state.filter = url.filter;
     setSearch(url.search);
     reflectFilterButtons();
+    applyActorScope(url.actorScope);
     showTab(url.tab, { push: false });
   });
 }
@@ -405,7 +414,7 @@ function start(): void {
   app.draw = schedule;
   app.drawNow = drawNow;
   app.showTab = showTab;
-  app.syncUrl = () => syncUrl();
+  app.syncUrl = (options) => syncUrl(options?.replace !== false);
 
   applySections();
   initHeader();
@@ -416,6 +425,7 @@ function start(): void {
   initRanges();
   if (SECTIONS.feed) initFeed();
   initActor();
+  initActorScope();
   initTester();
   initPolicy();
 
@@ -438,6 +448,7 @@ function start(): void {
   state.filter = url.filter;
   setSearch(url.search);
   if (SECTIONS.feed) reflectFilterButtons();
+  applyActorScope(url.actorScope);
   showTab(url.tab, { replace: true });
 
   suspendScrollAnchoring();

@@ -103,9 +103,13 @@ function redactAssessment(
     removed,
     assessment: {
       ...assessment,
+      ...(assessment.marker === undefined ? {} : { marker: reduceMarker(assessment.marker, options) }),
       actor: options.maskIp ? { ...assessment.actor, key: maskActorKey(assessment.actor.key) } : assessment.actor,
       evidence: scrubEvidence(assessment.evidence, removed),
       humanEvidence: scrubEvidence(assessment.humanEvidence, removed),
+      // Scrubbed on the same terms: a shadowed detector reads the same request as every
+      // other one, so its summary can quote the same secret out of it.
+      shadowEvidence: scrubEvidence(assessment.shadowEvidence, removed),
       facts: {
         ...assessment.facts,
         ip: options.maskIp ? maskIpValue(assessment.facts.ip) : assessment.facts.ip,
@@ -176,4 +180,28 @@ function maskActorKey(key: string): string {
   const separator = key.indexOf("|");
   if (separator === -1) return networkKey(key);
   return `${networkKey(key.slice(0, separator))}|${key.slice(separator + 1)}`;
+}
+
+/**
+ * The marker observation, reduced the way everything else here is.
+ *
+ * A marker's claims are the decoded contents of a cookie, which is the one thing on this
+ * page the module already refuses to send: `facts.cookies` is dropped outright because a
+ * session in structured form is not something an alert needs. The claims are the same
+ * thing spelled differently, and one of them — `sub` — identifies a client more precisely
+ * than either of the two identifiers this module masks by default. It reached sinks
+ * untouched only because it was added after this was written.
+ *
+ * What survives is what an alert is actually for: whether a marker was there, whether it
+ * verified, whether the identity moved, and how many networks it has come from. None of
+ * those name anybody.
+ */
+function reduceMarker(marker: NonNullable<Assessment["marker"]>, options: RedactionOptions): Assessment["marker"] {
+  return {
+    ...marker,
+    reading: { kind: marker.reading.kind } as typeof marker.reading,
+    // The shape is three coarse parts of the User-Agent. If the User-Agent itself is
+    // being withheld, the parts of it must go too, or the setting only half applies.
+    ...(options.dropUserAgent === true ? { shape: { b: "", o: "", l: "" } } : {}),
+  };
 }

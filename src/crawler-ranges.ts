@@ -166,11 +166,60 @@ async function fetchPrefixes(
   });
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
 
-  const text = await response.text();
-  if (text.length > MAX_BYTES) throw new Error(`the list is ${Math.round(text.length / 1024)} kB, which is not a list of prefixes`);
+  const text = await readCapped(response);
 
   const prefixes = text.trimStart().startsWith("{") ? fromJson(text) : fromLines(text);
   return validate(prefixes, limits);
+}
+
+/**
+ * The body, or as much of it as a list of prefixes could possibly be.
+ *
+ * `await response.text()` reads to the end before anything can object, so checking the
+ * size afterwards decides whether to *use* an oversized list without ever declining to
+ * *hold* one: a publisher that started sending gigabytes — compromised, misconfigured,
+ * or pointed somewhere else by an operator's typo — would be met with the whole thing
+ * in memory and a polite error afterwards. Reading in chunks against a running total
+ * stops at the point the answer is already known.
+ *
+ * `content-length` is checked first when it is offered, which turns the common case
+ * into no read at all. It is a claim rather than a fact, so it can only reject early;
+ * the running total is what actually holds.
+ */
+async function readCapped(response: Response): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_BYTES) {
+    throw new Error(`the list declares ${Math.round(declared / 1024)} kB, which is not a list of prefixes`);
+  }
+
+  // A custom `fetch` may hand back a Response without a readable body. Falling back
+  // keeps the cap meaningful rather than absent, just later than it would otherwise be.
+  const body = response.body;
+  if (body === null || body === undefined || typeof body.getReader !== "function") {
+    const whole = await response.text();
+    if (whole.length > MAX_BYTES) throw new Error(`the list is ${Math.round(whole.length / 1024)} kB, which is not a list of prefixes`);
+    return whole;
+  }
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_BYTES) {
+        throw new Error(`the list is over ${Math.round(MAX_BYTES / 1024)} kB, which is not a list of prefixes`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    // Releasing the lock lets the connection be torn down rather than left half-read.
+    await reader.cancel().catch(() => {});
+  }
+  return text + decoder.decode();
 }
 
 function fromJson(text: string): string[] {

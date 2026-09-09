@@ -59,9 +59,12 @@ jobs:
       # narrow viewport cannot be checked by calling a function. It costs a browser
       # download; a release is exactly the moment that is worth paying for.
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium firefox webkit
       - name: Test the dashboard in a browser
-        run: npm run test:browser
+        run: |
+          npm run test:browser
+          npm run test:browser:firefox
+          npm run test:browser:webkit
       - name: This library depends on nothing
         run: |
           count=$(node -p "Object.keys(require('./package.json').dependencies ?? {}).length")

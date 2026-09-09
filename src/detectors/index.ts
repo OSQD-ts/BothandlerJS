@@ -7,6 +7,7 @@ import { parameterSweepDetector } from "./parameter-sweep.js";
 import { transportCoherenceDetector } from "./transport-coherence.js";
 import { probeVolumeDetector } from "./probe-volume.js";
 import { idEnumerationDetector } from "./id-enumeration.js";
+import { blendedIdentityDetector } from "./blended-identity.js";
 import { crawlerVerificationDetector } from "./crawler-verification.js";
 import type { CrawlerVerificationOptions } from "./crawler-verification.js";
 import { fetchMetadataDetector } from "./fetch-metadata.js";
@@ -14,6 +15,7 @@ import { headerIntegrityDetector } from "./header-integrity.js";
 import { headerOrderDetector } from "./header-order.js";
 import { ipIntelligenceDetector } from "./ip-intelligence.js";
 import { probeSignatureDetector } from "./probe-signature.js";
+import { targetIntegrityDetector } from "./target-integrity.js";
 import { rateAnomalyDetector } from "./rate-anomaly.js";
 import { selfIdentifiedDetector } from "./self-identified.js";
 import { sessionIntegrityDetector } from "./session-integrity.js";
@@ -44,11 +46,21 @@ export { parameterSweepDetector } from "./parameter-sweep.js";
 export { transportCoherenceDetector } from "./transport-coherence.js";
 export { probeVolumeDetector } from "./probe-volume.js";
 export { idEnumerationDetector } from "./id-enumeration.js";
+export { blendedIdentityDetector } from "./blended-identity.js";
+export { challengeReactionDetector } from "./challenge-reaction.js";
+export type { ChallengeReactionOptions } from "./challenge-reaction.js";
+export { challengeIntegrityDetector } from "./challenge-integrity.js";
+export { distributedWalkDetector, pathNoveltyDetector, missBaselineDetector, pathCampaignDetector } from "./site-baseline.js";
+export type { DistributedWalkOptions, PathNoveltyOptions, MissBaselineOptions, PathCampaignOptions } from "./site-baseline.js";
+export type { ChallengeIntegrityOptions } from "./challenge-integrity.js";
+export { identityDriftDetector, markerIntegrityDetector, markerPersistenceDetector, markerFanoutDetector } from "./marker.js";
+export type { IdentityDriftOptions, MarkerIntegrityOptions, MarkerPersistenceOptions, MarkerFanoutOptions } from "./marker.js";
 export type { CrawlBreadthOptions } from "./crawl-breadth.js";
 export type { ParameterSweepOptions } from "./parameter-sweep.js";
 export type { TransportCoherenceOptions } from "./transport-coherence.js";
 export type { ProbeVolumeOptions } from "./probe-volume.js";
 export type { IdEnumerationOptions } from "./id-enumeration.js";
+export type { BlendedIdentityOptions } from "./blended-identity.js";
 export { sessionIntegrityDetector } from "./session-integrity.js";
 export type { SessionIntegrityOptions } from "./session-integrity.js";
 export { identityRotationDetector } from "./identity-rotation.js";
@@ -61,6 +73,8 @@ export { tlsFingerprintDetector } from "./tls-fingerprint.js";
 export type { TlsFingerprintOptions, FingerprintProfile } from "./tls-fingerprint.js";
 export { clearanceDetector } from "./clearance.js";
 export { uaCoherenceDetector } from "./ua-coherence.js";
+export { targetIntegrityDetector } from "./target-integrity.js";
+export type { TargetIntegrityOptions } from "./target-integrity.js";
 export { probeSignatureDetector } from "./probe-signature.js";
 export type { ProbeSignatureOptions } from "./probe-signature.js";
 export { browsingCoherenceDetector } from "./browsing-coherence.js";
@@ -84,16 +98,21 @@ export type { BotSignature, BotCategory, Verification } from "./known-bots.js";
  *   running a browser newer than your data.
  *
  * `clearanceDetector` is not here either, because it needs the challenge service —
- * the engine adds it automatically once `challenge.secrets` is configured.
+ * the engine adds it automatically once `challenge.secrets` is configured. The three
+ * marker detectors work the same way: with no `probe` there is no cookie to have been
+ * issued, so they would be three permanently silent entries in every deployment that
+ * does not use one, and the engine adds them once `probe` is.
  */
 export function defaultDetectors(options: { crawlerVerification?: CrawlerVerificationOptions } = {}): Detector[] {
   return [
     // Identity first: a self-declaration or a verified crawler settles the question
     // outright, and the engine can then skip everything that would only add nuance.
     selfIdentifiedDetector(),
+    blendedIdentityDetector(),
     trapDetector(),
     ipIntelligenceDetector(),
     probeSignatureDetector(),
+    targetIntegrityDetector(),
     // Single-request consistency.
     headerIntegrityDetector(),
     uaCoherenceDetector(),

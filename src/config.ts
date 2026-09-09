@@ -1,4 +1,4 @@
-import { IpRangeSet, normalizeIp, parseIp } from "./internal/ip.js";
+import { IpRangeSet, normalizeIp, parseIp, stripPort } from "./internal/ip.js";
 import { statelessPattern } from "./internal/pattern.js";
 import { systemClock } from "./internal/clock.js";
 import { defaultDetectors } from "./detectors/index.js";
@@ -19,6 +19,8 @@ import type { Decision } from "./policy/types.js";
 import type { MetricsOptions } from "./metrics.js";
 import type { NotificationOptions } from "./notify/hub.js";
 import type { ChallengeOptions } from "./challenge/index.js";
+import type { MarkerProbeOptions } from "./probe/index.js";
+import type { SiteProfileOptions } from "./site/index.js";
 import type { Assessment, RequestFacts } from "./types.js";
 
 /**
@@ -69,6 +71,32 @@ export interface BotHandlerConfig {
   detectors?: readonly Detector[];
   /** Appended to the built-in set. Ignored when `detectors` is given. */
   extraDetectors?: readonly Detector[];
+  /**
+   * Detector ids to run without letting them decide anything.
+   *
+   * A shadowed detector runs on every request exactly as it otherwise would. Its
+   * findings are counted, charted and readable in the dashboard and in every event —
+   * and they are kept out of the verdict, the score, the class, the identity and every
+   * rule. So the question "what would turning this on do to my traffic?" is answered by
+   * a week of your own logs instead of by an argument about thresholds.
+   *
+   * This is the honest way to introduce a detector, and the correlation sources are why
+   * it exists: several of them fire at `moderate` on real people by design — a mobile
+   * user roaming between networks trips `marker-fanout`, a crowd arriving on a broken
+   * link trips `path-campaign`, somebody toggling "Request desktop site" trips
+   * `identity-drift`. Whether the thresholds are right *for your site* is not a thing
+   * this library can know, and shadowing is how you find out without anybody being
+   * turned away while you do.
+   *
+   * ```js
+   * new BotHandler({ site: {}, shadowDetectors: ["path-novelty", "miss-baseline"] })
+   * ```
+   *
+   * An id that names no installed detector is a warning rather than an error: the usual
+   * cause is a typo, and a typo here silently does nothing, which is the one outcome
+   * worth being loud about.
+   */
+  shadowDetectors?: readonly string[];
   /**
    * How claimed crawler identities are confirmed or refuted.
    *
@@ -134,6 +162,28 @@ export interface BotHandlerConfig {
 
   /** Enables the challenge action. Without it, rules asking for one degrade to `tag`. */
   challenge?: Omit<ChallengeOptions, "store" | "clock">;
+  /**
+   * Hand each client a signed marker cookie, and read what comes back.
+   *
+   * Off by default. It is the only part of this library that acts in order to detect,
+   * and it is what lets a series of requests be attributed to one *client* rather than
+   * to one address — which is the difference between "three people share an office
+   * connection" and "one client claimed to be three different browsers".
+   *
+   * See `docs/detection/correlation.md`. Requires `secrets`; without them it stays off
+   * and says so, because a secret invented at startup would mark every marker forged
+   * after a restart.
+   */
+  probe?: Omit<MarkerProbeOptions, "clock">;
+  /**
+   * Compare each client against the rest of your traffic rather than against a fixed
+   * idea of what clients do.
+   *
+   * Off by default, and silent for the first `warmupRequests` after being switched on.
+   * A baseline drawn from a few hundred requests is not a baseline: every path is rare
+   * when nothing has been seen. See `docs/detection/correlation.md`.
+   */
+  site?: Omit<SiteProfileOptions, "clock">;
   store?: BotHandlerStore;
   /**
    * Share `priorConfirmations` between replicas through the store. Default false.
@@ -270,6 +320,11 @@ export interface BotHandlerConfig {
 
 export interface ResolvedConfig {
   detectors: Detector[];
+  /**
+   * {@link BotHandlerConfig.shadowDetectors}, as given. Not yet checked against the
+   * installed set — see the note at the assignment for why that has to wait.
+   */
+  shadowDetectors: ReadonlySet<string>;
   rules: Rule[];
   ranges: Map<string, IpRangeSet>;
   signatures: readonly BotSignature[];
@@ -348,6 +403,12 @@ export function resolveConfig(config: BotHandlerConfig = {}): ResolvedConfig {
     seen.add(detector.id);
   }
 
+  // Carried through unchecked on purpose. Several detectors are installed by the handler
+  // rather than here — the marker, site and challenge ones arrive with the source they
+  // read — so a name is only knowably wrong once the full set exists, and those are
+  // precisely the detectors somebody has reason to shadow. `BotHandler` does the check.
+  const shadowDetectors = new Set<string>(config.shadowDetectors ?? []);
+
   const rules: Rule[] = [...(config.rules ?? [])];
   if (config.preset !== undefined) {
     const preset = PRESETS[config.preset];
@@ -380,6 +441,53 @@ export function resolveConfig(config: BotHandlerConfig = {}): ResolvedConfig {
     warnings.push("proxy.trustedProxies / proxy.hops are configured but proxy.trustProxy is not enabled, so the forwarded header is ignored and the socket address is used.");
   }
 
+  // The marker probe and the site baseline are the two things an operator switches on
+  // that change what the library *does* rather than only what it reads, so the ways they
+  // can be quietly wrong are worth naming at construction rather than discovering from a
+  // detector that fires on everybody.
+  if (config.probe !== undefined) {
+    if (config.probe.cookieName !== undefined && config.probe.cookieName === config.challenge?.cookieName) {
+      throw new ConfigError(
+        `probe.cookieName and challenge.cookieName are both "${config.probe.cookieName}". One would overwrite the other on every response, so clearance and the marker would each destroy the other.`,
+      );
+    }
+    if (config.probe.secure === false) {
+      warnings.push(
+        "probe.secure is false, so the marker cookie will travel over plain HTTP and can be read by anything on the path. It is meant for local development; leave it unset in production.",
+      );
+    }
+    // A marker that is never stored comes back never, and `marker-persistence` reads
+    // exactly that — so this misconfiguration would report every visitor who keeps
+    // cookies as a client that refuses to keep ours.
+    if (config.probe.domain !== undefined && config.probe.domain.startsWith(".") === false && config.probe.domain.includes(".") === false) {
+      warnings.push(`probe.domain is "${config.probe.domain}", which is not a domain a browser will accept, so the marker will never be stored or returned.`);
+    }
+    if (config.probe.ttlMs !== undefined && config.probe.ttlMs < 60_000) {
+      warnings.push(
+        `probe.ttlMs is ${config.probe.ttlMs}ms. A marker that expires within a minute is re-issued on almost every request, which makes responses uncacheable and leaves nothing long enough to correlate.`,
+      );
+    }
+  }
+
+  if (config.site !== undefined && config.site.warmupRequests !== undefined && config.site.warmupRequests < 500) {
+    warnings.push(
+      `site.warmupRequests is ${config.site.warmupRequests}. A baseline drawn from so little traffic is not one — every path is rare when nothing has been seen — so the site detectors will report ordinary visitors until real traffic arrives.`,
+    );
+  }
+
+  // `identity-rotation` reads "one actor, several User-Agents" as one client lying — and
+  // under the default actor key one actor is one address, so a corporate office, a
+  // university or a carrier's CGNAT pool is a hundred people's browsers wearing one. The
+  // detector says so in its own documentation and is off by default because of it; this
+  // catches the case where somebody switched it on without moving the actor key, which is
+  // a decision they cannot see the consequences of until real visitors are being
+  // challenged. Both facts are known here, so the warning costs nothing.
+  if (config.actorKey === undefined && detectors.some((detector) => detector.id === "identity-rotation")) {
+    warnings.push(
+      "identity-rotation is enabled while `actorKey` is left as the client address, so one actor means one address. A NAT gateway — an office, a campus, a mobile carrier — presents many people's browsers under a single address, which is this detector's exact signature and is entirely innocent. Give `actorKey` something narrower than an address (a session cookie, an authenticated user id, or an address combined with a TLS fingerprint), or take the detector out.",
+    );
+  }
+
   const strictEvidence = config.strictEvidence ?? process.env["NODE_ENV"] !== "production";
   const falsePositivePolicy = config.falsePositivePolicy ?? "strict";
   if (falsePositivePolicy === "aggressive") {
@@ -397,6 +505,7 @@ export function resolveConfig(config: BotHandlerConfig = {}): ResolvedConfig {
 
   return {
     detectors,
+    shadowDetectors,
     rules,
     ranges,
     signatures,
@@ -445,7 +554,7 @@ export function resolveClientIp(
   headers: Record<string, string | undefined>,
   proxy: ResolvedConfig["proxy"],
 ): string {
-  const direct = socketAddress !== undefined ? (normalizeIp(socketAddress) ?? socketAddress) : "";
+  const direct = socketAddress !== undefined ? (normalizeIp(stripPort(socketAddress)) ?? socketAddress) : "";
   if (!proxy.trustProxy) return direct;
 
   const header = headers[proxy.header];
@@ -455,7 +564,9 @@ export function resolveClientIp(
   const chain = header
     .slice(0, 2048)
     .split(",")
-    .map((entry) => entry.trim())
+    // The port is removed before parsing: an entry that carries one is written by a
+    // real proxy rather than by an attacker, and dropping it empties the chain.
+    .map((entry) => stripPort(entry))
     .filter((entry) => entry.length > 0 && parseIp(entry) !== null)
     .map((entry) => normalizeIp(entry) as string);
 

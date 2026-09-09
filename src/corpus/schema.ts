@@ -148,6 +148,31 @@ export interface TrafficCase {
    */
   clearance?: "pow" | "interaction" | "operator";
   /**
+   * Answers this actor has already given to challenges, established before the case runs.
+   *
+   * Declared rather than performed, for the same reason `clearance` is: the corpus
+   * replays *requests*, and these are outcomes of the challenge verification endpoint,
+   * which is deliberately not part of the request path. A case cannot submit a solution
+   * any more than it can sign its own clearance token, so it says what has already
+   * happened and the runner tells the handler.
+   */
+  /**
+   * Whether this client stores the cookies it is given. Default: inferred.
+   *
+   * The runner returns cookies the handler set to any case that sends a cookie of its
+   * own, because that is what having a jar means and modelling it otherwise made every
+   * browsing session look like a client that threw its marker away. A case sets this
+   * explicitly to say something the requests cannot: `false` models a client that sends
+   * one cookie it was configured with and stores nothing new.
+   */
+  keepsCookies?: boolean;
+  challengeHistory?: {
+    /** Solutions submitted for challenges that had already been solved. */
+    replayedSolutions?: number;
+    /** Solutions returned faster than the proof of work can be computed in a browser. */
+    implausibleSolves?: number;
+  };
+  /**
    * A person whose *client software* declares itself automated, and why.
    *
    * The never-deny guarantee attached to `human` cases is a promise about guesses:

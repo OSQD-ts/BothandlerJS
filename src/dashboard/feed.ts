@@ -253,11 +253,15 @@ export class DashboardFeed {
       certain: assessment.certain,
       durationMs: Number(assessment.durationMs.toFixed(3)),
       bypass: assessment.bypass,
-      evidence: [...assessment.evidence, ...assessment.humanEvidence].map((item) => ({
+      // Shadowed findings ride in the same list, flagged. They belong on the same screen
+      // as the evidence that did decide — the comparison is the point — and the flag is
+      // what stops the page, and `previewAssessment`, from treating them as such.
+      evidence: [...assessment.evidence, ...assessment.humanEvidence, ...assessment.shadowEvidence].map((item) => ({
         detector: item.detector,
         summary: item.summary,
         certainty: item.certainty,
         direction: item.direction,
+        ...(item.shadow === true ? { shadow: true as const } : {}),
         family: item.family,
         deterministicBasis: item.deterministicBasis,
         identity: item.identity,
@@ -266,6 +270,7 @@ export class DashboardFeed {
         category: typeof item.metadata?.["category"] === "string" ? (item.metadata["category"] as string) : undefined,
         weight: item.weight,
       })),
+      ...(assessment.shadowVerdict === undefined ? {} : { shadowVerdict: assessment.shadowVerdict }),
       failures: assessment.failures.map((failure) => ({ detector: failure.detector, reason: failure.reason, message: failure.message })),
       actorStats: {
         requests: assessment.actor.requests,

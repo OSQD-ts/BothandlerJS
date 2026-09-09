@@ -37,6 +37,40 @@ function runner(preset: PresetName, overrides: Partial<RunnerOptions> = {}): Pro
   });
 }
 
+/**
+ * The same corpus, with everything the operator can switch on switched on.
+ *
+ * The never-deny guarantee is a claim about the whole configured system, not about the
+ * default detector set, so every optional source has to be held to it too. This one is
+ * deliberately hostile to its own features: the corpus replays requests and never returns
+ * a cookie, so every actor here is handed a marker it never brings back — which is
+ * exactly the shape `marker-persistence` reads, applied to a hundred people at once.
+ */
+function fullRunner(preset: PresetName, overrides: Partial<RunnerOptions> = {}): Promise<Scorecard> {
+  return runCorpus({
+    // The two extra capabilities are what make the optional cases run at all. Under the
+    // default runner they are absent, so those cases are skipped rather than failed —
+    // which is the correct reading: a marker case cannot be judged by a configuration
+    // that issues no markers.
+    provides: [`trap-form-field:${TRAP_FIELD}`, "denylist", "datacenter-ranges", "marker-probe", "site-baseline"],
+    create: ({ resolver, clock }) =>
+      new BotHandler({
+        preset,
+        resolver,
+        clock,
+        detectors: defaultDetectors().map((detector) => (detector.id === "trap" ? trapDetector({ formFields: [TRAP_FIELD] }) : detector)),
+        datacenterRanges: ["192.0.2.128/25"],
+        denylist: ["203.0.113.240/28"],
+        challenge: { secrets: ["corpus-secret-used-only-by-the-traffic-corpus-test"] },
+        probe: { secrets: ["corpus-marker-secret-used-only-by-the-traffic-corpus"] },
+        // Low enough that the corpus actually warms it, so the site detectors are live
+        // rather than politely silent for the whole run.
+        site: { warmupRequests: 50 },
+      }),
+    ...overrides,
+  });
+}
+
 function describeFailures(scorecard: Scorecard): string {
   return scorecard.results
     .filter((result) => result.failures.length > 0)
@@ -72,6 +106,14 @@ describe("the reference policy (protect-content)", () => {
     expect(scorecard.unexercisedDetectors, "an untested detector regresses unnoticed").toEqual([]);
   });
 
+  it("exercises every detector the optional sources install too", async () => {
+    // The same guard applied to the marker probe and the site baseline. Being optional
+    // is not a reason to be untested — it is the reason they would otherwise be the
+    // detectors nobody notices regressing.
+    const scorecard = await fullRunner("protect-content");
+    expect(scorecard.unexercisedDetectors, "an untested detector regresses unnoticed").toEqual([]);
+  });
+
   it("proves most genuinely automated traffic", async () => {
     const scorecard = await runner("protect-content");
     const { total, proven } = scorecard.provenAutomation;
@@ -88,6 +130,14 @@ describe("the no-false-positive guarantee", () => {
       const scorecard = await runner(preset, { assertActions: false });
       const denied = scorecard.falsePositives.map((result) => `${result.case.id}: ${result.failures.join("; ")}`);
       expect(denied, `people denied service by the "${preset}" policy`).toEqual([]);
+    });
+  }
+
+  for (const preset of Object.keys(PRESETS) as PresetName[]) {
+    it(`denies no person under "${preset}" with the marker probe and site baseline on`, async () => {
+      const scorecard = await fullRunner(preset, { assertActions: false });
+      const denied = scorecard.falsePositives.map((result) => `${result.case.id}: ${result.failures.join("; ")}`);
+      expect(denied, `people denied service by "${preset}" once the optional sources are enabled`).toEqual([]);
     });
   }
 

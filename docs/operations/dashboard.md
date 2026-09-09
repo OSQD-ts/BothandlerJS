@@ -29,6 +29,13 @@ User-Agent, the verdict, the score, the action and the rule that chose it. Filte
 proven, suspected, human, guard stops, denied, mitigated or served; or type into the
 search box.
 
+**The window.** The **From** and **To** boxes above the feed take absolute instants, and
+either may be left empty — which is what makes one control answer all three of the
+questions people actually ask: from the moment an incident started until now, everything up
+to when it stopped, or between two moments. They read and write local time, the same clock
+the rows show. The charts keep showing their own rolling window; this narrows the feed, the
+counts and the export.
+
 The feed pages, fifty requests at a time. The newest page follows the stream; stepping
 back holds the list still while you read it — a feed that renumbers itself under somebody
 paging through it cannot be read — and says **held while you read** so the stillness is
@@ -45,6 +52,9 @@ rule:no-scrapers action:tag          the rule that fired, and what it settled on
 score:>70 -certain                   probabilistic traffic close to the line
 "GET /api/v2/orders"                 a phrase, spaces and all
 ```
+
+The whole language, with every field and worked examples, is in [the filter
+reference](filters.md).
 
 Fields: `path` `actor` `ua` `verdict` `action` `rule` `detector` `identity` `method`
 `class` `id` `bypass` `outcome` `certain` `score`. Every term must match — narrowing
@@ -114,14 +124,43 @@ regularity (near zero is a metronome, which no person is), prior confirmations, 
 whether they hold clearance. **In feed** sends one to the live feed as an `actor:` filter,
 which makes it a shareable URL like every other view.
 
+**Tracked, or shown in the feed.** The toggle above the table chooses which population
+you are looking at. *Tracked* is the registry — the default, and the one that answers "who
+is hitting me hardest". *Shown in the feed* lists only the clients that appear in the feed
+as you have currently filtered it, so once a filter is on it answers the other question:
+who is in *this*. It is derived from rows the page already holds, so it narrows with the
+search, the chips and the window without another request.
+
+Three columns go blank in that view rather than being filled in. Per minute, cadence and
+unsolved challenges are properties of a client's whole history as the engine sees it, and
+the feed's ring holds a few hundred requests rather than that history — computing them
+from the slice would put a confident number under a heading that means something else. A
+dash says "ask the registry", which is the other half of the toggle.
+
 This screen pages too, twenty-five at a time, busiest first. The registry holds far more
 clients than the feed's ring holds requests, and paging is what reaches them: the feed
 already shows you what is loudest, and the population behind it is the reason this screen
 exists. Ranking something that is still moving means a client can shift between pages
-while you read; the order is a snapshot of a live list, not a stable index.
+while you read; the order is a snapshot of a live list, not a stable index. Paging belongs
+to the registry: the feed-scoped view is built from what is already on screen, so there is
+nothing behind it to page to.
 
 The **Actors tracked** counter above the tab strip is the way in: it is a button, so
 pressing it — or reaching it with the keyboard and pressing Enter — opens this screen.
+
+**Labels.** An address is not a memory. Whoever works out that `198.51.100.4` is a
+partner's price feed can write that down with **Label**, and it shows wherever that actor
+appears — with the key still underneath it, because the key is what you search for. Labels
+can also be set from code, which is the better place for what a deployment already knows:
+
+```ts
+handler.labelActor("198.51.100.4", "partner price feed");
+handler.labelActor("198.51.100.4", undefined);   // and back again
+```
+
+**Detection never reads a label.** That separation is deliberate: the moment a note can
+change a verdict, writing notes becomes a way to be wrong about people at scale. A label
+lives exactly as long as the actor does.
 Where the `registry` section is switched off there is no Actors screen to open, and the
 counter stays an ordinary tile rather than offering to go somewhere that does not exist.
 

@@ -23,6 +23,7 @@ function fakeAssessment(overrides: Partial<Assessment> = {}, at = 0): Assessment
     certain: false,
     evidence: [],
     humanEvidence: [],
+    shadowEvidence: [],
     actor: { key: "203.0.113.1", requests: 1, distinctPaths: 1, distinctQueries: 0, queriesSaturated: false, methodsSeen: ["GET"], responses: 0, misses: 0, firstSeen: at, lastSeen: at, priorConfirmations: 0, unsolvedChallenges: 0, cleared: false },
     durationMs: 0.1,
     failures: [],

@@ -6,7 +6,8 @@ import { issueToken, newChallenge, newClearance, verifyToken } from "./token.js"
 import { DEFAULT_INTERACTION_SETTINGS, parseInteractionReport, probeShapeFor, verifyInteraction } from "./interaction.js";
 import type { InteractionSettings } from "./interaction.js";
 import { serializeCookie } from "../internal/http.js";
-import { shortHash } from "../internal/crypto.js";
+import { base64UrlDecode, shortHash } from "../internal/crypto.js";
+import { TtlLru } from "../internal/lru.js";
 import { systemClock } from "../internal/clock.js";
 import type { Clock } from "../internal/clock.js";
 import type { BotHandlerStore } from "../stores/types.js";
@@ -104,9 +105,47 @@ export interface ChallengeResponse {
   body: string;
 }
 
+/**
+ * A SHA-256 rate no browser has ever reached, in hashes per millisecond.
+ *
+ * Twenty million a second. Real JavaScript managing a tenth of that would be
+ * remarkable, so anything faster than this floor did not run in the page we served.
+ * Set high on purpose: the cost of being wrong here is telling somebody with a fast
+ * machine that they answered too well.
+ */
+const IMPLAUSIBLE_HASHES_PER_MS = 20_000;
+
+/** Clearance tokens tracked for how many actors present them, and actors kept per token. */
+const MAX_TRACKED_TOKENS = 20_000;
+const MAX_BEARERS = 64;
+
+/** What a presented clearance token turned out to be. */
+export interface ClearanceInspection {
+  /** The claims, when the token was ours *and* bound to this actor. */
+  claims?: ClearanceClaims | undefined;
+  /** Ours, but issued to a different actor. Usually an address that changed. */
+  boundElsewhere?: boolean | undefined;
+  /** Distinct actors seen presenting this token, counted in this process. */
+  presentedBy: number;
+}
+
 export type SolutionOutcome =
   | { ok: true; setCookie: string; level: ClearanceLevel; interactionScore?: number; notes?: readonly string[] }
-  | { ok: false; status: number; reason: string; interactionScore?: number | undefined };
+  | {
+      ok: false;
+      status: number;
+      reason: string;
+      interactionScore?: number | undefined;
+      /**
+       * A refusal that says something about the client rather than about the request.
+       *
+       * Most rejections are uninteresting — a stale challenge, a lost tab, a solution
+       * for somebody else's nonce behind a NAT. These two are not. They are reported
+       * separately so the engine can file them against the actor, because a single
+       * occurrence means little and a pattern of them means a great deal.
+       */
+      signal?: "replay" | "implausible-speed" | undefined;
+    };
 
 /**
  * Issues challenges, verifies solutions and grants clearance.
@@ -119,6 +158,8 @@ export type SolutionOutcome =
  */
 export class ChallengeService {
   private readonly secrets: readonly string[];
+  /** Clearance token id to the actors that have presented it. Bounded both ways. */
+  private readonly bearers: TtlLru<Set<string>> | undefined;
   private readonly difficulty: number;
   private readonly challengeTtlMs: number;
   private readonly clock: Clock;
@@ -153,6 +194,9 @@ export class ChallengeService {
     this.verifyPath = options.verifyPath ?? "/__bothandler/verify";
     this.cookieName = options.cookieName ?? "__bh_clearance";
     this.clock = options.clock ?? systemClock;
+    // After the clock and the TTL it depends on: a token stops being interesting when
+    // it expires, so the tracker ages entries out on the same schedule.
+    this.bearers = new TtlLru<Set<string>>(MAX_TRACKED_TOKENS, this.clearanceTtlMs, this.clock);
     this.store = options.store;
     this.interaction = !wantsGesture
       ? undefined
@@ -235,7 +279,11 @@ export class ChallengeService {
         "cache-control": "no-store, private",
         // The page carries one inline script and nothing else. Locking the policy
         // this far down means the interstitial cannot be turned into a fetch primitive.
-        "content-security-policy": `default-src 'none'; script-src 'nonce-${rendered.scriptNonce}'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+        // `img-src data:` permits nothing off this machine — a data: URI is inline by
+        // definition — and exists only so the empty icon the page declares is honoured.
+        // Without it the browser asks for /favicon.ico by itself and is refused, which
+        // Firefox prints as a security error in the console of every person challenged.
+        "content-security-policy": `default-src 'none'; script-src 'nonce-${rendered.scriptNonce}'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
         "x-robots-tag": "noindex, nofollow",
@@ -294,6 +342,20 @@ export class ChallengeService {
       notes = outcome.notes;
     }
 
+    // How long the answer took, measured here rather than taken from the client. The
+    // puzzle needs about 2^diff hashes on average, and a browser doing SHA-256 through
+    // WebCrypto manages a few million a second at the very best. A solution that comes
+    // back faster than the most generous reading of that was not computed by the script
+    // this server sent — it came from something built to solve these, which is a farm.
+    //
+    // Deliberately generous, because the cost of being wrong is charging a fast machine
+    // for being fast. The floor is what a rate no browser has ever reached would need.
+    const elapsedSinceIssue = this.clock.now() - verified.payload.iat;
+    const floorMs = (2 ** verified.payload.diff / IMPLAUSIBLE_HASHES_PER_MS) | 0;
+    if (elapsedSinceIssue >= 0 && elapsedSinceIssue < floorMs) {
+      return { ok: false, status: 400, reason: "solution returned faster than the puzzle allows", signal: "implausible-speed" };
+    }
+
     if (this.store) {
       let claimed: boolean;
       try {
@@ -304,7 +366,9 @@ export class ChallengeService {
         // Redis is unhappy. Replay resistance is the thing we give up, not access.
         claimed = true;
       }
-      if (!claimed) return { ok: false, status: 409, reason: "challenge already solved" };
+      // A nonce is random, single-use and signed, so a second solution for one cannot
+      // be a coincidence: it is the same answer sent twice, or one answer shared out.
+      if (!claimed) return { ok: false, status: 409, reason: "challenge already solved", signal: "replay" };
     }
 
     return {
@@ -337,10 +401,61 @@ export class ChallengeService {
 
   /** Reads and validates the clearance cookie for an actor. Returns `undefined` if there is none valid. */
   read(actorKey: string, cookies: Record<string, string> | undefined): ClearanceClaims | undefined {
+    const inspected = this.inspect(actorKey, cookies);
+    return inspected.claims;
+  }
+
+  /**
+   * Reads a clearance token and says what became of it.
+   *
+   * `read` answers the only question the clearance detector used to ask — is this client
+   * cleared — and throws away the reason when the answer is no. One of those reasons is
+   * worth keeping: a token whose *signature* is ours but whose subject is somebody
+   * else's has been moved between clients. Usually that is innocent and extremely
+   * common, because the subject is derived from the address and a phone changing
+   * networks changes its address. It stops being innocent when one token turns up under
+   * a great many different actors, which is a token being handed around.
+   */
+  inspect(actorKey: string, cookies: Record<string, string> | undefined): ClearanceInspection {
     const token = cookies?.[this.cookieName];
-    if (token === undefined) return undefined;
-    const verified = verifyToken<ClearanceClaims>(token, this.secrets, this.clock.now(), this.subjectsFor(actorKey));
-    return verified.ok ? verified.payload : undefined;
+    if (token === undefined) return { presentedBy: 0 };
+    const now = this.clock.now();
+    const verified = verifyToken<ClearanceClaims>(token, this.secrets, now, this.subjectsFor(actorKey));
+    if (verified.ok) return { claims: verified.payload, presentedBy: this.noteBearer(verified.payload.jti, actorKey) };
+    if (verified.reason !== "wrong-actor") return { presentedBy: 0 };
+
+    // Bound to somebody else, but genuinely ours. Read the id without trusting anything
+    // else in it: the signature already passed, so the claims are not attacker-authored.
+    const claims = this.claimsOf(token);
+    return claims === undefined ? { presentedBy: 0 } : { boundElsewhere: true, presentedBy: this.noteBearer(claims.jti, actorKey) };
+  }
+
+  /** The claims inside a token whose signature has already been checked. */
+  private claimsOf(token: string): ClearanceClaims | undefined {
+    const separator = token.lastIndexOf(".");
+    if (separator <= 0) return undefined;
+    try {
+      const claims = JSON.parse(base64UrlDecode(token.slice(0, separator)).toString("utf8")) as ClearanceClaims;
+      return typeof claims?.jti === "string" ? claims : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Files this presentation under the token's own id, returning how many distinct actors
+   * have now presented it. Bounded in both directions, and in process for the reason
+   * given in `state.ts`: a store round trip per request buys precision nobody asked for.
+   */
+  private noteBearer(jti: string, actorKey: string): number {
+    if (this.bearers === undefined) return 0;
+    let seen = this.bearers.get(jti);
+    if (seen === undefined) {
+      seen = new Set<string>();
+      this.bearers.set(jti, seen);
+    }
+    if (seen.size < MAX_BEARERS) seen.add(actorKey);
+    return seen.size;
   }
 
   /** A `Set-Cookie` that removes any clearance. Call it on logout. */

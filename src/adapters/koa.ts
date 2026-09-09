@@ -1,6 +1,7 @@
 import { createFacts } from "../facts.js";
 import { pause, parseJson, readBoundedBody, verificationBody } from "./shared.js";
 import type { BotHandler } from "../core.js";
+import type { RequestFacts } from "../types.js";
 
 /** The parts of a Koa context this adapter touches, described structurally. */
 export interface KoaLikeContext {
@@ -34,8 +35,11 @@ export function koaBotHandler(handler: BotHandler, options: KoaAdapterOptions = 
 
   return async function botHandlerMiddleware(context: KoaLikeContext, next: () => Promise<void>): Promise<void> {
     let proceed: boolean;
+    let facts: RequestFacts | undefined;
     try {
-      proceed = await evaluate(handler, mountChallenge, context);
+      const decision = await evaluate(handler, mountChallenge, context);
+      proceed = decision.proceed;
+      facts = decision.facts;
     } catch (error) {
       // Serve the request rather than let a detection bug become a 500. The try
       // covers the engine only: `next()` runs the rest of your application, and
@@ -43,12 +47,18 @@ export function koaBotHandler(handler: BotHandler, options: KoaAdapterOptions = 
       handler.config.onError(error, { source: "adapter:koa" });
       proceed = true;
     }
-    if (proceed) await next();
+    if (!proceed) return;
+    await next();
+    // The status the application settled on, reported back on the way out. It feeds
+    // `probe-volume`, which without it is installed and silently inert under Koa.
+    // Reading `ctx.status` rather than listening on the socket keeps this on Koa's own
+    // terms, where the status is whatever the middleware chain last set.
+    if (facts !== undefined) handler.recordOutcome(facts, context.status);
   };
 }
 
-/** Runs the engine and applies its outcome. Returns whether the request continues downstream. */
-async function evaluate(handler: BotHandler, mountChallenge: boolean, context: KoaLikeContext): Promise<boolean> {
+/** Runs the engine and applies its outcome. Says whether the request continues downstream. */
+async function evaluate(handler: BotHandler, mountChallenge: boolean, context: KoaLikeContext): Promise<{ proceed: boolean; facts?: RequestFacts }> {
   const headers: Record<string, string | undefined> = {};
   for (const [name, value] of Object.entries(context.headers)) {
     headers[name] = Array.isArray(value) ? value.join(", ") : value;
@@ -72,21 +82,21 @@ async function evaluate(handler: BotHandler, mountChallenge: boolean, context: K
     context.set("cache-control", "no-store");
     if (verification.ok) context.set("set-cookie", verification.setCookie);
     context.body = verificationBody(verification);
-    return false;
+    return { proceed: false };
   }
 
   const { outcome } = await handler.handle(facts);
 
   if (outcome.kind === "drop") {
     context.req.socket.destroy();
-    return false;
+    return { proceed: false };
   }
 
   if (outcome.kind === "respond") {
     context.status = outcome.status;
     for (const [name, value] of Object.entries(outcome.headers)) context.set(name, value);
     context.body = outcome.body;
-    return false;
+    return { proceed: false };
   }
 
   for (const [name, value] of Object.entries(outcome.requestHeaders ?? {})) {
@@ -96,5 +106,5 @@ async function evaluate(handler: BotHandler, mountChallenge: boolean, context: K
     for (const [name, value] of Object.entries(outcome.responseHeaders)) context.set(name, value);
   }
   if (outcome.delayMs !== undefined) await pause(outcome.delayMs);
-  return true;
+  return { proceed: true, facts };
 }

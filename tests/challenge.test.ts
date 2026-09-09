@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { BotHandler, createFacts } from "../src/index.js";
 import { ChallengeService, parseAcceptLanguage, pickTranslation } from "../src/challenge/index.js";
-import type { RequestFacts } from "../src/types.js";
+import type { Evidence, RequestFacts } from "../src/types.js";
+import { challengeIntegrityDetector } from "../src/detectors/challenge-integrity.js";
+import { ActorState } from "../src/state.js";
+import { makeContext } from "./helpers.js";
 import { ManualClock } from "../src/internal/clock.js";
 import { MemoryStore } from "../src/stores/memory.js";
 import { countLeadingZeroBits, solveProofOfWork, verifyProofOfWork } from "../src/challenge/pow.js";
@@ -122,7 +125,10 @@ describe("ChallengeService", () => {
     const solution = solveProofOfWork(readNonce(token), 8);
     expect((await challenge.verifySolution("203.0.113.1", { challenge: token, solution })).ok).toBe(true);
     const replay = await challenge.verifySolution("203.0.113.1", { challenge: token, solution });
-    expect(replay).toEqual({ ok: false, status: 409, reason: "challenge already solved" });
+    // The `signal` is what lets the engine file this against the actor: a nonce is
+    // random, single-use and signed, so a second solution for one is the same answer
+    // sent twice or one answer shared out, and neither is a coincidence.
+    expect(replay).toEqual({ ok: false, status: 409, reason: "challenge already solved", signal: "replay" });
   });
 
   /**
@@ -359,5 +365,141 @@ describe("counting challenges that were never answered", () => {
     expect(outcome.ok).toBe(true);
 
     expect(engine.registry.peek("203.0.113.9")?.unsolvedChallenges).toBe(0);
+  });
+});
+
+/**
+ * Two things that go wrong at the verification endpoint and say something about the
+ * client rather than about the request. Neither is visible anywhere else: that endpoint
+ * is deliberately not assessed, because a client that has just been challenged must not
+ * be challenged again for trying to answer.
+ */
+describe("answers that were well-formed and still wrong", () => {
+  it("refuses a solution returned faster than the puzzle can be computed", async () => {
+    // A manual clock makes the answer arrive in zero elapsed milliseconds, which is the
+    // limit case of a farm: the work was not done between issuing and receiving.
+    const clock = new ManualClock(1_000_000);
+    const challenge = new ChallengeService({ secrets: [SECRET], store: new MemoryStore({ clock }), clock, difficulty: 16 });
+    const token = extractChallenge(challenge.issue("203.0.113.1").body);
+    const solution = solveProofOfWork(readNonce(token), 16);
+
+    const outcome = await challenge.verifySolution("203.0.113.1", { challenge: token, solution });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok === false && outcome.signal).toBe("implausible-speed");
+  });
+
+  it("accepts the same solution once real time has passed", async () => {
+    // The floor is a floor, not a minimum wait: an ordinary answer clears it easily.
+    const clock = new ManualClock(1_000_000);
+    const challenge = new ChallengeService({ secrets: [SECRET], store: new MemoryStore({ clock }), clock, difficulty: 16 });
+    const token = extractChallenge(challenge.issue("203.0.113.1").body);
+    const solution = solveProofOfWork(readNonce(token), 16);
+    clock.advance(120);
+    expect((await challenge.verifySolution("203.0.113.1", { challenge: token, solution })).ok).toBe(true);
+  });
+
+  it("does not accuse a client when the clock has moved backwards", async () => {
+    // Elapsed time is measured on this server, so a clock that jumps back would make
+    // every answer look impossibly fast. A negative elapsed says nothing about anybody.
+    const clock = new ManualClock(1_000_000);
+    const challenge = new ChallengeService({ secrets: [SECRET], store: new MemoryStore({ clock }), clock, difficulty: 16 });
+    const token = extractChallenge(challenge.issue("203.0.113.1").body);
+    const solution = solveProofOfWork(readNonce(token), 16);
+    clock.set(999_000);
+    const outcome = await challenge.verifySolution("203.0.113.1", { challenge: token, solution });
+    expect(outcome.ok === false && outcome.signal).not.toBe("implausible-speed");
+  });
+
+  it("files what went wrong against the actor, where a detector can read it", async () => {
+    const clock = new ManualClock(1_000_000);
+    const handler = new BotHandler({
+      onWarning: () => {},
+      metrics: false,
+      clock,
+      store: new MemoryStore({ clock }),
+      challenge: { secrets: [SECRET], difficulty: 16 },
+    });
+    const facts = (at: number): RequestFacts =>
+      createFacts({ method: "GET", url: "/", headers: { host: "shop.test", "user-agent": "curl/8.4.0" }, ip: "203.0.113.9", timestamp: at });
+
+    await handler.handle(facts(clock.now()));
+    const issued = handler.challenge!.issue(handler.actorKeyFor(facts(clock.now())));
+    const token = extractChallenge(issued.body);
+    const solution = solveProofOfWork(readNonce(token), 16);
+    // Answered instantly, three times over.
+    for (let i = 0; i < 3; i++) await handler.verifyChallenge(facts(clock.now()), { challenge: token, solution });
+
+    const assessment = await handler.assess(facts(clock.now()));
+    const integrity = assessment.evidence.find((item) => item.detector === "challenge-integrity");
+    expect(integrity?.certainty).toBe("moderate");
+    expect(integrity?.summary).toContain("faster than the proof of work");
+    expect(integrity?.summary, "three of them, and the sentence says so").toContain("3 solutions");
+  });
+
+  /**
+   * One is not "1 solutions".
+   *
+   * Every summary in this library is read by somebody deciding whether a client is a
+   * person, so a count that reads as a template rather than a sentence is a small tax on
+   * the one thing this text exists to do.
+   */
+  it("counts a single implausible answer in the singular", () => {
+    const state = new ActorState("203.0.113.9", 1_000_000);
+    state.noteChallengeAnomaly("implausible-speed");
+    const [evidence] = challengeIntegrityDetector().inspect(
+      makeContext({ state, headers: { host: "shop.test", "user-agent": "curl/8.4.0" } }),
+    ) as Evidence[];
+    expect(evidence?.summary).toBe("Returned a solution faster than the proof of work can be computed in a browser");
+  });
+});
+
+describe("one clearance token, many clients", () => {
+  it("reports a token that has been handed around", async () => {
+    const clock = new ManualClock(1_000_000);
+    const handler = new BotHandler({
+      onWarning: () => {},
+      metrics: false,
+      clock,
+      store: new MemoryStore({ clock }),
+      challenge: { secrets: [SECRET] },
+    });
+    const request = (ip: string, cookie?: string): RequestFacts =>
+      createFacts({
+        method: "GET",
+        url: "/",
+        headers: { host: "shop.test", "user-agent": "curl/8.4.0", ...(cookie === undefined ? {} : { cookie }) },
+        ip,
+        timestamp: clock.now(),
+      });
+
+    const minted = handler.grantClearance(request("203.0.113.1"))?.split(";")[0];
+    expect(minted).toBeDefined();
+
+    // The same token presented from many different addresses. Each one fails its
+    // binding, which on its own is just an address that changed.
+    let assessment: Awaited<ReturnType<typeof handler.assess>> | undefined;
+    for (let i = 1; i <= 15; i++) assessment = await handler.assess(request(`198.51.${i}.4`, minted));
+
+    const shared = assessment?.evidence.find((item) => item.detector === "clearance" && item.direction === "bot");
+    expect(shared?.certainty).toBe("moderate");
+    expect(shared?.summary).toContain("different clients");
+  });
+
+  it("says nothing about one person's token following them between networks", async () => {
+    const clock = new ManualClock(1_000_000);
+    const handler = new BotHandler({ onWarning: () => {}, metrics: false, clock, store: new MemoryStore({ clock }), challenge: { secrets: [SECRET] } });
+    const request = (ip: string, cookie?: string): RequestFacts =>
+      createFacts({
+        method: "GET",
+        url: "/",
+        headers: { host: "shop.test", "user-agent": "curl/8.4.0", ...(cookie === undefined ? {} : { cookie }) },
+        ip,
+        timestamp: clock.now(),
+      });
+    const minted = handler.grantClearance(request("203.0.113.1"))?.split(";")[0];
+
+    let assessment: Awaited<ReturnType<typeof handler.assess>> | undefined;
+    for (let i = 1; i <= 4; i++) assessment = await handler.assess(request(`198.51.${i}.4`, minted));
+    expect(assessment?.evidence.find((item) => item.detector === "clearance" && item.direction === "bot")).toBeUndefined();
   });
 });

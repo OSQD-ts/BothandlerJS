@@ -23,7 +23,7 @@ No runtime dependencies. The library imports nothing but `node:` builtins, and C
 fails if that ever stops being true — so nothing here can hand your project a
 transitive advisory, an install script, or a version conflict with something you
 already run. Redis, if you use it, is your client passed in: `RedisStore` describes
-the five commands it needs structurally and imports neither `ioredis` nor
+the four commands it needs structurally and imports neither `ioredis` nor
 `node-redis`.
 
 ---
@@ -31,15 +31,15 @@ the five commands it needs structurally and imports neither `ioredis` nor
 ## Documentation
 
 The README is the argument and the shortest path to a working integration. Everything
-else lives in **[`docs/`](docs/index.md)** — thirty pages, one per question, each
-explaining why a thing exists as well as how to use it.
+else lives in **[`docs/`](docs/index.md)** — a page per question, each explaining why a
+thing exists as well as how to use it.
 
 | | |
 | --- | --- |
 | **[The course](docs/course/index.md)** | Sixteen lessons that build one integration, from a first assessment to a policy you can defend. Start here if the library is new to you. |
 | **[Start here](docs/index.md)** | [Installation](docs/start/installation.md) · [Your first integration](docs/start/first-integration.md) · [Choosing a policy](docs/start/choosing-a-policy.md) · [Upgrading](docs/start/upgrading.md) |
 | **Concepts** | [Evidence and certainty](docs/concepts/evidence.md) · [Verdicts and scores](docs/concepts/verdicts.md) · [The safety guard](docs/concepts/the-guard.md) · [Actors](docs/concepts/actors.md) · [Threat model](docs/concepts/threat-model.md) |
-| **[Detection](docs/detection/index.md)** | [The 20 detectors](docs/detection/detectors.md) · [Signatures](docs/detection/signatures.md) · [Verification](docs/detection/verification.md) · [Browser signals](docs/detection/client-signals.md) · [Writing a detector](docs/detection/writing-a-detector.md) |
+| **[Detection](docs/detection/index.md)** | [The detectors](docs/detection/detectors.md) · [Correlation](docs/detection/correlation.md) · [Signatures](docs/detection/signatures.md) · [Verification](docs/detection/verification.md) · [Browser signals](docs/detection/client-signals.md) · [Writing a detector](docs/detection/writing-a-detector.md) |
 | **[Policy](docs/policy/index.md)** | [Rules](docs/policy/rules.md) · [Actions](docs/policy/actions.md) · [Presets](docs/policy/presets.md) · [robots.txt](docs/policy/robots.md) · [The challenge](docs/challenge/index.md) |
 | **[Operations](docs/operations/index.md)** | [The dashboard](docs/operations/dashboard.md) · [Embedding it](docs/operations/embedding.md) · [Metrics](docs/operations/metrics.md) · [The audit](docs/operations/audit.md) · [Notifications](docs/operations/notifications.md) · [Runtime changes](docs/operations/runtime-changes.md) |
 | **[Integration](docs/integration/index.md)** | [Adapters](docs/integration/adapters.md) · [The client IP](docs/integration/client-ip.md) · [Stores](docs/integration/stores.md) |
@@ -233,12 +233,20 @@ all three.
   stale mapping is a false positive with a long half-life. Bring your own, from a
   source you refresh and can audit.
 - **Be right about a shared address.** Behind CGNAT, "one actor" is thousands of
-  people. That is why the behavioural signals are capped where they are.
+  people. That is why the behavioural signals are capped where they are. The optional
+  [marker cookie](docs/detection/correlation.md) narrows this — two requests carrying one
+  signed marker are one client rather than one address — but only for clients that keep
+  cookies, and the address remains what everything else is keyed on.
 - **Escalate on a wordlist walk.** `probe-signature` reads one request at a time, so a
   scanner working through five hundred paths produces five hundred separate
   observations rather than a mounting case. That is the price of a detector that runs
   unchanged over a log file; enumeration over time is what `rate-anomaly`, `cadence`
   and `crawl-breadth` are for.
+- **See an enumeration split across enough clients — unless you ask it to.** Divide a
+  range between five hundred addresses and every per-actor threshold is defeated by
+  construction, because each actor is genuinely unremarkable. `distributed-walk` finds it
+  in the union of what those addresses asked for, and needs the optional
+  [site baseline](docs/detection/correlation.md) and enough traffic to have one.
 
 ---
 
@@ -254,13 +262,13 @@ npm run build     # ESM + CJS + declarations
 npm run demo      # protected site :9673 + live dashboard :9674
 npm run demo:roles # the same dashboard behind roles: analyst :9684, operator :9685, admin :9686
 npm run simulate  # eighteen curated scenarios against the demo
-npm run simulate:corpus   # replay all 526 corpus cases over a real socket
+npm run simulate:corpus   # replay all 548 corpus cases over a real socket
 npm run bench     # hot-path benchmark, median of several rounds
-npm run corpus    # 526 shapes of real traffic against your policy
+npm run corpus    # 548 shapes of real traffic against your policy
 npm run example   # a minimal Express integration on :3000
 
 npx @osqd/bothandlerjs replay access.log     # what your policy would have done
-npx @osqd/bothandlerjs check                 # your policy against 526 shapes of real traffic
+npx @osqd/bothandlerjs check                 # your policy against 548 shapes of real traffic
 npx @osqd/bothandlerjs explain "curl/8.4.0"  # one request, and the evidence behind the verdict
 ```
 
@@ -276,7 +284,7 @@ src/
   config.ts          validation, defaults, client-IP resolution
   facts.ts           request normalisation
   state.ts           bounded per-actor behavioural memory
-  detectors/         twenty detectors + the signature database
+  detectors/         the detectors + the signature database
   policy/            rules, matcher, the safety guard, presets
   actions/           decision -> framework-neutral outcome
   challenge/         proof of work, signed tokens, the interstitial
@@ -287,7 +295,7 @@ src/
   adapters/          Express/Connect, Fastify, Koa, Fetch
   client/            browser-side signal script
   internal/          IP, crypto, UA, Aho-Corasick, LRU, DNS, HTTP
-  corpus/            526 shapes of real traffic, with provenance, and the harness
+  corpus/            548 shapes of real traffic, with provenance, and the harness
                      that runs them against your configuration
 demo/                the protected site and the live dashboard
 scripts/simulate.ts  the traffic simulator

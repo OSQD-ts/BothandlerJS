@@ -38,10 +38,11 @@ Read these once and everything else follows from them. They are short.
 | | |
 | --- | --- |
 | [How detection works](detection/index.md) | The pipeline: stages, budgets, failure, and what an assessment contains. |
-| [The detectors](detection/detectors.md) | All twenty, each with what it reads, why it exists, and what it costs. |
+| [The detectors](detection/detectors.md) | All twenty-two, each with what it reads, why it exists, and what it costs. |
 | [The signature database](detection/signatures.md) | How a client is recognised by name, and what a name is worth. |
 | [Verifying a crawler](detection/verification.md) | Reverse DNS, published address ranges, and refuting a forgery. |
 | [Browser signals](detection/client-signals.md) | The optional page script, and the ceiling on anything it reports. |
+| [Shadow mode](detection/shadow-mode.md) | Run a detector without letting it decide anything, and read what it would have done. |
 | [Writing a detector](detection/writing-a-detector.md) | The contract, and the rules about certainty you have to keep. |
 
 ## Policy
@@ -89,7 +90,7 @@ Read these once and everything else follows from them. They are short.
 | --- | --- |
 | [Testing overview](testing/index.md) | The three ways to find out what a policy does before it does it. |
 | [The command line](testing/cli.md) | `replay`, `check`, `explain`, `robots`, `detectors`. |
-| [The traffic corpus](testing/corpus.md) | 526 shapes of real traffic, and how to run your own config against them. |
+| [The traffic corpus](testing/corpus.md) | 548 shapes of real traffic, and how to run your own config against them. |
 | [Replaying your own logs](testing/replay.md) | The most useful thing you can do before deploying anything. |
 | [Try it locally](testing/try-it.md) | A demo site, a live dashboard and eighteen scripted clients. |
 

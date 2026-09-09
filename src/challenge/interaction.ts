@@ -286,7 +286,14 @@ export function analyseMovement(path: readonly PointerSample[]): MovementAnalysi
     timingVariation: coefficientOfVariation(gaps),
     accelerationChanges,
     straightness: pathLength === 0 ? 1 : Math.min(1, Math.hypot(netX, netY) / pathLength),
-    fractionalShare: fractional / samples.length,
+    // Over the samples this actually looked at, not over everything that arrived. The
+    // two differ by however many discontinuities were dropped above, and using the raw
+    // count meant a path with pauses in it reported a *lower* fractional share than the
+    // samples it was computed from — which reads as "these coordinates are integers"
+    // when what happened is that most of them were never examined. It costs the people
+    // most likely to have pauses: somebody who moved the pointer, stopped to read, and
+    // moved again.
+    fractionalShare: distances.length === 0 ? 0 : fractional / distances.length,
     totalTurning,
   };
 }
@@ -500,9 +507,18 @@ export function verifyInteraction(
   // The discrimination that does work is still here: a path of four samples or more that
   // looks interpolated scores zero, and that is a claim about movement the client did
   // report rather than about movement it did not.
-  const measurable = report.via === "pointer" && report.path.length >= 4;
+  // Decided on the samples the analysis will actually judge, rather than on the length of
+  // the array that arrived. They are not the same number — a sample separated from the
+  // last one by more than a quarter of a second describes a gap rather than a movement
+  // and is dropped — and gating on the raw length walked straight back into the mistake
+  // described above. Four pointer samples with a pause before each one are four samples
+  // to `report.path.length` and none to `scoreMovement`, so the report was called
+  // measurable and then measured at zero: the worst possible score, handed to somebody
+  // who moved the pointer, stopped to read, and moved again.
+  const analysis = analyseMovement(report.path);
+  const measurable = report.via === "pointer" && analysis.samples >= 4;
   if (measurable) {
-    const movement = scoreMovement(analyseMovement(report.path));
+    const movement = scoreMovement(analysis);
     notes.push(`movement ${(movement * 100).toFixed(0)}%`);
     score += movement * 0.4;
   } else {

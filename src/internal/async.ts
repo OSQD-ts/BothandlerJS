@@ -29,12 +29,3 @@ export function withTimeout<T>(work: Promise<T>, ms: number, fallback: T): Promi
     );
   });
 }
-
-/** `Promise.allSettled` semantics without allocating a settled-result wrapper per item. */
-export async function settleAll(work: Iterable<Promise<void>>): Promise<void> {
-  await Promise.all([...work].map((promise) => promise.catch(() => undefined)));
-}
-
-export function isPromise(value: unknown): value is Promise<unknown> {
-  return typeof (value as { then?: unknown } | null)?.then === "function";
-}

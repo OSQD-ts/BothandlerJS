@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { combineEvidence, noisyOr, weightOf } from "../src/evidence.js";
-import type { Evidence } from "../src/types.js";
+import { safeSummary } from "../src/internal/text.js";
+import { BotHandler } from "../src/index.js";
+import { createFacts } from "../src/facts.js";
+import type { Assessment, Evidence } from "../src/types.js";
 
 const options = { suspectThreshold: 60, strictEvidence: true };
 
@@ -116,5 +119,112 @@ describe("weightOf", () => {
     expect(weightOf({ detector: "d", summary: "s", direction: "bot", certainty: "strong" })).toBe(0.6);
     expect(weightOf({ detector: "d", summary: "s", direction: "bot", certainty: "weak", weight: 5 })).toBe(1);
     expect(weightOf({ detector: "d", summary: "s", direction: "bot", certainty: "weak", weight: Number.NaN })).toBe(0.15);
+  });
+});
+
+/**
+ * Evidence quotes the client - the path it asked for, the header it sent - and that
+ * quotation is then printed to a log file, a terminal and a JSON feed. Each of those
+ * reads some characters as instructions rather than as letters: a carriage return and a
+ * newline end a log line, and let the next one be written by whoever sent the request;
+ * an escape sequence repaints a terminal. This was a live hole, not a hypothetical one.
+ * A URL containing CRLF came back inside an `id-enumeration` summary exactly as sent.
+ */
+describe("quoting the client instead of obeying it", () => {
+  const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+  const BAD = "\ufffd";
+
+  it("leaves ordinary prose exactly as it was", () => {
+    const plain = "40 requests to /api/v2/orders/# covering 100% of a 40-wide range of ids";
+    expect(safeSummary(plain)).toBe(plain);
+    expect(safeSummary("naive cafe - nihongo \u{1f389}")).toBe("naive cafe - nihongo \u{1f389}");
+  });
+
+  it("neutralises the characters that end a log line", () => {
+    expect(safeSummary("/a\r\nSEVERE: nothing to see here")).toBe(`/a${BAD}${BAD}SEVERE: nothing to see here`);
+    expect(safeSummary("/a\u0000b")).toBe(`/a${BAD}b`);
+  });
+
+  it("neutralises the sequences that repaint a terminal", () => {
+    expect(safeSummary("/a\u001b[31m\u001b[2Jgone")).toBe(`/a${BAD}[31m${BAD}[2Jgone`);
+    expect(safeSummary("/a\u007fx")).toBe(`/a${BAD}x`);
+  });
+
+  it("keeps whole characters whole and drops the halves of ones that are not", () => {
+    expect(safeSummary("\u{1f389}")).toBe("\u{1f389}");
+    expect(safeSummary("a\ud800b")).toBe(`a${BAD}b`);
+    expect(safeSummary("a\udc00")).toBe(`a${BAD}`);
+    expect(JSON.stringify(safeSummary("a\ud800"))).not.toContain("d800");
+  });
+
+  it("caps a summary no matter who wrote the detector", () => {
+    const huge = safeSummary("x".repeat(10_000));
+    expect(huge.length).toBe(513);
+    expect(huge.endsWith("\u2026")).toBe(true);
+  });
+
+  it("cleans what a real request puts into real evidence", async () => {
+    const handler = new BotHandler({ preset: "protect-api", onWarning: () => {} });
+    const hostile = "/admin\r\nSEVERE: forged \u001b[31m/";
+    let evidence: Assessment["evidence"] = [];
+    for (let i = 0; i < 40; i++) {
+      const assessment = await handler.assess(
+        createFacts({ method: "GET", url: `${hostile}${i}`, headers: { host: "s.test", "user-agent": "curl/8.4.0" }, ip: "203.0.113.9" }),
+      );
+      evidence = assessment.evidence;
+    }
+    const walk = evidence.find((item) => item.summary.includes("range of ids"));
+    // The detector still fires and still names the shape, which is the point of it.
+    expect(walk).toBeDefined();
+    expect(walk?.summary).toContain("40 requests to /admin");
+    expect(walk?.summary).not.toMatch(CONTROL);
+  });
+
+  it("cleans a summary a detector this library did not write returns", async () => {
+    const handler = new BotHandler({
+      onWarning: () => {},
+      detectors: [
+        {
+          id: "third-party",
+          description: "a detector written by somebody else",
+          cost: "cheap",
+          inspect: () => ({
+            detector: "third-party",
+            summary: "wrote\r\nthis itself",
+            direction: "bot" as const,
+            certainty: "certain" as const,
+            deterministicBasis: "and\r\nthis basis",
+          }),
+        },
+      ],
+    });
+    const assessment = await handler.assess(createFacts({ method: "GET", url: "/", headers: { host: "s.test" }, ip: "203.0.113.10" }));
+    const item = assessment.evidence.find((entry) => entry.detector === "third-party");
+    expect(item?.summary).toBe(`wrote${BAD}${BAD}this itself`);
+    expect(item?.deterministicBasis).toBe(`and${BAD}${BAD}this basis`);
+  });
+
+  it("does not rewrite a detector's own frozen result", async () => {
+    // A detector may return a shared constant. Rebuilding rather than mutating in place
+    // is what keeps this from throwing.
+    const constant = Object.freeze({
+      detector: "frozen",
+      summary: "clean",
+      direction: "bot" as const,
+      certainty: "moderate" as const,
+    });
+    const handler = new BotHandler({ onWarning: () => {}, detectors: [{ id: "frozen", description: "returns a shared constant", cost: "cheap", inspect: () => constant }] });
+    const assessment = await handler.assess(createFacts({ method: "GET", url: "/", headers: { host: "s.test" }, ip: "203.0.113.11" }));
+    expect(assessment.evidence.find((entry) => entry.detector === "frozen")?.summary).toBe("clean");
+    expect(constant.summary).toBe("clean");
+  });
+
+  it("cleans an operator's label as well", async () => {
+    const handler = new BotHandler({ onWarning: () => {} });
+    const facts = createFacts({ method: "GET", url: "/", headers: { host: "s.test" }, ip: "203.0.113.12" });
+    await handler.assess(facts);
+    handler.labelActor(handler.actorKeyFor(facts), "known\r\nscraper\u001b[31m");
+    const actor = handler.registry.top(1, Date.now())[0];
+    expect(actor?.label).toBe(`known${BAD}${BAD}scraper${BAD}[31m`);
   });
 });

@@ -62,6 +62,13 @@ const detector = new BotHandler({
   // 198.51.100.0/24 is the documentation range, and the simulator crawls from it.
   crawlerRanges: { gptbot: ["198.51.100.0/24"] },
 
+  // The marker probe, on here so the demo exercises it and the dashboard has something
+  // to show for it. Off by default in the library itself, and `secure: false` because
+  // the demo serves plain HTTP — which is exactly the case the warning it prints
+  // describes. `site` is deliberately *not* enabled: a baseline needs far more traffic
+  // than a demo produces, so it would warn and then detect nothing.
+  probe: { secrets: ["a-demo-only-marker-secret-not-for-production"], secure: false },
+
   challenge: {
     secrets: ["demo-secret-only-for-the-local-demo-do-not-ship"],
     difficulty: 14, // a little easier than the default so the interstitial is quick

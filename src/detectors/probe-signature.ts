@@ -162,6 +162,28 @@ const PAYLOADS: ReadonlyArray<{ pattern: RegExp; what: string; tier: PayloadTier
   { pattern: /\bon(?:error|load|mouseover)\s*=/i, what: "an inline event handler", tier: "markup" },
 ];
 
+/**
+ * The characters without which no pattern above can match.
+ *
+ * Every entry in `PAYLOADS` needs at least one of these: `$` or a backtick for the JNDI
+ * lookup and the shell substitution, `:` for the URL scheme, `(` for the time-delay
+ * probe, `<` for the script tag, `=` for the tautology and the event handler, and
+ * whitespace for the chained command and the UNION SELECT.
+ *
+ * It is a gate, not a matcher. A request with sixty-four query parameters was nine
+ * regular expressions against each of them — five hundred and seventy-six of them per
+ * request, taking `probe-signature` from 4.5us to 35.5us and making the whole assessment
+ * cost twice what an ordinary one costs, on nothing but a long URL. An ordinary value —
+ * an id, a slug, a page number — carries none of these and is now one scan rather than
+ * nine.
+ *
+ * The risk in a gate is that it is a second, weaker copy of the thing it guards: widen a
+ * pattern later and the gate silently stops letting it through. That is a hole rather
+ * than a slowdown, so it is not left to review — `tests/detectors.test.ts` fuzzes it,
+ * asserting over random strings that nothing this gate rejects could have matched.
+ */
+const PAYLOAD_GATE = /[$`:(<=\s]/;
+
 /** Quotes, comment markers and separators — the syntax an injection needs and a search does not. */
 const INJECTION_PUNCTUATION = /['"]|--\s|\/\*|;|%27|%22/;
 
@@ -276,10 +298,15 @@ function findPayload(path: string, query: Record<string, string>): PayloadHit | 
   for (const { pattern, what, tier } of PAYLOADS) {
     if (pattern.test(path)) return { what, where: "path", sample: path, tier };
   }
-  for (const [key, value] of Object.entries(query)) {
+  for (const key in query) {
+    const value = query[key] as string;
+    if (!PAYLOAD_GATE.test(value)) continue;
     for (const { pattern, what, tier } of PAYLOADS) {
       if (pattern.test(value)) return { what, where: `query parameter "${key.slice(0, 40)}"`, sample: value, tier };
     }
   }
   return undefined;
 }
+
+/** Exported for the fuzz that proves the gate cannot reject something a pattern would match. */
+export const __payloadInternals = { PAYLOADS, PAYLOAD_GATE };

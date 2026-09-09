@@ -129,6 +129,7 @@ time goes, and turn it off afterwards — it is two clock reads per detector per
 
 ## Related
 
-- [The detectors](detectors.md) — all twenty in detail
+- [The detectors](detectors.md) — the default set, in detail
+- [Correlating a client's own requests](correlation.md) — the marker cookie, and reading a series rather than a request
 - [Writing a detector](writing-a-detector.md)
 - [Policy](../policy/index.md) — what happens to an assessment next

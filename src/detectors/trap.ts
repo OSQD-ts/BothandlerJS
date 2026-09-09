@@ -153,10 +153,26 @@ export interface TrapLinkOptions {
  * the group most at risk from clever traps — can never reach it. `rel="nofollow"`
  * asks search engines not to follow it, and belt-and-braces with `robots.txt`.
  *
- * The output is static and contains no interpolated user input, so it is safe to
- * inline. Emit it once, near the end of `<body>`.
+ * The path and the label are interpolated, and both are escaped on the way in — the
+ * comment here used to claim the output contained no interpolated input at all, which
+ * was two lines above the code that interpolates it and is exactly the sentence that
+ * gets escaping deleted as redundant one day.
+ *
+ * Emit it once, near the end of `<body>`. With no path it uses the first of
+ * {@link DEFAULT_TRAP_PATHS}, which is what the documented example has always shown and
+ * what `trapRobotsEntries` already does — until this defaulted, copying that example gave
+ * you a route handler that threw.
  */
-export function renderTrapLink(path: string, options: TrapLinkOptions = {}): string {
+export function renderTrapLink(path: string = DEFAULT_TRAP_PATHS[0] as string, options: TrapLinkOptions = {}): string {
+  // A trap path is matched against `facts.path`, which always begins with a slash, so a
+  // path that does not cannot ever match and the link would be decoration. Refused here
+  // rather than rendered, for the reason invalid CIDRs are refused at construction: a
+  // control you believe you have and do not is worse than one you know you are missing.
+  // It also means no scheme — `javascript:` among them — can reach the `href`, which
+  // escaping alone does not prevent.
+  if (!path.startsWith("/")) {
+    throw new TypeError(`A trap path must begin with "/" — it is matched against the request path. Received: ${JSON.stringify(path.slice(0, 60))}`);
+  }
   const label = escapeHtml(options.label ?? "Archive index");
   const href = escapeHtml(path);
   return `<a href="${href}" rel="nofollow noindex" aria-hidden="true" tabindex="-1" style="position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden">${label}</a>`;

@@ -13,29 +13,35 @@ everything into a Serif you can defend.
 
 Three tools answer it, and they answer different halves.
 
-## `check` — against 526 shapes of real traffic
+## `check` — against 548 shapes of real traffic
 
 ```bash
 npx @osqd/bothandlerjs check --preset protect-content
 ```
 
 ```
-  protect-content against 522 shapes of real traffic
+  protect-content against 539 shapes of real traffic
 
-  human            181 cases   3 tag, 175 allow, 3 challenge
-  benign-bot       144 cases   6 allow, 86 tag, 48 block, 2 challenge, 2 rate-limit
-  declared-bot      32 cases   18 tag, 2 rate-limit, 3 allow, 9 block
-  unwanted-bot     105 cases   8 tag, 11 rate-limit, 3 block, 70 challenge, 13 allow
-  hostile           27 cases   6 challenge, 17 block, 4 allow
-  infrastructure    33 cases   7 allow, 12 tag, 14 challenge
+  human            184 cases   178 allow, 3 tag, 3 challenge
+  benign-bot       144 cases   86 tag, 48 block, 6 allow, 2 challenge, 2 rate-limit
+  declared-bot      32 cases   18 tag, 9 block, 3 allow, 2 rate-limit
+  unwanted-bot     109 cases   71 challenge, 16 allow, 11 rate-limit, 8 tag, 3 block
+  hostile           37 cases   20 block, 9 allow, 7 challenge, 1 tag
+  infrastructure    33 cases   14 challenge, 12 tag, 7 allow
 
   No case marked as a person was denied service.
 ```
 
+The corpus holds 548 cases and this run reports 539, which is not a discrepancy: a case
+naming a capability the configuration under test does not provide is *skipped* rather than
+failed. The nine here need a marker probe or a site baseline, and judging a marker case
+against a configuration that issues no markers would be a verdict about nothing. Turn those
+sources on and the same command reports all 548.
+
 **It exits non-zero if any case marked `human` is denied**, which is what makes it a CI step
 rather than a report.
 
-The corpus is 526 cases with provenance: 182 of them people — 30 browser profiles, 40 in-app
+The corpus is 548 cases with provenance: 186 of them people — 30 browser profiles, 40 in-app
 WebViews, Tor, screen readers, IE11, a car's infotainment screen, corporate proxies, CGNAT,
 an author signing in at `/wp-login.php`. Header order is reproduced rather than invented, and
 DNS is controlled rather than mocked away, so *"the operator's DNS disproves this"* and

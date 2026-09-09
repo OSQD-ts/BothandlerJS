@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { NotificationHub } from "../src/notify/hub.js";
 import { ManualClock } from "../src/internal/clock.js";
 import { createFacts } from "../src/facts.js";
-import { notifyJsNotifier, slackNotifier, webhookNotifier } from "../src/notify/sinks.js";
+import { consoleNotifier, notifyJsNotifier, slackNotifier, webhookNotifier } from "../src/notify/sinks.js";
+import { redactEvent } from "../src/notify/redact.js";
 import type { Assessment } from "../src/types.js";
 import type { BotEvent } from "../src/notify/types.js";
 
@@ -25,6 +26,7 @@ function assessment(): Assessment {
     certain: true,
     evidence: [],
     humanEvidence: [],
+    shadowEvidence: [],
     actor: { key: "203.0.113.99", requests: 1, distinctPaths: 1, distinctQueries: 0, queriesSaturated: false, methodsSeen: ["GET"], responses: 0, misses: 0, firstSeen: 0, lastSeen: 0, priorConfirmations: 0, unsolvedChallenges: 0, cleared: false },
     durationMs: 0,
     failures: [],
@@ -171,5 +173,156 @@ describe("sinks that used to fail silently", () => {
     expect(() => hub.emit(event())).not.toThrow();
     await Promise.resolve();
     expect(errors).toEqual(["bad:sink down"]);
+  });
+});
+
+/**
+ * The marker observation, on the way out to a sink.
+ *
+ * `redactEvent` masks the actor key and the address by default, and drops `facts.cookies`
+ * outright — "a session in structured form", as the comment there puts it, is not
+ * something an alert needs. A marker's claims are that same session spelled differently,
+ * and `sub` identifies a client more precisely than either identifier the module masks.
+ * It reached sinks untouched only because the marker was added after redaction was
+ * written.
+ */
+describe("what a marker tells a sink", () => {
+  const observed = {
+    reading: { kind: "valid" as const, claims: { v: 1 as const, sub: "MARKER-ID-abc123", iat: 1_700_000_000_000, exp: 1_700_043_200_000, b: "chrome", o: "macos", l: "en" } },
+    drift: { browser: true, platform: false, language: false },
+    shape: { b: "curl", o: "none", l: "en" },
+    networks: 4,
+  };
+
+  const eventWith = (marker: unknown): BotEvent =>
+    ({ type: "detection", at: new Date().toISOString(), assessment: { ...assessment(), marker } } as unknown as BotEvent);
+
+  it("keeps the marker's findings and drops its claims", () => {
+    const out = redactEvent(eventWith(observed));
+    const marker = (out.assessment as unknown as { marker?: Record<string, unknown> }).marker;
+    expect(marker).toBeDefined();
+    // The useful half survives.
+    expect((marker as { reading: { kind: string } }).reading.kind).toBe("valid");
+    expect((marker as { drift: unknown }).drift).toEqual({ browser: true, platform: false, language: false });
+    expect((marker as { networks: number }).networks).toBe(4);
+    // The identifying half does not.
+    expect((marker as { reading: { claims?: unknown } }).reading.claims).toBeUndefined();
+    expect(JSON.stringify(out)).not.toContain("MARKER-ID-abc123");
+  });
+
+  it("withholds the identity parts when the User-Agent is being withheld", () => {
+    // The shape is three coarse parts of the User-Agent. Sending them while dropping the
+    // User-Agent itself would make that setting half apply.
+    const out = redactEvent(eventWith(observed), { dropUserAgent: true });
+    expect(JSON.stringify(out)).not.toContain("curl");
+  });
+
+  it("says nothing about a marker on an event that has none", () => {
+    const out = redactEvent(eventWith(undefined));
+    expect((out.assessment as unknown as { marker?: unknown }).marker).toBeUndefined();
+  });
+});
+
+/**
+ * The console sink, which is the default and had no tests.
+ *
+ * Every deployment that configures notifications and names no sink gets this one, and it
+ * has to survive all five event shapes — including `anomaly`, which carries no assessment
+ * at all, and `error`, which is about the library rather than about traffic. A sink that
+ * throws is caught and reported, so a bug here would not take a site down; it would
+ * quietly turn the default notification channel into an error channel, which is a harder
+ * thing to notice.
+ */
+describe("the console sink", () => {
+  function recorder(): { target: Pick<Console, "log" | "warn" | "error">; log: string[]; warn: string[]; error: string[] } {
+    const log: string[] = [];
+    const warn: string[] = [];
+    const error: string[] = [];
+    return {
+      log,
+      warn,
+      error,
+      target: {
+        log: (...args: unknown[]) => void log.push(args.join(" ")),
+        warn: (...args: unknown[]) => void warn.push(args.join(" ")),
+        error: (...args: unknown[]) => void error.push(args.join(" ")),
+      } as Pick<Console, "log" | "warn" | "error">,
+    };
+  }
+
+  const eventOf = (type: BotEvent["type"], extra: Partial<BotEvent> = {}): BotEvent =>
+    ({ type, at: new Date().toISOString(), assessment: assessment(), ...extra } as BotEvent);
+
+  it("survives every event shape, in both formats", () => {
+    for (const format of ["pretty", "json"] as const) {
+      const sink = recorder();
+      const notifier = consoleNotifier({ format, target: sink.target });
+      const events: BotEvent[] = [
+        eventOf("detection"),
+        eventOf("action", { decision: { action: "block", params: {}, ruleId: "r" } as unknown as BotEvent["decision"] }),
+        eventOf("downgrade"),
+        eventOf("error", { assessment: undefined, error: { source: "detector:x", message: "boom" } }),
+        // The shape with no assessment at all, which the pretty path has its own branch for.
+        eventOf("anomaly", { assessment: undefined, anomaly: { id: "bot-share-spike", summary: "bots up" } as unknown as BotEvent["anomaly"] }),
+      ];
+      for (const event of events) expect(() => notifier.notify(event), `${format}/${event.type}`).not.toThrow();
+      expect(sink.log.length + sink.warn.length + sink.error.length, format).toBe(events.length);
+    }
+  });
+
+  it("prints what actually went wrong on an error event", () => {
+    // `event.error` was unreachable through this sink. An error carrying no assessment
+    // fell into the anomaly line and printed `[bothandler] error unknown — `, discarding
+    // the source and the message; one carrying an assessment printed the request's
+    // evidence instead. Errors are how a failed detector, sink or store is reported, and
+    // this is the sink an operator gets without configuring one.
+    const sink = recorder();
+    consoleNotifier({ target: sink.target }).notify(
+      eventOf("error", { assessment: undefined, error: { source: "detector:crawler-verification", message: "resolver exploded" } }),
+    );
+    expect(sink.error).toHaveLength(1);
+    expect(sink.error[0]).toContain("detector:crawler-verification");
+    expect(sink.error[0]).toContain("resolver exploded");
+    expect(sink.error[0]).not.toContain("unknown");
+  });
+
+  it("prefers the error over the request when an event carries both", () => {
+    // The hub's own suppression summary is this shape: it names a request for context but
+    // the point of it is the message.
+    const sink = recorder();
+    consoleNotifier({ target: sink.target }).notify(
+      eventOf("error", { error: { source: "notification-hub", message: "12 notification(s) were suppressed" } }),
+    );
+    expect(sink.error[0]).toContain("12 notification(s) were suppressed");
+  });
+
+  it("sends each event to the stream that matches how bad it is", () => {
+    // An operator filtering their logs by level should get the same answer the event type
+    // gives: an error is an error, a downgrade is a warning, everything else is a line.
+    const sink = recorder();
+    const notifier = consoleNotifier({ target: sink.target });
+    notifier.notify(eventOf("error", { assessment: undefined, error: { source: "s", message: "m" } }));
+    notifier.notify(eventOf("downgrade"));
+    notifier.notify(eventOf("detection"));
+    expect(sink.error).toHaveLength(1);
+    expect(sink.warn).toHaveLength(1);
+    expect(sink.log).toHaveLength(1);
+  });
+
+  it("writes one parseable object per event in json format", () => {
+    const sink = recorder();
+    consoleNotifier({ format: "json", target: sink.target }).notify(eventOf("detection"));
+    expect(sink.log).toHaveLength(1);
+    expect(() => JSON.parse(sink.log[0] as string)).not.toThrow();
+    expect(JSON.parse(sink.log[0] as string).type).toBe("detection");
+  });
+
+  it("says what it knows when an anomaly carries no request", () => {
+    const sink = recorder();
+    consoleNotifier({ target: sink.target }).notify(
+      eventOf("anomaly", { assessment: undefined, anomaly: { id: "bot-share-spike", summary: "bot share up 6x" } as unknown as BotEvent["anomaly"] }),
+    );
+    expect(sink.warn[0]).toContain("bot-share-spike");
+    expect(sink.warn[0]).toContain("bot share up 6x");
   });
 });

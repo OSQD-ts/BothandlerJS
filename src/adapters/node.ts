@@ -91,9 +91,17 @@ export function botHandler(handler: BotHandler, options: NodeMiddlewareOptions =
         // it shape the response. Reported back on the way out, it feeds `probe-volume` —
         // an actor whose requests are almost all misses is looking for something rather
         // than reading anything. One listener, and nothing depends on it arriving.
-        response.once("finish", () => {
-          handler.recordOutcome(facts, response.statusCode);
-        });
+        // Guarded rather than called outright: this runs inside the try that fails the
+        // request open, so a response object without `once` — an exotic framework
+        // wrapper, a test double — would turn every ordinary request into a reported
+        // adapter error and a trip through the error path. The outcome is optional
+        // information; not being able to collect it is not a failure worth charging
+        // anybody for.
+        if (typeof response.once === "function") {
+          response.once("finish", () => {
+            handler.recordOutcome(facts, response.statusCode);
+          });
+        }
         handedOff = true;
         next();
       } catch (error) {

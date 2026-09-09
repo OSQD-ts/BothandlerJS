@@ -19,6 +19,13 @@ export interface FastifyLikeReply {
   header(name: string, value: string): FastifyLikeReply;
   send(body: unknown): unknown;
   hijack?(): void;
+  /**
+   * The underlying response. Optional because this type describes the shape the adapter
+   * needs rather than Fastify's own, and a test double should not have to build one —
+   * but Fastify always provides it, and without it the status this request ends up
+   * answering is never reported back.
+   */
+  raw?: { once(event: "finish", listener: () => void): unknown; statusCode: number };
 }
 
 export interface FastifyAdapterOptions {
@@ -122,4 +129,12 @@ async function evaluate(
     for (const [name, value] of Object.entries(outcome.responseHeaders)) reply.header(name, value);
   }
   if (outcome.delayMs !== undefined) await pause(outcome.delayMs);
+
+  // What the route answers is the one thing detection cannot see for itself, and it
+  // feeds `probe-volume`: an actor whose requests are almost all misses is looking for
+  // something rather than reading anything. `onRequest` returns long before the route
+  // runs, so the status is collected on the way out, exactly as the Node adapter does
+  // it. Without this the detector is installed and silently inert under Fastify.
+  const raw = reply.raw;
+  if (raw !== undefined) raw.once("finish", () => handler.recordOutcome(facts, raw.statusCode));
 }

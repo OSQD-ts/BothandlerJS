@@ -34,6 +34,10 @@ export { generateRobotsTxt, robotsFromRules, agentFor } from "./robots.js";
 
 // Published crawler address ranges. Opt-in, and it makes outbound requests — which is
 // why it is a separate call rather than something the handler does on its own.
+export { SiteProfile } from "./site/index.js";
+export type { SiteProfileOptions, WalkSpread, PathSurge } from "./site/index.js";
+export { MarkerProbe } from "./probe/index.js";
+export type { MarkerProbeOptions, MarkerObservation } from "./probe/index.js";
 export { PUBLISHED_CRAWLER_RANGES, fetchAddressList, fetchCrawlerRanges, refreshCrawlerRanges, startCrawlerRangeRefresh } from "./crawler-ranges.js";
 export type { AddressListOptions, AddressListSource, PublishedRangeSource, RefreshOptions, RefreshResult, ScheduleOptions } from "./crawler-ranges.js";
 export type { RobotsOptions, RobotsFromRulesResult } from "./robots.js";

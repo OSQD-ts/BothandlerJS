@@ -190,3 +190,39 @@ describe("MultiPatternMatcher", () => {
     expect(matcher.matchFirst("anything")).toBeUndefined();
   });
 });
+
+/**
+ * HTTP/2 lets a client split its cookies across several header fields, and Node's
+ * `http2` hands them over as an array. RFC 9113 §8.2.3 says a receiver concatenates
+ * them with "; ", and joining with ", " like every other header does not merely look
+ * wrong — it parses as *one* cookie whose value is the rest of the line, so every cookie
+ * after the first disappears. A clearance token in the second field was invisible, which
+ * meant an HTTP/2 visitor who had solved a challenge was asked again on every request.
+ */
+describe("cookies split across header fields", () => {
+  it("joins them the way the specification says", () => {
+    const facts = createFacts({
+      method: "GET",
+      url: "/",
+      headers: { host: "shop.test", cookie: ["sid=abc", "__bh_clearance=token-value"] },
+      ip: "203.0.113.1",
+    });
+    expect(facts.cookies).toEqual({ sid: "abc", __bh_clearance: "token-value" });
+  });
+
+  it("does not change a single cookie header", () => {
+    const facts = createFacts({ method: "GET", url: "/", headers: { host: "shop.test", cookie: "sid=abc; other=2" }, ip: "203.0.113.1" });
+    expect(facts.cookies).toEqual({ sid: "abc", other: "2" });
+  });
+
+  it("leaves every other repeated header joined with a comma", () => {
+    const facts = createFacts({
+      method: "GET",
+      url: "/",
+      headers: { host: "shop.test", accept: ["text/html", "application/json"], "x-thing": ["a", "b"] },
+      ip: "203.0.113.1",
+    });
+    expect(facts.headers["accept"]).toBe("text/html, application/json");
+    expect(facts.headers["x-thing"]).toBe("a, b");
+  });
+});

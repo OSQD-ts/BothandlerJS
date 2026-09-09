@@ -6,7 +6,7 @@ How a client is recognised by name, and what a name is worth.
 
 ---
 
-161 signatures, 389 tokens, matched in a single Aho–Corasick pass over the lower-cased
+205 signatures, 389 tokens, matched in a single Aho–Corasick pass over the lower-cased
 User-Agent. One pass regardless of how many signatures there are, which is why adding to
 this costs nothing measurable.
 

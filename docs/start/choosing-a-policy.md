@@ -81,7 +81,7 @@ npx @osqd/bothandlerjs check --preset protect-content --audience human
 npx @osqd/bothandlerjs replay /var/log/nginx/access.log --preset protect-content
 ```
 
-The first is [526 shapes of real traffic](../testing/corpus.md); the second is *yours*. Both
+The first is [548 shapes of real traffic](../testing/corpus.md); the second is *yours*. Both
 print every request the policy would have refused, with the evidence.
 
 For your own configuration rather than a preset:

@@ -291,6 +291,12 @@ export function renderChallengePage(options: ChallengePageOptions): RenderedChal
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
+<!-- An empty icon, so the browser does not go looking for /favicon.ico on its own. It
+     is the browser that makes that request rather than this page, and under
+     default-src 'none' it is refused — which Firefox reports to the console as a
+     security error on a page whose entire purpose is to reassure somebody that nothing
+     is wrong. Declaring one stops the request being made at all. -->
+<link rel="icon" href="data:,">
 <title>${title}</title>
 <style>
   :root { color-scheme: light dark; --fg: #16181d; --muted: #5b6270; --bg: #fbfbfc; --line: #e2e5ea; --accent: #2f6feb; }

@@ -77,7 +77,7 @@ detectors read. Run one scenario at a time with `npm run simulate:curl`,
 ### Replaying the whole corpus over the wire
 
 ```bash
-npm run simulate:corpus                              # all 526 cases
+npm run simulate:corpus                              # all 548 cases
 npm run simulate:corpus:human                        # only the people
 npm run simulate -- --corpus --tag known-cost        # only the awkward ones
 npm run simulate -- --corpus --case browse-chrome-windows --verbose

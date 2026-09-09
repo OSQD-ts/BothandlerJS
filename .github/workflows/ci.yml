@@ -110,6 +110,17 @@ jobs:
           size=$(stat -c%s "$tarball")
           echo "$tarball: $size bytes"
           test "$size" -lt 4000000
+          rm -f "$tarball"
+
+      # Everything above checks what is *in* the package. This checks it can be loaded.
+      # The difference has bitten this package: `bothandlerjs/element` once threw
+      # `ReferenceError: HTMLElement is not defined` the moment anything imported it
+      # outside a browser — present, correctly listed in `exports`, type-checked, and
+      # unusable. Nothing caught it, because every test reaches past the published paths
+      # to the source behind them. This installs the tarball elsewhere and imports each
+      # entry point as both ESM and CommonJS.
+      - name: Every published entry point loads
+        run: npm run check:package
 
   # The dashboard's client is a real module now, so the pure half of it — the search,
   # the outcome classification, the rule drafting — is unit tested in `npm test`. The
@@ -118,7 +129,16 @@ jobs:
   # a browser and drives the real page.
   browser:
     runs-on: ubuntu-latest
-    name: browser
+    name: browser (${{ matrix.engine }})
+    # Every engine, because one engine is how a real bug shipped: the tables collapsed
+    # their borders, which stops a sticky `th` sticking in WebKit, so the feed's column
+    # headers scrolled away in Safari while the Chromium-only suite stayed green. A page
+    # this size is mostly CSS, and CSS is where engines differ. Firefox earned its place
+    # on the first run too, catching a CSP error the challenge page showed every visitor.
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [chromium, firefox, webkit]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -126,10 +146,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+      - name: Install ${{ matrix.engine }}
+        run: npx playwright install --with-deps ${{ matrix.engine }}
       - name: Test the dashboard in a browser
         run: npm run test:browser
+        env:
+          BROWSER_ENGINE: ${{ matrix.engine }}
 
   # A coverage ratchet without a performance one leaves the hot path unguarded, and the
   # hot path is the code every user of this library runs on every request. The budgets

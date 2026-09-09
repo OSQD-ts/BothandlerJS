@@ -61,7 +61,7 @@ npx @osqd/bothandlerjs check --preset protect-content
 npx @osqd/bothandlerjs replay /var/log/nginx/access.log --preset protect-content
 ```
 
-The first runs your policy against [526 shapes of real traffic](../testing/corpus.md); the
+The first runs your policy against [548 shapes of real traffic](../testing/corpus.md); the
 second runs it against yours. Read the list of would-be-denied requests. If any of them is a
 person, the policy is wrong — and you found out from a log file.
 

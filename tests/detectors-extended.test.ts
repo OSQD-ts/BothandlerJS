@@ -4,9 +4,13 @@ import { clientHintsDetector } from "../src/detectors/client-hints.js";
 import { headerIntegrityDetector } from "../src/detectors/header-integrity.js";
 import { probeSignatureDetector } from "../src/detectors/probe-signature.js";
 import { uaCoherenceDetector } from "../src/detectors/ua-coherence.js";
+import { tlsFingerprintDetector } from "../src/detectors/tls-fingerprint.js";
+import { identityRotationDetector } from "../src/detectors/identity-rotation.js";
+import { ActorState } from "../src/state.js";
+import type { FingerprintProfile } from "../src/detectors/tls-fingerprint.js";
 import { selfIdentifiedDetector } from "../src/detectors/self-identified.js";
 import { combineEvidence } from "../src/evidence.js";
-import { CHROME_HEADERS, collect, makeContext } from "./helpers.js";
+import { CHROME_HEADERS, collect, makeContext, makeFacts } from "./helpers.js";
 import type { Evidence } from "../src/types.js";
 
 const COMBINE = { suspectThreshold: 60, strictEvidence: true };
@@ -349,5 +353,155 @@ describe("the expanded signature database", () => {
     const evidence = await identify("k6/0.56.0 (https://k6.io/)");
     expect(evidence?.identity).toBe("k6");
     expect(evidence?.metadata?.["benign"]).toBe(false);
+  });
+});
+
+/**
+ * The TLS fingerprint detector, which had no tests at all.
+ *
+ * It ships exported and switched off, so nothing exercised it — and it is the
+ * highest-consequence detector to leave unexercised: it reaches `strong` and it names an
+ * `impersonator`, on data an operator supplies and maintains. Its own documentation makes
+ * three promises about when it stays quiet, and the third one calls a stale table "the
+ * worst possible failure mode". None of the three was checked.
+ */
+describe("comparing a TLS handshake with what the client claims", () => {
+  const CHROME = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+  const FIREFOX = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0";
+  const BLINK = "ja3-blink-chrome-122";
+
+  const profiles = (): Map<string, FingerprintProfile> =>
+    new Map<string, FingerprintProfile>([
+      [BLINK, { label: "Chrome 122 (macOS)", engine: "blink" }],
+      ["ja3-curl", { label: "curl 8.x", automated: true }],
+    ]);
+
+  const look = (options: { agent: string; fingerprint?: string; table?: Map<string, FingerprintProfile> }) =>
+    tlsFingerprintDetector({ profiles: options.table ?? profiles() }).inspect(
+      makeContext({
+        headers: { host: "shop.test", "user-agent": options.agent },
+        ...(options.fingerprint === undefined ? {} : { tlsFingerprint: options.fingerprint }),
+      }),
+    ) as Evidence | undefined;
+
+  it("says nothing when no edge forwards a fingerprint", () => {
+    // The common case by a wide margin: most deployments never send one.
+    expect(look({ agent: CHROME })).toBeUndefined();
+  });
+
+  it("says nothing when the operator has supplied no table", () => {
+    expect(look({ agent: CHROME, fingerprint: BLINK, table: new Map() })).toBeUndefined();
+  });
+
+  /**
+   * The failure mode the detector's own comment calls the worst available: fingerprints
+   * churn with every browser release, so a table that has stopped being updated will not
+   * recognise somebody on a newer browser. Not recognising them is a fact about the table
+   * and not about them, and silence is the only honest answer.
+   */
+  it("says nothing about a fingerprint its table has never seen", () => {
+    expect(look({ agent: CHROME, fingerprint: "ja3-something-released-last-tuesday" })).toBeUndefined();
+  });
+
+  it("reports a handshake belonging to a tool rather than a browser", () => {
+    const found = look({ agent: CHROME, fingerprint: "ja3-curl" });
+    expect(found?.certainty).toBe("strong");
+    expect(found?.direction).toBe("bot");
+    expect(found?.botClass).toBe("http-client");
+    expect(found?.summary).toContain("curl 8.x");
+  });
+
+  it("reports a handshake that contradicts the engine the User-Agent claims", () => {
+    // A Blink handshake underneath a Firefox User-Agent. One of the two is a lie, and the
+    // handshake is the half the client did not get to write freely.
+    const found = look({ agent: FIREFOX, fingerprint: BLINK });
+    expect(found?.certainty).toBe("strong");
+    expect(found?.botClass).toBe("impersonator");
+    expect(found?.summary).toContain("blink");
+    expect(found?.summary).toContain("gecko");
+  });
+
+  it("corroborates a handshake that agrees with the claim, as evidence of a person", () => {
+    // One of very few human-pointing signals available from the request alone, and it is
+    // deliberately weaker than the accusation: fingerprints collide across clients that
+    // share a TLS library.
+    const found = look({ agent: CHROME, fingerprint: BLINK });
+    expect(found?.direction).toBe("human");
+    expect(found?.certainty).toBe("moderate");
+    expect((found?.weight ?? 1) < 0.5).toBe(true);
+  });
+
+  it("says nothing when the table names no engine to compare", () => {
+    const table = new Map<string, FingerprintProfile>([["ja3-unknown-engine", { label: "Something" }]]);
+    expect(look({ agent: CHROME, fingerprint: "ja3-unknown-engine", table })).toBeUndefined();
+  });
+});
+
+/**
+ * `identity-rotation`, whose firing branch had never run.
+ *
+ * It ships switched off and its own comment explains why: under an address-derived actor
+ * key it fires on exactly the busiest legitimate networks on the internet. That makes the
+ * *conditions* under which it speaks the most important thing about it — and nothing
+ * checked them, because with the detector absent from `defaultDetectors()` nothing ever
+ * called it.
+ */
+describe("one actor presenting several User-Agents", () => {
+  const AGENTS = [
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+    "curl/8.4.0",
+  ];
+
+  /** Drives one actor through `count` requests, cycling `agents` between them. */
+  function actorWith(agents: readonly string[], count: number): ActorState {
+    const state = new ActorState("203.0.113.10", 1_700_000_000_000);
+    for (let i = 0; i < count; i++) {
+      state.record(
+        makeFacts({
+          headers: { host: "shop.test", "user-agent": agents[i % agents.length] as string },
+          timestamp: 1_700_000_000_000 + i * 1000,
+        }),
+      );
+    }
+    return state;
+  }
+
+  const look = (state: ActorState, options = {}) =>
+    identityRotationDetector(options).inspect(makeContext({ state, headers: { host: "shop.test", "user-agent": AGENTS[0] as string } })) as Evidence | undefined;
+
+  it("stays quiet until it has seen enough of the actor", () => {
+    // Three browsers across four requests is a household opening a link. The request
+    // floor is what stops that being an accusation.
+    expect(look(actorWith(AGENTS.slice(0, 3), 4))).toBeUndefined();
+  });
+
+  it("stays quiet below the number of identities it was told to look for", () => {
+    expect(look(actorWith(AGENTS.slice(0, 2), 30))).toBeUndefined();
+  });
+
+  it("reports the rotation once both conditions are met", () => {
+    const found = look(actorWith(AGENTS, 30));
+    expect(found?.certainty).toBe("moderate");
+    expect(found?.botClass).toBe("impersonator");
+    expect(found?.summary).toMatch(/presented \d+ distinct User-Agent strings across \d+ requests/);
+    // Capped well below anything that could deny somebody on its own, because under an
+    // address-derived actor key this fires on every large office and carrier.
+    expect((found?.weight ?? 1) < 0.5).toBe(true);
+  });
+
+  it("takes an operator's own thresholds", () => {
+    const state = actorWith(AGENTS.slice(0, 2), 30);
+    expect(look(state)).toBeUndefined();
+    expect(look(state, { threshold: 2 })).toBeDefined();
+    expect(look(actorWith(AGENTS, 30), { minRequests: 100 })).toBeUndefined();
+  });
+
+  it("refuses a threshold it could never reach", () => {
+    // An actor remembers a bounded number of User-Agents, so a threshold above that cap
+    // would run on every request and never fire — configuration that looks applied and
+    // is not.
+    expect(() => identityRotationDetector({ threshold: 10_000 })).toThrow(/can never be reached/);
   });
 });

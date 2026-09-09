@@ -9,13 +9,21 @@ import { Policy } from "./policy/policy.js";
 import type { GuardSettings } from "./policy/policy.js";
 import { cachingResolver, nodeDnsResolver } from "./internal/dns.js";
 import { clearanceDetector } from "./detectors/clearance.js";
-import { combineEvidence } from "./evidence.js";
+import { challengeReactionDetector } from "./detectors/challenge-reaction.js";
+import { challengeIntegrityDetector } from "./detectors/challenge-integrity.js";
+import { distributedWalkDetector, missBaselineDetector, pathCampaignDetector, pathNoveltyDetector } from "./detectors/site-baseline.js";
+import { identityDriftDetector, markerIntegrityDetector, markerPersistenceDetector, markerFanoutDetector } from "./detectors/marker.js";
+import { combineEvidence, sortEvidence } from "./evidence.js";
 import { compileSignatures } from "./detectors/known-bots.js";
 import { TERMINAL_ACTIONS } from "./policy/types.js";
 import { executeAction } from "./actions/index.js";
 import { parseUserAgent } from "./internal/ua.js";
 import { pathMatches } from "./internal/pattern.js";
 import { randomId } from "./internal/crypto.js";
+import { safeSummary } from "./internal/text.js";
+import { MarkerProbe, identityShape } from "./probe/index.js";
+import { SiteProfile } from "./site/index.js";
+import { walkStepOf } from "./state.js";
 import { ConfigError, resolveClientIp, resolveConfig, validateRules } from "./config.js";
 import { withTimeout } from "./internal/async.js";
 import type { ActionOutcome, CustomHandler } from "./actions/types.js";
@@ -165,6 +173,8 @@ export interface DetectorDescription {
   description: string;
   cost: "cheap" | "io";
   stage: "always" | "confirming";
+  /** Running, and deciding nothing. See {@link BotHandlerConfig.shadowDetectors}. */
+  shadow?: true | undefined;
 }
 
 /**
@@ -188,12 +198,29 @@ export interface DetectorDescription {
  * reported through `onError`. Nothing in this file can turn a bad day for a
  * dependency into a bad day for the site it is protecting.
  */
+/**
+ * Quotes the client rather than obeying it. A summary — and the written basis behind a
+ * `certain` verdict — often contains text the client chose, and both are printed. The
+ * item is rebuilt only when something actually needed fixing, because a detector may
+ * return a frozen constant and because the clean path is every ordinary request.
+ */
+function sanitize(item: Evidence): Evidence {
+  const summary = safeSummary(item.summary);
+  const basis = item.deterministicBasis === undefined ? undefined : safeSummary(item.deterministicBasis);
+  if (summary === item.summary && basis === item.deterministicBasis) return item;
+  return { ...item, summary, ...(basis === undefined ? {} : { deterministicBasis: basis }) };
+}
+
 export class BotHandler {
   readonly config: ResolvedConfig;
   readonly registry: ActorRegistry;
   readonly store: BotHandlerStore;
   readonly policy: Policy;
   readonly challenge: ChallengeService | undefined;
+  /** The marker-cookie probe, when the operator asked for one. See `probe` in the config. */
+  readonly probe: MarkerProbe | undefined;
+  /** The site-wide baseline, when the operator asked for one. See `site` in the config. */
+  readonly site: SiteProfile | undefined;
   readonly notifications: NotificationHub;
   /**
    * The traffic audit, or `undefined` when it was switched off with `audit: false`.
@@ -210,6 +237,8 @@ export class BotHandler {
   private readonly cheapDetectors: Detector[] = [];
   private readonly ioDetectors: Detector[] = [];
   private readonly confirmingDetectors: Detector[] = [];
+  /** Hoisted from the resolved config: read once per detector per request. */
+  private readonly shadowIds: ReadonlySet<string>;
   private readonly events: Emitter<BotHandlerEvents>;
   private readonly ignoreExact: Set<string>;
   private readonly ignorePatterns: readonly (string | RegExp)[];
@@ -227,6 +256,7 @@ export class BotHandler {
     this.store = options.store ?? new MemoryStore({ clock: this.config.clock });
     this.registry = new ActorRegistry(this.config.clock, { windowMs: this.config.actorWindowMs, maxActors: this.config.maxActors });
     this.signatures = compileSignatures(this.config.signatures);
+    this.shadowIds = this.config.shadowDetectors;
     this.resolver = cachingResolver(options.resolver ?? nodeDnsResolver(this.config.detectorTimeoutMs));
     this.handlers = new Map((options.handlers ?? []).map((handler) => [handler.id, handler]));
     this.isHuman = options.isHuman;
@@ -239,6 +269,12 @@ export class BotHandler {
     this.challenge = options.challenge
       ? new ChallengeService({ ...options.challenge, store: this.store, clock: this.config.clock })
       : undefined;
+
+    // Constructed only when asked for, and refused rather than half-built: a probe
+    // without usable secrets would accuse every visitor of forgery after a restart.
+    this.probe =
+      options.probe !== undefined ? new MarkerProbe({ ...options.probe, clock: this.config.clock }) : undefined;
+    this.site = options.site !== undefined ? new SiteProfile({ ...options.site, clock: this.config.clock }) : undefined;
 
     this.notifications = new NotificationHub({
       ...options.notifications,
@@ -264,11 +300,48 @@ export class BotHandler {
     const detectors = [...this.config.detectors];
     if (this.challenge && !detectors.some((detector) => detector.id === "clearance")) {
       detectors.unshift(clearanceDetector(this.challenge));
+      // Reading a reaction needs something to have been asked, so this one arrives with
+      // the challenge service for the same reason the clearance detector does.
+      if (!detectors.some((detector) => detector.id === "challenge-reaction")) {
+        detectors.unshift(challengeReactionDetector());
+      }
+      if (!detectors.some((detector) => detector.id === "challenge-integrity")) {
+        detectors.unshift(challengeIntegrityDetector());
+      }
+    }
+    // Likewise the marker detectors: without a probe there is no cookie anyone could
+    // have been issued, so installing them by default would put three permanently
+    // silent entries in `describeDetectors()` for every deployment that does not use
+    // one. Each is skipped if the operator already configured it themselves.
+    // The site detectors need a baseline to compare against, so like the marker and
+    // clearance ones they arrive with the thing they read rather than by default.
+    if (this.site !== undefined) {
+      for (const detector of [distributedWalkDetector(), pathNoveltyDetector(), missBaselineDetector(), pathCampaignDetector()]) {
+        if (!detectors.some((installed) => installed.id === detector.id)) detectors.unshift(detector);
+      }
+    }
+    if (this.probe !== undefined) {
+      for (const detector of [identityDriftDetector(), markerIntegrityDetector(), markerPersistenceDetector(), markerFanoutDetector()]) {
+        if (!detectors.some((installed) => installed.id === detector.id)) detectors.unshift(detector);
+      }
     }
     for (const detector of detectors) {
       if (detector.stage === "confirming") this.confirmingDetectors.push(detector);
       else if (detector.cost === "io") this.ioDetectors.push(detector);
       else this.cheapDetectors.push(detector);
+    }
+
+    // Checked here rather than in `resolveConfig`, because the list is only complete now:
+    // the marker, site and challenge detectors are added above, alongside the sources
+    // they read, and those are the ones with thresholds worth shadowing. Named but not
+    // installed is almost always a typo, and a typo here is invisible — nothing was going
+    // to run, so nothing looks any different either way.
+    for (const id of this.shadowIds) {
+      if (!detectors.some((detector) => detector.id === id)) {
+        this.warn(
+          `shadowDetectors names "${id}", which is not an installed detector, so nothing is being shadowed by that entry. Installed: ${detectors.map((detector) => detector.id).join(", ")}.`,
+        );
+      }
     }
 
     // Proof travels between replicas; suspicion does not. See `shareConfirmations`.
@@ -471,8 +544,36 @@ export class BotHandler {
    * nothing else. The bundled Node adapter wires it up for you.
    */
   recordOutcome(facts: RequestFacts, status: number): void {
+    // Skipped for exactly the requests `assess` skips, so the site's own miss rate is
+    // measured over the traffic it judges. Adapters call this on every response,
+    // including the ones detection never looked at — and an allowlisted health check or
+    // an ignored asset path answering 404 all day would otherwise set the baseline that
+    // decides whether anybody else's misses are unusual. Measured: a run where every
+    // judged request was answered 200 reported a site miss rate of 0.89.
+    if (!this.isIgnoredPath(facts.path) && !this.isAllowlisted(facts.ip)) {
+      this.site?.recordOutcome(facts.path, status);
+    }
     if (!Number.isFinite(status)) return;
     this.registry.peek(this.actorKeyFor(facts))?.recordOutcome(status);
+  }
+
+  /**
+   * Gives an actor a name, or clears it with `undefined`.
+   *
+   * Detection never reads it — a label cannot make anybody more or less suspicious, and
+   * that separation is deliberate: the moment a note changes a verdict, writing notes
+   * becomes a way to be wrong about people at scale. It is for the humans reading the
+   * dashboard, and it survives exactly as long as the actor does.
+   *
+   * Available from code so a deployment can label what it already knows — its own
+   * monitoring, a partner's feed, the office egress — rather than waiting for somebody to
+   * recognise the address twice.
+   */
+  labelActor(key: string, label: string | undefined, context: ChangeContext = {}): void {
+    const state = this.registry.peek(key);
+    if (state === undefined) return;
+    state.setLabel(label);
+    this.warn(`Actor "${key}" was ${label === undefined ? "unlabelled" : `labelled "${state.label ?? ""}"`} at runtime${attribute(context)}.`);
   }
 
   /** Convenience for `updateRanges("crawler:<id>", …)`, matching a signature id. */
@@ -616,6 +717,9 @@ export class BotHandler {
       description: detector.description,
       cost: detector.cost ?? "cheap",
       stage: detector.stage ?? "always",
+      // Present only when it is true, so a deployment shadowing nothing lists exactly
+      // what it listed before.
+      ...(this.shadowIds.has(detector.id) ? { shadow: true as const } : {}),
     }));
   }
 
@@ -671,9 +775,35 @@ export class BotHandler {
     const state = record ? this.registry.observe(actorKey, facts) : detachedActor(actorKey, facts);
     const ua = parseUserAgent(facts.headers["user-agent"]);
     const signatureMatches = ua.lower.length > 0 ? this.signatures.matchAll(ua.lower) : [];
+    // Filed against the actor before the detectors run, so a detector reading the set sees
+    // this request in it. What one request claimed is a claim; what a series of them
+    // claimed is sometimes a contradiction.
+    for (const match of signatureMatches) state.noteIdentity(match.id, match.category, match.verification.kind !== "none");
+
+    // Read before the detectors run, and recorded on the actor, so that a detector
+    // reading the marker sees this request in the series rather than after it.
+    const marker = this.probe?.observe(facts, ua);
+    if (marker !== undefined && record) {
+      state.noteMarker(marker.reading.kind === "valid", marker.reading.kind === "forged", marker.drift);
+    }
+
+    // Filed before the detectors run, so a detector comparing this request against the
+    // site sees this request counted in it. Only for requests that are actually being
+    // recorded: a dry run must not move the baseline it is asking about.
+    if (this.site !== undefined && record) {
+      // Asked before it is counted, so "has anybody else been here" does not answer
+      // itself. Recording first would make every path seen at least once.
+      const seenBefore = this.site.timesSeen(facts.path);
+      this.site.record(facts.path, actorKey);
+      if (seenBefore === 0) state.noteNovelPath();
+      const step = walkStepOf(facts.path);
+      if (step !== undefined) this.site.recordWalk(step.template, step.id, actorKey);
+    }
 
     const context: DetectionContext = {
       facts,
+      marker,
+      site: this.site,
       ua,
       actor: state.snapshot(facts.timestamp),
       state,
@@ -686,6 +816,8 @@ export class BotHandler {
     };
 
     const evidence: Evidence[] = [];
+    // Kept apart from the first line of this function to the last. See `Assessment.shadowEvidence`.
+    const shadowEvidence: Evidence[] = [];
     const failures: DetectorFailure[] = [];
 
     // Cheap detectors are synchronous by contract, so they are run *without* an
@@ -697,12 +829,12 @@ export class BotHandler {
     // by behaviour rather than by trust.
     let pending: Array<Promise<void>> | undefined;
     for (const detector of this.cheapDetectors) {
-      const inFlight = this.run(detector, context, evidence, failures, 0);
+      const inFlight = this.run(detector, context, evidence, shadowEvidence, failures, 0);
       if (inFlight !== undefined) (pending ??= []).push(inFlight);
     }
 
     for (const detector of this.ioDetectors) {
-      const inFlight = this.run(detector, context, evidence, failures, this.config.detectorTimeoutMs);
+      const inFlight = this.run(detector, context, evidence, shadowEvidence, failures, this.config.detectorTimeoutMs);
       if (inFlight !== undefined) (pending ??= []).push(inFlight);
     }
 
@@ -713,7 +845,7 @@ export class BotHandler {
     if (signatureMatches.length > 0 && this.confirmingDetectors.length > 0) {
       let confirming: Array<Promise<void>> | undefined;
       for (const detector of this.confirmingDetectors) {
-        const inFlight = this.run(detector, context, evidence, failures, this.config.detectorTimeoutMs);
+        const inFlight = this.run(detector, context, evidence, shadowEvidence, failures, this.config.detectorTimeoutMs);
         if (inFlight !== undefined) (confirming ??= []).push(inFlight);
       }
       if (confirming !== undefined) await Promise.all(confirming);
@@ -735,11 +867,37 @@ export class BotHandler {
       }
     }
 
+    // Noted after the detectors, so the *next* request from this actor knows a scanner
+    // payload has already come from it. Cross-request by nature: one probe is a probe, and
+    // a probe alongside a claimed crawler identity is a lie about who is probing.
+    if (evidence.some((item) => item.detector === "probe-signature")) state.notePayloadProbe();
+
     const combined = combineEvidence(evidence, {
       suspectThreshold: this.config.suspectThreshold,
       strictEvidence: this.config.strictEvidence,
       onEvidenceViolation: (message) => this.warn(message),
     });
+
+    // The counterfactual, computed only when a shadowed detector actually found
+    // something. Combining is cheap — a sort and a noisy-OR over a handful of items — but
+    // it is not free, and on a well-behaved shadowed detector this branch is taken almost
+    // never. On a badly-behaved one it is taken often, which is the case you wanted to
+    // hear about anyway.
+    //
+    // The violation handler is scoped to the shadowed items because the real evidence has
+    // already been through this once; without the filter every `certain`-without-a-basis
+    // in the ordinary set would be reported twice per request.
+    let shadowVerdict: Assessment["shadowVerdict"];
+    if (shadowEvidence.length > 0) {
+      const wouldBe = combineEvidence([...evidence, ...shadowEvidence], {
+        suspectThreshold: this.config.suspectThreshold,
+        strictEvidence: this.config.strictEvidence,
+        onEvidenceViolation: (message, item) => {
+          if (item.shadow === true) this.warn(message);
+        },
+      });
+      shadowVerdict = { verdict: wouldBe.verdict, botClass: wouldBe.botClass, score: wouldBe.score, certain: wouldBe.certain };
+    }
 
     // Snapshot before recording this request's own outcome. `priorConfirmations`
     // means "how many times has this actor been proven a bot *before now*", and a
@@ -761,10 +919,13 @@ export class BotHandler {
       certain: combined.certain,
       evidence: combined.botEvidence,
       humanEvidence: combined.humanEvidence,
+      shadowEvidence: sortEvidence(shadowEvidence),
+      ...(shadowVerdict === undefined ? {} : { shadowVerdict }),
       actor,
       durationMs: this.config.clock.now() - started,
       failures,
       facts,
+      ...(marker === undefined ? {} : { marker }),
     };
 
     // A dry run is counted by nothing and told to nobody: it is not traffic, and a
@@ -819,10 +980,39 @@ export class BotHandler {
         // outstanding, and it stays outstanding until a solution arrives or the actor
         // ages out of the registry. `verifyChallenge` is the only thing that clears it.
         const state = this.registry.peek(assessment.actor.key);
-        if (state !== undefined) state.unsolvedChallenges++;
+        if (state !== undefined) {
+          state.unsolvedChallenges++;
+          // The identity claimed at the moment of the challenge, so a change made in
+          // response to it is legible as a response rather than as drift over a session.
+          // Computed here when no probe supplied one: a challenge is rare enough to
+          // afford re-parsing a User-Agent, and without this the reaction can only be
+          // read on deployments that run a probe — which is most of them, but not all.
+          state.noteChallengeIssued(
+            this.config.clock.now(),
+            assessment.marker?.shape ?? identityShape(assessment.facts, parseUserAgent(assessment.facts.headers["user-agent"])),
+          );
+        }
         this.events.emit("challenge", { phase: event, actorKey: assessment.actor.key });
       },
     });
+
+    // Hand out a marker when this client is not already holding a good one, which for
+    // an ordinary visitor is the first request of a session and no other. Attached here
+    // rather than inside an action because it is not a consequence of the verdict: a
+    // client that was allowed and a client that was challenged both need to be readable
+    // as a series next time, and a `drop` has no response to attach anything to.
+    const issued = this.markerFor(assessment);
+    if (issued !== undefined) {
+      // Never over the top of one that is already there. Nothing in this library sets a
+      // response cookie on these paths today, but a rule's `params.headers` can, and
+      // silently dropping an operator's own `Set-Cookie` to fit ours in would be a
+      // detection feature breaking the application it is protecting.
+      if (outcome.kind === "continue" && outcome.responseHeaders?.["set-cookie"] === undefined) {
+        outcome.responseHeaders = { ...outcome.responseHeaders, "set-cookie": issued };
+      } else if (outcome.kind === "respond" && outcome.headers["set-cookie"] === undefined) {
+        outcome.headers = { ...outcome.headers, "set-cookie": issued };
+      }
+    }
 
     // Notify only when something was actually withheld or altered. An `allow` on a
     // recognised crawler is not news, and treating it as such is how a channel that
@@ -832,6 +1022,25 @@ export class BotHandler {
     }
 
     return { assessment, decision, outcome };
+  }
+
+
+  /**
+   * The `Set-Cookie` this response should carry, if any.
+   *
+   * Nothing is issued to a client that already holds a valid marker, because a
+   * `Set-Cookie` on every response makes every response uncacheable by shared caches —
+   * a detection feature is not worth a site's cache-hit ratio. Nothing is issued to a
+   * verified crawler either: Googlebot does not keep cookies, so a marker sent to it is
+   * a header that will never come back and an issuance count that means nothing.
+   */
+  private markerFor(assessment: Assessment): string | undefined {
+    if (this.probe === undefined || assessment.marker === undefined) return undefined;
+    if (assessment.botClass === "verified-bot") return undefined;
+    if (!this.probe.shouldIssue(assessment.marker)) return undefined;
+    const state = this.registry.peek(assessment.actor.key);
+    state?.noteMarkerIssued();
+    return this.probe.issue(assessment.marker);
   }
 
   /** True when this request is the challenge verification endpoint. */
@@ -853,6 +1062,12 @@ export class BotHandler {
     this.meter?.recordChallenge(outcome.ok ? "solved" : "rejected");
     if (outcome.ok) this.meter?.recordClearance(outcome.level);
     else this.meter?.recordChallengeRejection(outcome.reason);
+    // Filed against the actor, because one of these means little and a pattern of them
+    // means a great deal — and the verification endpoint is not itself assessed, so
+    // nothing else would ever see it.
+    if (!outcome.ok && outcome.signal !== undefined) {
+      this.registry.peek(actorKey)?.noteChallengeAnomaly(outcome.signal);
+    }
     // Recorded whether or not it passed: a distribution with the refusals cut out of it
     // is the wrong shape for the one decision it exists to inform.
     if (outcome.interactionScore !== undefined) this.meter?.recordInteractionScore(outcome.interactionScore);
@@ -909,7 +1124,22 @@ export class BotHandler {
    * await. Failures are absorbed here in both paths: a detector can throw, reject or
    * hang, and none of those may reach the request.
    */
-  private run(detector: Detector, context: DetectionContext, sink: Evidence[], failures: DetectorFailure[], timeoutMs: number): Promise<void> | undefined {
+  private run(
+    detector: Detector,
+    context: DetectionContext,
+    sink: Evidence[],
+    shadowSink: Evidence[],
+    failures: DetectorFailure[],
+    timeoutMs: number,
+  ): Promise<void> | undefined {
+    // Which list this detector's findings land in is decided once, here, rather than by
+    // filtering the combined list afterwards. Nothing downstream then has to remember to
+    // exclude them — not the scoring, not the rules, not `notePayloadProbe`, not a
+    // detector added next year. A shadowed detector is otherwise run identically: same
+    // context, same timeout, same failure handling, same timings, because the whole
+    // point is to learn what it would have done.
+    const shadowed = this.shadowIds.has(detector.id);
+    const target = shadowed ? shadowSink : sink;
     // Two clock reads per detector per request, and only when the operator has asked
     // for them: on a twenty-detector set that is forty reads to measure work usually
     // counted in microseconds. See `MetricsSnapshot.detectorTimings`.
@@ -931,7 +1161,7 @@ export class BotHandler {
     }
 
     if (!(raw instanceof Promise)) {
-      this.collect(raw, sink);
+      this.collect(raw, target, shadowed);
       if (startedAt !== 0) this.meter?.recordDetectorTiming(detector.id, this.config.clock.now() - startedAt);
       return undefined;
     }
@@ -950,7 +1180,7 @@ export class BotHandler {
           this.events.emit("detector-failure", { detector: detector.id, reason: "timeout", message, requestId: "" });
           return;
         }
-        this.collect(result as DetectorResult, sink);
+        this.collect(result as DetectorResult, target, shadowed);
       },
       (error: unknown) => {
         if (startedAt !== 0) this.meter?.recordDetectorTiming(detector.id, this.config.clock.now() - startedAt);
@@ -959,13 +1189,14 @@ export class BotHandler {
     );
   }
 
-  private collect(result: DetectorResult, sink: Evidence[]): void {
+  private collect(result: DetectorResult, sink: Evidence[], shadowed = false): void {
     if (result === undefined || result === null) return;
+    const mark = (item: Evidence): Evidence => (shadowed ? { ...sanitize(item), shadow: true } : sanitize(item));
     if (Array.isArray(result)) {
-      for (let i = 0; i < result.length; i++) sink.push(result[i]!);
+      for (let i = 0; i < result.length; i++) sink.push(mark(result[i]!));
       return;
     }
-    sink.push(result as Evidence);
+    sink.push(mark(result as Evidence));
   }
 
   private recordFailure(detector: Detector, failures: DetectorFailure[], error: unknown, requestId = ""): void {
@@ -987,6 +1218,7 @@ export class BotHandler {
       certain: false,
       evidence: [],
       humanEvidence: [],
+      shadowEvidence: [],
       actor: existing?.snapshot(facts.timestamp) ?? {
         key: actorKey,
         requests: 0,

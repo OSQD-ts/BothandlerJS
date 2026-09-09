@@ -13,7 +13,7 @@ that cheap.
 | Page | Answers |
 | ---- | ------- |
 | [The CLI](cli.md) | "what is this one request?", "what does this policy do?" |
-| [The corpus](corpus.md) | "who would this configuration hurt?" — 526 shapes of real traffic |
+| [The corpus](corpus.md) | "who would this configuration hurt?" — 548 shapes of real traffic |
 | [Log replay](replay.md) | "what would this have done to yesterday?" |
 | [Try it](try-it.md) | "what does it look like running?" — the demo, the simulator, three dashboards |
 

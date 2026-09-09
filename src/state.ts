@@ -1,4 +1,5 @@
 import { TtlLru } from "./internal/lru.js";
+import { safeSummary } from "./internal/text.js";
 import type { Clock } from "./internal/clock.js";
 import type { ActorSnapshot, RequestFacts } from "./types.js";
 
@@ -44,6 +45,26 @@ const METHOD_CAP = 12;
    working through `/user/#` while also reading `/article/#`, and small enough that the
    memory is three numbers times four rather than a list of every id seen. */
 const WALK_CAP = 4;
+/* Identities remembered per actor. A client that has honestly claimed a dozen different
+   names is already the finding; counting further costs memory and says nothing new. */
+const IDENTITY_CAP = 12;
+/* How much of a path shape is kept as the key for a numeric walk.
+   The client chooses the path, so without this the key is as long as the path: measured at
+   4,292 characters from a single request, and four of those per actor across twenty
+   thousand actors is roughly four hundred megabytes of somebody else's text. A shape
+   longer than this is not something anybody walks, and the prefix is enough to name it in
+   the evidence. */
+const TEMPLATE_CHARS = 120;
+/* Path segments examined for a numeric walk. Deeper than this is not a shape anybody
+   walks, and the work is per request on a value the client chooses. */
+const MAX_WALK_SEGMENTS = 24;
+/* And a length bound, checked before the split allocates a string per segment. */
+const MAX_WALK_PATH_CHARS = 512;
+/* Query parameters folded into a signature, for the same reason. */
+const MAX_QUERY_KEYS = 24;
+/* Hoisted: a literal in a hot loop is recompiled on some engines and re-tested from index
+   zero on others. */
+const DIGITS = /^\d+$/;
 const UA_CAP = 4;
 
 /**
@@ -119,6 +140,38 @@ export class ActorState {
    * long visit is checking what exists rather than reading it, and that is a fact about
    * the actor rather than about any one of its requests — which is why it is kept here.
    */
+  /**
+   * What has happened with this actor's marker cookie.
+   *
+   * Counted rather than listed: the useful questions are all "how often", and a list of
+   * marker ids would grow with a client's cookie jar for no benefit. The three drift
+   * flags are sticky — once a client has been seen claiming two different browsers under
+   * one marker it has done so, and a later request that looks tidy again does not undo
+   * it. That is the point of correlating a series rather than judging a request.
+   */
+  /**
+   * When this actor was last challenged, and how it described itself at that moment.
+   *
+   * Kept so that what a client does *in response* to being challenged can be read. That
+   * reaction is better evidence than anything observed passively, because the stimulus
+   * was ours: we chose the moment, so a change of identity that follows it within
+   * seconds is a reaction to it rather than a coincidence we went looking for.
+   */
+  /**
+   * Answers to challenges that were valid in form but wrong in a way only the series
+   * shows: a solution already spent, or one returned faster than the puzzle allows.
+   */
+  /** Requests for a path no other client had ever asked this site for. */
+  private novelPaths = 0;
+  private replayedSolutions = 0;
+  private implausibleSolves = 0;
+  private challengedAt = 0;
+  private challengeShape: { b: string; o: string; l: string } | undefined;
+  private markerIssues = 0;
+  private markerReturns = 0;
+  private markerForgeries = 0;
+  private driftSeen = { browser: false, platform: false, language: false };
+  private driftEvents = 0;
   private readonly methods = new Set<string>();
   /**
    * Numeric walks in progress, by path shape: `/user/#` against the ids requested under it.
@@ -131,6 +184,25 @@ export class ActorState {
    * the span survive an actor asking for ten thousand of them.
    */
   private readonly walks = new Map<string, { count: number; min: number; max: number }>();
+  /**
+   * Every named identity this actor has claimed, and what kind each was.
+   *
+   * Kept because the interesting question is not what one request said but what the *set*
+   * of them says. One address claiming sqlmap and nikto is a scan; one claiming Googlebot
+   * and Bingbot is a forgery, since at most one of those can be true of an address. Neither
+   * observation exists inside a single request.
+   */
+  private readonly identities = new Map<string, { category: string; verifiable: boolean }>();
+  /**
+   * A name somebody gave this actor.
+   *
+   * Nothing in detection reads it. It exists because an address is not a memory: the
+   * person who worked out that `198.51.100.4` is the partner's price feed should be able
+   * to write that down where the next person will see it, rather than in a ticket.
+   */
+  private actorLabel: string | undefined;
+  /** Requests from this actor that carried a scanner payload or target. */
+  private probePayloads = 0;
   /**
    * What the application answered, for the requests anybody bothered to tell us about.
    *
@@ -170,8 +242,11 @@ export class ActorState {
 
     // Sorted, so `?a=1&b=2` and `?b=2&a=1` are one request rather than two — otherwise a
     // client that reorders parameters would look like a sweep for free.
-    const keys = Object.keys(facts.query).sort();
-    if (keys.length > 0) {
+    // Counted before sorting. Sorting two hundred keys and *then* deciding the signature
+    // is not worth building is work a client can ask for by sending two hundred keys.
+    const keys = Object.keys(facts.query);
+    if (keys.length > 0 && keys.length <= MAX_QUERY_KEYS) {
+      keys.sort();
       const signature = `${facts.path}?${keys.map((key) => `${key}=${facts.query[key] ?? ""}`).join("&")}`;
       const queryHash = hashString(signature);
       if (this.queries.size < QUERY_CAP) this.queries.add(queryHash);
@@ -225,6 +300,103 @@ export class ActorState {
     return this.missesSeen;
   }
 
+  /** Names this actor, or clears the name when given nothing. Trimmed and bounded. */
+  setLabel(label: string | undefined): void {
+    // A label is typed by an operator but printed everywhere — the dashboard, the change
+    // log, the warning emitted when it is set — so it is quoted like anything else.
+    const trimmed = label === undefined ? undefined : safeSummary(label).trim().slice(0, 120);
+    this.actorLabel = trimmed === undefined || trimmed === "" ? undefined : trimmed;
+  }
+
+  get label(): string | undefined {
+    return this.actorLabel;
+  }
+
+  /** Records a named identity this actor claimed. Called once per matching signature. */
+  noteIdentity(id: string, category: string, verifiable: boolean): void {
+    if (this.identities.has(id) || this.identities.size >= IDENTITY_CAP) return;
+    this.identities.set(id, { category, verifiable });
+  }
+
+  /** Records that this request was for a path the site had never served to anybody. */
+  noteNovelPath(): void {
+    if (this.novelPaths < 1_000_000) this.novelPaths++;
+  }
+
+  /** How many of this actor's requests were for a path nobody else had ever asked for. */
+  get novelPathCount(): number {
+    return this.novelPaths;
+  }
+
+  /** Records something wrong with a submitted solution that only its history reveals. */
+  noteChallengeAnomaly(kind: "replay" | "implausible-speed"): void {
+    if (kind === "replay") {
+      if (this.replayedSolutions < 1_000_000) this.replayedSolutions++;
+    } else if (this.implausibleSolves < 1_000_000) this.implausibleSolves++;
+  }
+
+  /** Solutions this actor submitted that had already been spent, and ones returned too fast. */
+  get challengeAnomalies(): { replays: number; implausible: number } {
+    return { replays: this.replayedSolutions, implausible: this.implausibleSolves };
+  }
+
+  /** Records that a challenge went out, and the identity claimed as it did. */
+  noteChallengeIssued(at: number, shape: { b: string; o: string; l: string } | undefined): void {
+    this.challengedAt = at;
+    this.challengeShape = shape;
+  }
+
+  /** The moment of the last challenge, and the identity claimed then. `at` is 0 for none. */
+  get lastChallenge(): { at: number; shape: { b: string; o: string; l: string } | undefined } {
+    return { at: this.challengedAt, shape: this.challengeShape };
+  }
+
+  /** Records that a marker was handed to this actor on the way out. */
+  noteMarkerIssued(): void {
+    // Saturating rather than unbounded: the ratio these feed stops being informative
+    // long before the number gets large, and a counter on a per-actor record is a
+    // counter multiplied by `maxActors`.
+    if (this.markerIssues < 1_000_000) this.markerIssues++;
+  }
+
+  /** Records what this request's marker cookie turned out to be. */
+  noteMarker(returned: boolean, forged: boolean, drift: { browser: boolean; platform: boolean; language: boolean } | undefined): void {
+    if (returned && this.markerReturns < 1_000_000) this.markerReturns++;
+    if (forged && this.markerForgeries < 1_000_000) this.markerForgeries++;
+    if (drift === undefined) return;
+    if (drift.browser || drift.platform || drift.language) {
+      if (this.driftEvents < 1_000_000) this.driftEvents++;
+    }
+    this.driftSeen.browser ||= drift.browser;
+    this.driftSeen.platform ||= drift.platform;
+    this.driftSeen.language ||= drift.language;
+  }
+
+  /** Markers handed to this actor, and how many came back. */
+  get markers(): { issued: number; returned: number; forged: number } {
+    return { issued: this.markerIssues, returned: this.markerReturns, forged: this.markerForgeries };
+  }
+
+  /** Which parts of a claimed identity have ever changed under one marker. */
+  get identityDrift(): { browser: boolean; platform: boolean; language: boolean; events: number } {
+    return { ...this.driftSeen, events: this.driftEvents };
+  }
+
+  /** Records that this request carried a scanner payload, so later requests can know. */
+  notePayloadProbe(): void {
+    this.probePayloads++;
+  }
+
+  /** Every identity claimed so far, by id. */
+  get claimedIdentities(): ReadonlyMap<string, { category: string; verifiable: boolean }> {
+    return this.identities;
+  }
+
+  /** How many of this actor's requests carried a scanner payload or target. */
+  get payloadProbes(): number {
+    return this.probePayloads;
+  }
+
   /**
    * Files a request under the shape of its path, if that path carries a number.
    *
@@ -232,21 +404,9 @@ export class ActorState {
    * the version is part of the shape and the order id is what is being walked.
    */
   private noteWalk(path: string): void {
-    const segments = path.split("/");
-    let value: number | undefined;
-    let template = "";
-    for (const segment of segments) {
-      if (segment !== "" && /^\d+$/.test(segment)) {
-        const parsed = Number(segment);
-        // Ignore anything that is not a plain counter. A timestamp or a very long id is
-        // not something anybody walks, and it would make every span meaningless.
-        if (Number.isSafeInteger(parsed) && parsed <= 10_000_000) value = parsed;
-        template += "/#";
-      } else if (segment !== "") {
-        template += `/${segment}`;
-      }
-    }
-    if (value === undefined) return;
+    const step = walkStepOf(path);
+    if (step === undefined) return;
+    const { template, id: value } = step;
 
     const existing = this.walks.get(template);
     if (existing !== undefined) {
@@ -378,6 +538,7 @@ export class ActorState {
       distinctPaths: this.distinctPaths,
       distinctQueries: this.distinctQueries,
       methodsSeen: this.methodsSeen,
+      ...(this.actorLabel === undefined ? {} : { label: this.actorLabel }),
       walk: this.densestWalk(),
       responses: this.responses,
       misses: this.misses,
@@ -520,4 +681,48 @@ function hashString(value: string): number {
     hash = Math.imul(hash, 0x01000193);
   }
   return hash >>> 0;
+}
+
+/**
+ * One step of a numeric walk: the shape of the path, and the number in it.
+ *
+ * `/api/v2/orders/42` becomes `/api/v2/orders/#` and `42`. Shared between the per-actor
+ * series and the site-wide one, which must agree on what a shape is or their counts
+ * cannot be compared.
+ *
+ * Both bounds are checked without allocating, because both exist to stop a client paying
+ * us to do work. `split` allocates a string per segment, so counting separators first is
+ * what makes the depth check worth having. Measured on a sixty-segment path: 3.65µs
+ * against 199ns for an ordinary one — every request eighteen times dearer, for free,
+ * from anyone willing to send a long URL. The concatenation was most of it; the split
+ * was the rest.
+ */
+export function walkStepOf(path: string): { template: string; id: number } | undefined {
+  if (path.length > MAX_WALK_PATH_CHARS) return undefined;
+  let depth = 0;
+  for (let i = 0; i < path.length; i++) {
+    if (path.charCodeAt(i) === 47 && ++depth > MAX_WALK_SEGMENTS) return undefined;
+  }
+
+  let value: number | undefined;
+  const parts: string[] = [];
+  for (const segment of path.split("/")) {
+    if (segment === "") continue;
+    if (DIGITS.test(segment)) {
+      const parsed = Number(segment);
+      // Ignore anything that is not a plain counter. A timestamp or a very long id is not
+      // something anybody walks, and it would make every span meaningless.
+      if (Number.isSafeInteger(parsed) && parsed <= 10_000_000) value = parsed;
+      parts.push("#");
+    } else {
+      parts.push(segment);
+    }
+  }
+  if (value === undefined) return undefined;
+
+  // Joined once rather than concatenated per segment, and bounded before it is used as a
+  // key. See TEMPLATE_CHARS.
+  let template = `/${parts.join("/")}`;
+  if (template.length > TEMPLATE_CHARS) template = `${template.slice(0, TEMPLATE_CHARS)}…`;
+  return { template, id: value };
 }
