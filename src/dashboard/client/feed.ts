@@ -117,9 +117,11 @@ export function reflectFilterButtons(): void {
  */
 export async function loadSkipped(): Promise<void> {
   const before = state.rows.length;
+  let served: number | undefined;
   try {
-    const body = await getJson<{ entries: DashboardEntry[] }>("/api/feed");
+    const body = await getJson<{ entries: DashboardEntry[]; skipped?: number }>("/api/feed");
     for (const entry of body.entries) ingest(entry);
+    served = body.skipped;
     sortRows();
   } catch {
     toast("bad", "Could not load them", "The dashboard did not answer. The entries are still in the window; try again.");
@@ -127,7 +129,15 @@ export async function loadSkipped(): Promise<void> {
   }
   // What the badge counted has now been asked for, whether or not the ring still had all
   // of it — anything it no longer holds is gone and saying so forever helps nobody.
-  state.caughtUp = (state.snapshot?.skipped ?? 0) + state.laggedDrops;
+  //
+  // Counted from the response that closed the gap rather than from `state.snapshot`,
+  // which is refreshed on a timer and was therefore usually a few seconds out of date. A
+  // snapshot arriving afterwards with a larger count reopened a gap that had just been
+  // closed, so the badge came back on a feed holding everything there was — you pressed
+  // the button, it said how many it had loaded, and the thing the button exists to clear
+  // stayed on screen. Older handlers do not send the field; theirs is the previous
+  // behaviour rather than an error.
+  state.caughtUp = (served ?? state.snapshot?.skipped ?? 0) + state.laggedDrops;
   const added = state.rows.length - before;
   resetPaging();
   app.drawNow();

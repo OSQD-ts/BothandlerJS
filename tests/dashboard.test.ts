@@ -1535,7 +1535,10 @@ describe("testing a request", () => {
     expect(handler.metrics()!.requests).toBe(0);
     expect(handler.registry.peek("198.51.100.99")).toBeUndefined();
     expect(seen).toEqual([]);
-    expect(await json<{ entries: unknown[] }>(await fetch(base + "/api/feed"))).toEqual({ entries: [] });
+    // Nothing in the feed, and nothing skipped on the way to it. `skipped` rides along
+    // with the backlog so the page can tell how much of a gap it has just closed without
+    // reading it off a snapshot taken seconds earlier.
+    expect(await json<{ entries: unknown[]; skipped: number }>(await fetch(base + "/api/feed"))).toEqual({ entries: [], skipped: 0 });
   });
 
   it("says what it had to invent", async () => {

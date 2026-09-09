@@ -359,7 +359,13 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
         return send(response, 200, "application/json; charset=utf-8", JSON.stringify(snapshot()));
       case "/api/feed":
         if (!sections.feed) return sectionOff(response, "feed");
-        return send(response, 200, "application/json; charset=utf-8", JSON.stringify({ entries: feed.backlog().map(project) }));
+        // `skipped` travels with the backlog on purpose. The page uses it to work out how
+        // much of the gap it has now closed, and its own snapshot is refreshed on a timer
+        // — so reading the count from there meant reading whatever was true a few seconds
+        // ago, and a snapshot arriving afterwards with a larger count made the badge
+        // reappear on a feed that had just been fully loaded. This is the count as of the
+        // response that closed the gap, which is the only one that answers the question.
+        return send(response, 200, "application/json; charset=utf-8", JSON.stringify({ entries: feed.backlog().map(project), skipped: feed.skipped }));
       case "/api/stream":
         if (!sections.feed) return sectionOff(response, "feed");
         return stream(request, url, response);

@@ -466,7 +466,13 @@ export class BotDashboardElement extends ElementBase {
     const dom = await import("../dashboard/client/dom.js");
     // The subtree rather than the shadow root, so a remount can carry it to a new one.
     dom.setRoot(frame, this);
+    // Handed over explicitly rather than left on the global for the client to find. The
+    // global is still set, because the served page uses it and anything reading it should
+    // see the truth — but this call is what the client actually reads, and it works
+    // however early some other path happened to evaluate that module. See `applyBoot`.
     (globalThis as unknown as { __BOOTSTRAP__?: unknown }).__BOOTSTRAP__ = boot;
+    const bootModule = await import("../dashboard/client/boot.js");
+    bootModule.applyBoot(boot as unknown as Parameters<typeof bootModule.applyBoot>[0]);
 
     await import("../dashboard/client/index.js");
     // After the client, because it draws the strip from the boot object and would undo a

@@ -768,11 +768,25 @@ describe("the statistics screen's two windows", () => {
     await page.close();
   });
 
+  /**
+   * Read once the window has something in it, rather than whenever the page happened to
+   * finish opening.
+   *
+   * An empty ring labels itself "this window · empty", which is the honest thing to say
+   * and carries no count — so asserting a count without first ensuring there is traffic
+   * was a race the local machine won and CI lost. The property being tested is that every
+   * window-scoped panel says how much window it is counting, and the case worth pinning
+   * is the one with a number in it.
+   */
   it("says how much window every window-scoped panel is counting", async () => {
+    await handler.handle(createFacts({ method: "GET", url: "/windowed", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.95" }));
     const page = await open(1440, "#stats", "#view-stats");
-    const labels = await page.locator("#view-stats .win").allInnerTexts();
-    expect(labels.length).toBeGreaterThan(0);
-    expect(labels.every((text) => /requests/.test(text))).toBe(true);
+    const labels = (): Promise<string[]> => page.locator("#view-stats .win").allInnerTexts();
+    await expect.poll(async () => (await labels()).length, { timeout: 15_000 }).toBeGreaterThan(0);
+    await expect.poll(async () => (await labels()).every((text) => /last [\d,]+ requests/.test(text)), { timeout: 15_000 }).toBe(true);
+    // One label, on every one of them: the panels that count the ring must not be
+    // distinguishable from each other, only from the ones counting since start.
+    expect(new Set(await labels()).size).toBe(1);
     await page.close();
   });
 });
@@ -2179,6 +2193,13 @@ defineBotDashboard();
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const failures: string[] = [];
     page.on("pageerror", (error) => failures.push(String(error)));
+    // Every API call the page makes, so the assertion below can be about *where* it
+    // asked rather than about whether anything happened to throw on the way.
+    const asked: string[] = [];
+    page.on("request", (request) => {
+      const { pathname } = new URL(request.url());
+      if (pathname.includes("/api/")) asked.push(pathname);
+    });
     await page.goto(`${embedUrl}strictmode`);
     await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector("#rows") != null, undefined, { timeout: 15_000 });
     const state = await page.evaluate(() => {
@@ -2189,6 +2210,20 @@ defineBotDashboard();
     expect(state.refused).toBe(false);
     expect(state.panels).toBeGreaterThan(0);
     expect(failures).toEqual([]);
+
+    // The assertion this test needed and did not have.
+    //
+    // `disconnectedCallback` imports `stream.js` to close the stream, `stream.js` imports
+    // `boot.js`, and `boot.js` used to read the mount path off the global once, when it
+    // was first evaluated. Removing the element before its bootstrap fetch returned
+    // evaluated it early, with nothing on the global yet, so the base froze at "" — and
+    // every subsequent request went to the *host page's* origin root rather than to
+    // `src`. Nothing threw. The dashboard simply drew no traffic while posting
+    // `/api/stream` at somebody else's router, and the only outward sign was an
+    // EventSource complaining about a MIME type on whichever engine reported it.
+    await expect.poll(() => asked.some((path) => path.endsWith("/api/stream")), { timeout: 10_000 }).toBe(true);
+    const astray = asked.filter((path) => !path.startsWith("/_bots/"));
+    expect(astray, "every call belongs under the mount path the element was given").toEqual([]);
     await page.close();
   });
 

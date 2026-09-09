@@ -227,6 +227,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **An embedded dashboard could point at the host application instead of at `src`.**
+  `disconnectedCallback` imports the stream module to close the stream, that module
+  imports the boot module, and the boot module read its mount path off the global once,
+  when it was first evaluated. A host page that mounted, unmounted and remounted the
+  element before the first bootstrap fetch returned — React 18's development double-mount
+  — ran that import while the global was still undefined, so the base froze at `""` for
+  the life of the page.
+
+  Nothing threw. Every request the dashboard made afterwards went to the host page's own
+  origin root rather than to `src`, so it drew no traffic while sending `/api/stream` and
+  `/api/stats` to somebody else's router, and the only outward sign was an `EventSource`
+  complaining about a MIME type on whichever engine reports that. The element now hands
+  the payload over explicitly, so being evaluated early costs nothing.
+
+- **Pressing "Load them" left the "not streamed" badge on screen.** The count of how much
+  of the gap had been closed was taken from the page's own snapshot, which is refreshed on
+  a timer and so was usually several seconds out of date; a snapshot arriving afterwards
+  with a larger count reopened a gap that had just been closed. `/api/feed` now returns
+  `skipped` alongside the backlog, so the number comes from the response that closed the
+  gap rather than from one taken before it.
+
 - **`RedisStore.increment` could leave a counter key that never expired.** `INCR` then
   `PEXPIRE` is two commands, and a process killed between them orphaned a key nothing would
   ever revisit — the next request falls into the next bucket, under another key. The expiry
