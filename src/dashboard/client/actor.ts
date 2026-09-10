@@ -81,7 +81,13 @@ export function drawActor(): void {
   // of you. Absent entirely without `controls.editRanges`.
   const bar = $("actor-actions");
   clear(bar);
-  const buttons = actorActions(state.actor, () => app.drawNow());
+  // The name this actor already has, if the registry has been fetched and knows one. A
+  // feed entry does not carry it, which is why it is looked up rather than read off the
+  // row — the same lookup the Actors table does. Without it this editor always said
+  // "Label" and always opened empty, so renaming a client from here quietly discarded
+  // the name it already had.
+  const known = state.actors.find((actor) => actor.key === state.actor)?.label;
+  const buttons = actorActions(state.actor, () => app.drawNow(), known);
   bar.hidden = buttons.length === 0;
   for (const button of buttons) bar.appendChild(button);
 }

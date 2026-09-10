@@ -8,6 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The actor drill-down's label editor carries the name the actor already has.** It
+  never passed one to the control, so it offered "Label" rather than "Relabel", opened
+  empty, and renaming a client from there discarded the name it had. It now looks the
+  actor up in the registry list the page is holding — best-effort by nature, since that
+  list is paged and may not include the actor in front of you, and it never makes the
+  control worse than it was.
+
 - **Shadow mode: run a detector and let it decide nothing.** `shadowDetectors: ["path-novelty"]`
   runs the named detectors on every request exactly as they otherwise would and keeps their
   findings out of the verdict, the score, the class, the identity and every rule. They land
