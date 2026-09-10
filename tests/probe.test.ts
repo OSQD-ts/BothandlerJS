@@ -8,7 +8,7 @@ import { identityDriftDetector, markerFanoutDetector, markerIntegrityDetector, m
 import { ActorState } from "../src/state.js";
 import { MarkerProbe } from "../src/probe/index.js";
 import { ManualClock } from "../src/internal/clock.js";
-import { makeContext } from "./helpers.js";
+import { fakeResolver, makeContext } from "./helpers.js";
 import type { IdentityShape } from "../src/probe/marker.js";
 import { parseUserAgent } from "../src/internal/ua.js";
 
@@ -86,11 +86,18 @@ describe("handing out a marker", () => {
   it("does not issue one to a verified crawler", async () => {
     // Googlebot keeps no cookies, so a marker sent to it is a header that never returns
     // and an issuance count that means nothing.
+    //
+    // The resolver is stubbed rather than left to the system one. Googlebot verifies by
+    // `fcrdns`, not `ip-ranges`, so this reaches the network unless something answers for
+    // it - and it did: the assertion below failed in CI as `declared-bot` while passing on
+    // every machine whose resolver happened to be quick, because an `io` detector that
+    // misses `detectorTimeoutMs` (300ms) is dropped rather than waited for. A verified
+    // crawler is the fixture here, not the thing under test.
     const handler = new BotHandler({
       onWarning: () => {},
       metrics: false,
       probe: { secrets: [SECRET], secure: false },
-      crawlerRanges: { googlebot: ["66.249.64.0/19"] },
+      resolver: fakeResolver({ "66.249.66.1": ["crawl-66-249-66-1.googlebot.com"] }, { "crawl-66-249-66-1.googlebot.com": ["66.249.66.1"] }),
     });
     const result = await handler.handle(
       createFacts({
