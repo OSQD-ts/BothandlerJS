@@ -40,21 +40,55 @@ import { parseUserAgent } from "../src/internal/ua.js";
 const ITERATIONS = Number(process.env["ITERATIONS"] ?? 4000);
 const ROUNDS = Number(process.env["ROUNDS"] ?? 5);
 
+/** A shape allocated and thrown away, like the evidence and facts objects detection builds. */
+interface Sample {
+  name: string;
+  weight: number;
+  tags: string[];
+}
+
+const REFERENCE_PATTERN = /^[a-z]+-[0-9]+$/;
+
 /**
- * The yardstick: a fixed amount of arithmetic and string building.
+ * The yardstick: a fixed amount of the kind of work detection actually does.
  *
  * Nothing in `src/` can change what this costs, which is the entire point — it measures
  * the machine, so that everything else can be measured against the machine.
+ *
+ * It used to be integer arithmetic and a little string building, and that turned out to
+ * measure the wrong thing about a machine. Pure ALU work in a few hundred bytes of
+ * working set is the case a wider, newer core is best at; allocating objects, hashing
+ * into maps and dispatching polymorphically is the case it is only somewhat better at.
+ * So the two halves did not scale together, which is the one assumption the whole ratio
+ * rests on. Measured across two machines: the old reference ran 2.14x faster on the CI
+ * runner than on the development laptop while `assess` ran only 1.26x faster, inflating
+ * every ratio by about 1.7x and failing three budgets on a machine where detection was
+ * *faster* in absolute terms.
+ *
+ * The mix here is deliberately closer to the thing being measured — short-lived objects,
+ * map and set lookups, string building and comparison, a regular expression, array
+ * iteration. It is not a model of detection, and it does not need to be. It needs to get
+ * faster and slower for the same reasons detection does.
  */
 function reference(): number {
   let hash = 0x811c9dc5;
-  let text = "";
-  for (let i = 0; i < 200; i++) {
+  const seen = new Map<string, number>();
+  const kept: Sample[] = [];
+  for (let i = 0; i < 5; i++) {
     hash ^= i;
     hash = Math.imul(hash, 0x01000193);
-    if (i % 20 === 0) text += String(hash >>> 0);
+    const name = `field-${hash >>> 24}`;
+    // Allocation, and a hash lookup that misses more often than it hits.
+    const sample: Sample = { name, weight: (hash >>> 8) / 0xffffff, tags: [name.slice(0, 5), `t${i % 7}`] };
+    seen.set(name, (seen.get(name) ?? 0) + 1);
+    if (REFERENCE_PATTERN.test(name)) kept.push(sample);
   }
-  return hash + text.length;
+  let total = 0;
+  for (const sample of kept) {
+    total += sample.weight + sample.tags.length;
+    if (sample.name.startsWith("field-1")) total += 1;
+  }
+  return hash + seen.size + total;
 }
 
 /** Budgets, as multiples of one reference loop. See the note above on why they are loose. */
@@ -96,14 +130,17 @@ function buildCases(): ReadonlyArray<{ label: string; maxRatio: number; run: () 
     ip: "203.0.113.8",
   });
 
-  // Measured at 24–25x, 30x and 7.0–7.5x across repeated runs, moving about 3% between
-  // them — which is what makes a ratio usable as a budget at all. Each is set at roughly
-  // double, so a change has to be a regression rather than a busy afternoon.
+  // Re-derived when the reference changed, because a budget is a multiple of the
+  // yardstick and these were multiples of a different one. Measured over repeated runs on
+  // the development machine: 26–30x for a clean assess, 30–36x for handle, 26–33x for the
+  // three shaped requests and the two opt-in sources, and 4.7–5.1x for `createFacts`.
+  // Each budget below is roughly double the top of its range, which is the same rule the
+  // old numbers were set by and the reason a busy afternoon does not fail the build.
   return [
     // The overwhelmingly common case: a real browser, nothing firing, every detector
     // running to completion. If any number here matters, it is this one.
-    { label: "assess — clean browser", maxRatio: 50, run: () => handler.assess(clean) },
-    { label: "handle — clean browser", maxRatio: 60, run: () => handler.handle(clean) },
+    { label: "assess — clean browser", maxRatio: 60, run: () => handler.assess(clean) },
+    { label: "handle — clean browser", maxRatio: 70, run: () => handler.handle(clean) },
     { label: "createFacts", maxRatio: 15, run: () => createFacts({ method: "GET", url: "/products/12?ref=x", headers, rawHeaders, ip: "203.0.113.5" }) },
     // A request costs whatever its URL says it costs, and the URL is written by the
     // client. Both of these were regressions found by measuring rather than by reading:
@@ -111,16 +148,16 @@ function buildCases(): ReadonlyArray<{ label: string; maxRatio: number; run: () 
     // an ordinary one, an eighteen-fold tax anyone could levy by sending a long URL, and
     // folding two hundred query keys meant sorting two hundred keys per request. Both are
     // bounded now, and the budgets are here so they stay bounded.
-    { label: "assess — very long path", maxRatio: 60, run: () => handler.assess(deep) },
-    { label: "assess — many query keys", maxRatio: 60, run: () => handler.assess(wide) },
+    { label: "assess — very long path", maxRatio: 65, run: () => handler.assess(deep) },
+    { label: "assess — many query keys", maxRatio: 70, run: () => handler.assess(wide) },
     // The marker probe is opt-in, and what it costs an ordinary request is the number
     // that decides whether anyone opts in. Verifying a marker is an HMAC; a session
     // presents the same cookie every time, so the verification is cached and this
     // measures the cached path, which is the one real traffic takes.
-    { label: "assess — marker held", maxRatio: 60, run: () => probed.assess(marked) },
+    { label: "assess — marker held", maxRatio: 65, run: () => probed.assess(marked) },
     // The site profile is opt-in and touches three bounded tables per request. What it
     // costs an ordinary request is the number that decides whether anyone turns it on.
-    { label: "assess — site profile on", maxRatio: 60, run: () => profiled.assess(clean) },
+    { label: "assess — site profile on", maxRatio: 65, run: () => profiled.assess(clean) },
   ];
 }
 
