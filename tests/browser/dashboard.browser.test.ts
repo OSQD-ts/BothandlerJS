@@ -3002,6 +3002,7 @@ describe("the challenge interstitial", () => {
   }
 
   it("can be completed with the keyboard alone", async () => {
+    lastPostedInteraction = undefined;
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
     await page.goto(gestureUrl);
     await page.waitForSelector("#confirm");
@@ -3020,21 +3021,21 @@ describe("the challenge interstitial", () => {
     // access and voice control all reach a checkbox, and if it does not work here the
     // page is a wall for them.
     await page.keyboard.press("Space");
-    // Either the box is ticked or the page has already moved past it. Ticking submits
-    // straight away and a successful verify reloads, so "still checked" is only observable
-    // for as long as that round trip takes — asserting it alone meant the test failed
-    // whenever the machine was fast enough to finish first, which is the wrong way round.
-    // Both outcomes prove the same thing: the key press reached the control.
-    await expect
-      .poll(
-        async () => {
-          const checked = await page.locator("#confirm").isChecked().catch(() => false);
-          const status = await page.locator("#status").textContent().catch(() => "");
-          return checked || !(status ?? "").includes("Tick the box");
-        },
-        { timeout: 10_000 },
-      )
-      .toBe(true);
+
+    // Watched at the verification endpoint rather than on the page, because what the page
+    // shows afterwards does not stay still long enough to assert on. Ticking submits
+    // immediately, a successful verify reloads, and the reloaded page solves the puzzle
+    // again and returns to *the same words it started with* — "Ready. Tick the box below
+    // to continue." So "the box is ticked, or the status has moved on" is true only
+    // inside the gap between the tick and the reload, and it fails whenever the round
+    // trip wins the race. Making the puzzle cheap for the sake of the focus assertion
+    // above shrank that gap and turned an occasional failure into a frequent one.
+    //
+    // The POST does not evaporate. It is the same signal the activation-device test next
+    // door reads, and it says the keypress reached the control rather than that the page
+    // happened to still be showing the consequence.
+    await expect.poll(() => posted() !== undefined, { timeout: 10_000 }).toBe(true);
+    expect(posted()?.via, "a space bar on a checkbox is a keyboard activation").toBe("keyboard");
     await page.close();
   });
 
