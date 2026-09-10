@@ -227,6 +227,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A panel being typed into was rebuilt out from under whoever was typing.** Several
+  panels are drawn by clearing them and building them again, which is fine for a list of
+  numbers and destructive for a text box — and `draw()` runs on every request that
+  arrives, so on a dashboard watching live traffic an input disappeared about a second
+  after it was opened, taking whatever had been entered with it.
+
+  Three places had it. The actor drill-down above the feed offers the same three controls
+  as the Actors table but was never given the table's repaint guard, so naming a client
+  from there was impossible on anything but an idle site. The allowlist's address box and
+  the guard's thresholds were the same fault in two more panels. Those two now hold still
+  while they hold the text cursor specifically — not while they merely hold focus, since
+  the guard's own controls are buttons and a panel that froze on a click would refuse to
+  answer them.
+
+- **Typing a date into the timeframe did not move the feed.** The control listened only
+  for `change`, and a `datetime-local` fires `input` as each segment is edited while
+  holding `change` back until the value is committed — on blur, for somebody typing. The
+  feed sat unchanged until they clicked away, which reads as a filter that does not work.
+  It now applies on `input`, and warns about a backwards window only once the value has
+  settled, so half-typed intermediate states do not raise a toast each.
+
 - **An embedded dashboard could point at the host application instead of at `src`.**
   `disconnectedCallback` imports the stream module to close the stream, that module
   imports the boot module, and the boot module read its mount path off the global once,

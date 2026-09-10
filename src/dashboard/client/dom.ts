@@ -103,6 +103,38 @@ export function rootNode(): Document | ShadowRoot {
   return root as Document | ShadowRoot;
 }
 
+/**
+ * Whether somebody is typing into something inside `node`.
+ *
+ * Several panels are drawn by clearing them and building them again, which is fine for a
+ * list of numbers and destructive for a text box: the feed redraws on every request that
+ * arrives, so a panel rebuilt on that schedule takes any input inside it — and whatever
+ * had been typed — about a second after it was opened. That is not a hypothetical; it is
+ * how the allowlist's address box and the guard's thresholds behaved on any dashboard
+ * watching live traffic.
+ *
+ * Typing, specifically, rather than focus of any kind — and the difference is not
+ * pedantic. The guard panel's controls are buttons, clicking one focuses it, and a panel
+ * that froze on any focus would refuse to redraw in response to its own controls: press
+ * "aggressive" and the explanation underneath never changes. What must survive a rebuild
+ * is text somebody has entered and cannot get back, so that is what this asks about. A
+ * half-pressed confirmation is a different problem with a different guard — see
+ * `isConfirming`.
+ *
+ * `activeElement` is read from the root this client was pointed at, because embedded that
+ * is a shadow root and the document's `activeElement` is the host element rather than
+ * anything inside it.
+ */
+const TYPED_INTO = new Set(["text", "search", "url", "tel", "email", "password", "number", "datetime-local", "date", "time", "month", "week"]);
+
+export function holdsTextEntry(node: Element): boolean {
+  const active = (rootNode() as Document | ShadowRoot).activeElement;
+  if (active === null || active === undefined || !node.contains(active)) return false;
+  if (active.tagName === "TEXTAREA") return true;
+  if ((active as HTMLElement).isContentEditable) return true;
+  return active.tagName === "INPUT" && TYPED_INTO.has(((active as HTMLInputElement).type || "text").toLowerCase());
+}
+
 /** The element carrying `data-theme` and the custom properties. */
 export function themeElement(): HTMLElement {
   return themeHost;

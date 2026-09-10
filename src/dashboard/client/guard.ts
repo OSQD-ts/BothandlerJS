@@ -1,4 +1,4 @@
-import { $, clear, el, label } from "./dom.js";
+import { $, clear, el, holdsTextEntry, label } from "./dom.js";
 import { SECTIONS } from "./boot.js";
 import { app, toast } from "./app.js";
 import { postJson } from "./api.js";
@@ -41,6 +41,8 @@ export function drawGuard(): void {
 
   const editable = document_?.guardEditable === true;
   const panel = $("stat-policy");
+  // Not while somebody is part-way through changing a threshold. See `holdsTextEntry`.
+  if (holdsTextEntry(panel)) return;
   clear(panel);
 
   if (!editable || document_ === undefined) {

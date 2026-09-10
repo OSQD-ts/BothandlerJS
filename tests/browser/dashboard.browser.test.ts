@@ -248,6 +248,33 @@ describe("moving between views", () => {
     await page.close();
   });
 
+  /**
+   * Typing a date, rather than committing one.
+   *
+   * `fill()` above sets a value and dispatches both `input` and `change`, which is what a
+   * date *picker* does. Typing into the field is not that: a `datetime-local` fires
+   * `input` as each segment is edited and holds `change` back until the value is
+   * committed, usually on blur. The control listened only for `change`, so somebody
+   * typing a window watched the feed sit there unchanged until they clicked away —
+   * which reads as a filter that does not work.
+   */
+  it("narrows the feed while the date is being typed, not only once it is committed", async () => {
+    const page = await open();
+    await expect.poll(() => page.locator("#rows tr.row").count(), { timeout: 10_000 }).toBeGreaterThan(0);
+
+    // The field keeps focus throughout: no blur, so no `change`.
+    await page.locator("#to-at").focus();
+    await page.$eval("#to-at", (node) => {
+      const input = node as HTMLInputElement;
+      input.value = "2000-01-01T00:00";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    await expect.poll(() => page.locator("#rows tr.row").count(), { timeout: 10_000 }).toBe(0);
+    expect(await page.locator("#timeframe-clear").isVisible()).toBe(true);
+    await page.close();
+  });
+
   /** Tab should step past the strip into the panel, not through every tab on the way. */
   it("keeps exactly one tab in the tab order", async () => {
     const page = await open();
@@ -3465,6 +3492,82 @@ describe("the Actors screen", () => {
 
     await input.press("Escape");
     await expect.poll(() => page.locator("#actor-rows .label-input").count()).toBe(0);
+    await page.close();
+  });
+
+  /**
+   * The same editor, in the other place it appears.
+   *
+   * The Actors table was taught to hold still while somebody is typing into it. The
+   * drill-down above the feed offers the identical three controls and was not: it is
+   * rebuilt from scratch by every redraw, and a redraw happens on every request that
+   * arrives. On a live feed that is a name box which vanishes about a second after it
+   * opens, taking whatever had been typed with it.
+   */
+  it("does not repaint the drill-down editor away while a name is being typed", async () => {
+    const page = await open();
+    await handler.handle(createFacts({ method: "GET", url: "/drilled", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.96" }));
+    await page.locator("tbody tr.row").first().click();
+    await page.waitForSelector("tr.detail");
+    await page.locator('tr.detail .tools button', { hasText: "Show this actor" }).click();
+    await expect.poll(() => page.locator("#actor-panel").isVisible(), { timeout: 15_000 }).toBe(true);
+    // Whichever actor the row that was open belongs to. Not assumed: the feed holds
+    // traffic from every test before this one, so the top row is not reliably the request
+    // made above — and hard-coding a key made this pass on one engine and not the other.
+    const key = (await page.locator("#actor-key").innerText()).trim();
+
+    await page.locator('#actor-actions button:has-text("Label")').click();
+    const input = page.locator("#actor-actions .label-input");
+    await expect.poll(() => input.count()).toBe(1);
+    await input.fill("named from the drill-down");
+
+    // Traffic keeps arriving while somebody is typing, which is the whole point.
+    for (let i = 0; i < 4; i++) {
+      await handler.handle(createFacts({ method: "GET", url: `/noise/${i}`, headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.97" }));
+      await page.waitForTimeout(400);
+    }
+
+    expect(await input.count(), "the editor survived the redraws").toBe(1);
+    expect(await input.inputValue()).toBe("named from the drill-down");
+
+    await page.locator("#actor-actions .label-save").click();
+    await expect.poll(() => page.locator("#actor-actions .label-input").count(), { timeout: 15_000 }).toBe(0);
+    // Checked against the handler rather than against the Actors table: the registry is
+    // paged, and by the time the whole suite has run this actor is not on the first page.
+    await expect.poll(() => handler.registry.peek(key)?.label, { timeout: 15_000 }).toBe("named from the drill-down");
+    await page.close();
+  });
+
+  /**
+   * The same fault, in the two other panels that rebuild themselves and contain inputs.
+   *
+   * `drawRanges` and `drawGuard` clear their panel and build it again, which is fine for
+   * a list of numbers and destructive for a text box. Both are reached from `draw()`, and
+   * `draw()` runs on every request that arrives — so on a dashboard watching live traffic
+   * an address being typed into the allowlist disappeared about a second in, along with a
+   * guard threshold being edited beside it.
+   */
+  it("does not repaint an address out of the allowlist box while it is being typed", async () => {
+    const page = await open();
+    await page.click("#tab-policy");
+    await expect.poll(() => page.locator("#view-policy").isVisible(), { timeout: 15_000 }).toBe(true);
+    const address = page.locator('#ranges-body input[aria-label="Address or CIDR to add"]');
+    await expect.poll(() => address.count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+    await address.first().click();
+    await address.first().fill("203.0.113.0/24");
+
+    for (let i = 0; i < 4; i++) {
+      await handler.handle(createFacts({ method: "GET", url: `/policy-noise/${i}`, headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.98" }));
+      await page.waitForTimeout(400);
+    }
+
+    expect(await address.first().inputValue(), "still there, and still what was typed").toBe("203.0.113.0/24");
+
+    // And once focus leaves, the panel is free to redraw again rather than staying frozen.
+    await page.locator("#tab-policy").click();
+    await handler.handle(createFacts({ method: "GET", url: "/policy-noise/after", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.99" }));
+    await expect.poll(() => address.first().inputValue(), { timeout: 15_000 }).toBe("");
     await page.close();
   });
 

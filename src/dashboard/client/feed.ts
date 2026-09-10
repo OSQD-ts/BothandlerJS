@@ -324,12 +324,16 @@ function initTimeframe(): void {
     return Number.isFinite(parsed) ? parsed : undefined;
   };
 
-  const apply = (): void => {
+  const apply = (settled: boolean): void => {
     const start = read(from);
     const end = read(to);
     // A backwards range selects nothing and looks like a broken dashboard, so say what
     // happened rather than showing an empty feed.
-    if (start !== undefined && end !== undefined && end < start) {
+    //
+    // Only once the value is settled. Half of typing a window passes through a state
+    // where the end is before the start, and a toast per keystroke would be its own kind
+    // of broken dashboard.
+    if (settled && start !== undefined && end !== undefined && end < start) {
       toast("warn", "That window runs backwards", "The end is before the start, so nothing can fall inside it.");
     }
     setTimeframe(start, end);
@@ -337,12 +341,20 @@ function initTimeframe(): void {
     app.drawNow();
   };
 
-  from.addEventListener("change", apply);
-  to.addEventListener("change", apply);
+  // `input` as well as `change`, and `input` is the one that matters. A `datetime-local`
+  // fires `input` as each segment is edited and holds `change` back until the value is
+  // committed — which for somebody *typing* a date means on blur. Listening only for
+  // `change` meant the feed sat unchanged while a window was being typed and moved when
+  // they clicked away, which reads as a filter that does not work. A partly-typed value
+  // reads as empty, so the intermediate states are simply "no bound", not a broken one.
+  for (const input of [from, to]) {
+    input.addEventListener("input", () => apply(false));
+    input.addEventListener("change", () => apply(true));
+  }
   clearButton.addEventListener("click", () => {
     from.value = "";
     to.value = "";
-    apply();
+    apply(true);
   });
 }
 

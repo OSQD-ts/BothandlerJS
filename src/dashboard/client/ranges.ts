@@ -1,4 +1,4 @@
-import { $, clear, el } from "./dom.js";
+import { $, clear, el, holdsTextEntry } from "./dom.js";
 import { BOOT, SECTIONS } from "./boot.js";
 import { getJson, postJson } from "./api.js";
 import { n } from "./format.js";
@@ -42,6 +42,8 @@ export async function loadRanges(): Promise<void> {
 export function drawRanges(): void {
   if (!SECTIONS.ranges) return;
   const body = $("ranges-body");
+  // Not while somebody is typing an address into it. See `holdsTextEntry`.
+  if (holdsTextEntry(body)) return;
   clear(body);
 
   $("ranges-mode").textContent = BOOT.allowActing ? "editable" : "read-only";

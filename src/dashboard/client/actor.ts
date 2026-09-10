@@ -1,5 +1,5 @@
 import { $, clear, el } from "./dom.js";
-import { actorActions } from "./actions.js";
+import { actorActions, isConfirming } from "./actions.js";
 import { SECTIONS } from "./boot.js";
 import { app } from "./app.js";
 import { clockStamp, n } from "./format.js";
@@ -33,6 +33,16 @@ export function drawActor(): void {
     panel.hidden = true;
     return;
   }
+  // Somebody is part-way through naming this actor, or through a confirmation. Rebuilding
+  // the panel would take the input and whatever has been typed into it, and the feed
+  // redraws on every request that arrives — so on a live dashboard the name box vanished
+  // about a second after it opened.
+  //
+  // The Actors table has held still for this since the editor replaced `prompt()`. This
+  // panel offers the identical three controls and was never given the same treatment,
+  // which is the whole bug: one of the two places the editor appears was guarded.
+  if (isConfirming() && !panel.hidden && $("actor-key").textContent === state.actor) return;
+
   panel.hidden = false;
   $("actor-key").textContent = state.actor;
 
