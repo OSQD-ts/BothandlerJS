@@ -2919,7 +2919,20 @@ describe("the challenge interstitial", () => {
 
     // The same page with the interaction challenge switched on. It adds the only
     // interactive control this library ever shows the public, so it gets its own audit.
-    const withGesture = new ChallengeService({ secrets: ["a-secret-long-enough-for-the-service"], interaction: true });
+    //
+    // At difficulty 6 rather than the shipped 16, and the reason is scheduling rather
+    // than speed. The page hashes in 60ms slices with `setTimeout(…, 0)` between them, so
+    // it does not freeze a slow device — and a browser that treats the page as
+    // backgrounded throttles those timers to about one a second. Difficulty 16 was
+    // measured here at 487ms of hashing, which is eight or so slices and therefore eight
+    // yields; on a CI runner several times slower that is dozens of yields, and throttled
+    // it stops fitting in any sane timeout. Difficulty 6 finishes inside the first slice,
+    // so there are no yields to throttle.
+    //
+    // Nothing in these tests is about what the puzzle costs — they are about the control
+    // it puts on screen once it is solved. The puzzle at its shipped cost, under its real
+    // CSP, is still exercised by the plain challenge page.
+    const withGesture = new ChallengeService({ secrets: ["a-secret-long-enough-for-the-service"], interaction: true, difficulty: 6 });
     gestureServer = createServer((request, response) => {
       // The verification endpoint, so a test can read what the page actually posted
       // rather than inferring it from the page's own state.
