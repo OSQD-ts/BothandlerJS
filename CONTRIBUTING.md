@@ -146,6 +146,34 @@ While the major version is 0, a breaking change bumps the **minor**. Reaching 1.
 claim that the API is stable and should be made deliberately, not by a stray `!` in a
 subject line.
 
+### Saying the version outright
+
+The table covers what the commits *imply*. Some releases are not implied by anything —
+1.0.0 is a decision about stability rather than a consequence of a `feat`, a security fix
+may want its own number, and a documentation-only push occasionally has to ship because
+the last release went out with the wrong README. A commit footer says so:
+
+```
+docs: fix the install command the last release shipped
+
+Release-As: 0.7.1
+```
+
+`Release-As:` takes an exact version, or one of `major`, `minor` and `patch` to force a
+bump whatever the commits imply. It overrides the derived version in both directions,
+including releasing a push that would otherwise publish nothing.
+
+A footer rather than a button in the Actions tab, because the decision belongs in the
+history: six months later, *"why is there no 0.9?"* is answered by `git log` rather than
+by somebody's memory. Any commit in the range may carry one and the **newest wins**, so
+changing your mind is one more commit rather than a force push. It has to be a footer —
+mentioning `Release-As:` in a subject line, as this paragraph does, invokes nothing.
+
+An override is checked rather than trusted. A value that is not a version or a bump, or
+one that does not move forwards from the current version, **fails the release** instead of
+quietly falling back to the derived number — the mistake being guarded against is somebody
+mistyping the release they meant to cut and never finding out.
+
 What the workflow does, in order: run the whole gate against that commit; work out the
 version and stop if there is nothing to release; refuse a version already on the
 registry, so a re-run is safe; bump `package.json`, commit it as `release: x.y.z [skip

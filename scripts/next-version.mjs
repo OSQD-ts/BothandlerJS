@@ -28,6 +28,28 @@
 // While the major version is 0 a breaking change bumps the minor, which is what SemVer
 // says 0.x is for: anything may change, and the way to say "this is now stable" is to
 // release 1.0.0 deliberately rather than to have a stray `!` do it for you.
+//
+// ## Saying it outright
+//
+// The rules above cover what the commits imply. Some releases are not implied by
+// anything — 1.0.0 is a decision about stability rather than a consequence of a `feat`,
+// a security patch may want to go out on its own number, and a docs-only push sometimes
+// has to ship because the last release went out with the wrong README. For those, a
+// commit may say so in a footer:
+//
+//   Release-As: 1.0.0     → exactly that version
+//   Release-As: minor     → force that bump, whatever the commits imply
+//
+// It is a footer rather than a workflow input because the decision belongs in the
+// history: six months later, "why is there no 0.9?" is answered by `git log` rather than
+// by somebody's memory of a button they pressed. Any commit in the range may carry one
+// and the newest wins, so changing your mind means one more commit rather than a force
+// push.
+//
+// An override is checked rather than trusted. A version that is not semver, or that does
+// not move forwards, stops the release with a non-zero exit instead of quietly falling
+// back to the derived number — because the failure being guarded against is somebody
+// mistyping the release they meant to cut and not finding out.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -55,6 +77,59 @@ function lastReleaseTag() {
 
 /** `type(scope)!: subject` → the parts that decide a version. */
 const HEADER = /^(?<type>[a-z]+)(?:\((?<scope>[^)]*)\))?(?<breaking>!)?:\s/;
+
+/**
+ * `Release-As:` in a footer, in either spelling the conventional-commits footers use.
+ *
+ * Anchored to the start of a line so that *describing* the mechanism — in this comment,
+ * in the changelog, in a commit that explains it — does not accidentally trigger it. The
+ * same care the `BREAKING CHANGE:` match takes, for the same reason, except that here the
+ * asymmetry runs the other way: a missed override publishes the version the commits
+ * implied, which is merely not what was asked for, while a spurious one publishes a
+ * number nobody chose.
+ */
+const RELEASE_AS = /^Release[ -]As:\s*(?<value>.+?)\s*$/im;
+
+/** A version this script is willing to publish: semver, with an optional prerelease. */
+const SEMVER = /^(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)(?<pre>-[0-9A-Za-z.-]+)?$/;
+
+/**
+ * What one commit declares outright, if anything.
+ *
+ * Returns `{ kind: "version", value }` for an exact version, `{ kind: "bump", value }`
+ * for a named bump, and `undefined` when the commit says nothing. A footer that says
+ * something unreadable returns `{ kind: "invalid", value }` rather than nothing, so the
+ * caller can refuse the release instead of silently ignoring a typo.
+ */
+export function declaredRelease(message) {
+  // The subject line is dropped before looking, because a subject is not a footer:
+  // `docs: explain Release-As: 1.0.0` describes the mechanism and must not invoke it.
+  const body = message.split("\n").slice(1).join("\n");
+  const match = RELEASE_AS.exec(body);
+  if (match === null) return undefined;
+  const value = match.groups.value;
+  const named = value.toLowerCase();
+  if (named === "major" || named === "minor" || named === "patch") return { kind: "bump", value: named };
+  if (SEMVER.test(value)) return { kind: "version", value };
+  return { kind: "invalid", value };
+}
+
+/** Numeric ordering on the release triple. A prerelease sorts below its own release. */
+export function isForwards(from, to) {
+  const parse = (version) => {
+    const match = SEMVER.exec(version);
+    if (match === null) return undefined;
+    return [Number(match.groups.major), Number(match.groups.minor), Number(match.groups.patch), match.groups.pre === undefined ? 1 : 0];
+  };
+  const a = parse(from.split("+")[0]);
+  const b = parse(to.split("+")[0]);
+  if (a === undefined || b === undefined) return false;
+  for (let i = 0; i < 4; i++) {
+    if (b[i] > a[i]) return true;
+    if (b[i] < a[i]) return false;
+  }
+  return false;
+}
 
 /**
  * What one commit does to the version. Exported, and tested in
@@ -91,10 +166,38 @@ function main() {
   const commits = raw.split("\0").map((c) => c.trim()).filter(Boolean);
 
   let bump = "none";
+  // `git log` gives newest first, so the first override seen is the newest one. Later
+  // ones are reported and not used: a second thought is expressed by another commit, and
+  // seeing both in the explain output is how somebody works out which one won.
+  let declared;
   for (const commit of commits) {
     const kind = classify(commit);
     if (RANK[kind] > RANK[bump]) bump = kind;
-    say(`  ${kind.padEnd(5)}  ${commit.split("\n")[0].slice(0, 72)}`);
+    const said = declaredRelease(commit);
+    const mark = said === undefined ? "" : `  [Release-As: ${said.value}${declared === undefined ? "" : ", superseded"}]`;
+    if (said !== undefined && declared === undefined) declared = said;
+    say(`  ${kind.padEnd(5)}  ${commit.split("\n")[0].slice(0, 72)}${mark}`);
+  }
+
+  const current = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+
+  if (declared !== undefined) {
+    // Refused rather than ignored. Falling back to the derived number here would publish
+    // *something*, which is the outcome that hides the mistake: the release goes out, the
+    // tag looks plausible, and the version somebody actually asked for never happens.
+    if (declared.kind === "invalid") {
+      throw new Error(
+        `Release-As: ${declared.value} is neither a version nor a bump. Write a semver version like 1.0.0, or one of major, minor, patch.`,
+      );
+    }
+    const next = declared.kind === "version" ? declared.value : bumpVersion(current, declared.value);
+    if (!isForwards(current, next)) {
+      throw new Error(
+        `Release-As: ${declared.value} asks for ${next}, which is not ahead of ${current}. A published version cannot be replaced, so a release has to move forwards.`,
+      );
+    }
+    say(`${current} → ${next}  (declared: Release-As: ${declared.value}${bump === "none" ? ", and nothing here would have released otherwise" : `, over the derived ${bumpVersion(current, bump)}`})`);
+    return next;
   }
 
   if (bump === "none") {
@@ -102,7 +205,6 @@ function main() {
     return undefined;
   }
 
-  const current = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
   const next = bumpVersion(current, bump);
   say(`${current} → ${next}  (${bump})`);
   return next;
@@ -126,6 +228,14 @@ export function bumpVersion(current, bump) {
 
 /** Run only when invoked, so a test can import the rules without shelling out to git. */
 if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
-  const next = main();
-  if (next !== undefined) process.stdout.write(`${next}\n`);
+  // A refused override writes nothing to stdout and exits non-zero, which is what stops
+  // the release: the workflow assigns this script's output to a variable, so a failure
+  // here fails that step rather than being read as "nothing to publish".
+  try {
+    const next = main();
+    if (next !== undefined) process.stdout.write(`${next}\n`);
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
 }

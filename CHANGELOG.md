@@ -8,6 +8,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A release can say its own version, in a commit footer.** `Release-As: 1.0.0` publishes
+  exactly that; `Release-As: minor` forces a bump whatever the commits imply; and either
+  will release a push that would otherwise publish nothing. The derived rules cover what
+  commits imply, and some releases are not implied by anything — 1.0.0 is a decision about
+  stability rather than a consequence of a `feat`.
+
+  A footer rather than a workflow input, so the decision sits in the history where `git
+  log` can answer for it. The newest override in the range wins. An unreadable value, or
+  one that does not move forwards, fails the release rather than quietly falling back to
+  the derived number.
+
 - **The actor drill-down's label editor carries the name the actor already has.** It
   never passed one to the control, so it offered "Label" rather than "Relabel", opened
   empty, and renaming a client from there discarded the name it had. It now looks the

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — a plain .mjs script, deliberately not part of the published build.
-import { bumpVersion, classify } from "../scripts/next-version.mjs";
+import { bumpVersion, classify, declaredRelease, isForwards } from "../scripts/next-version.mjs";
 
 /**
  * The rules that decide what the world gets.
@@ -84,5 +84,83 @@ describe("applying a bump", () => {
 
   it("drops a prerelease suffix rather than carrying it forward", () => {
     expect(bumpVersion("0.3.0-rc.1", "patch")).toBe("0.3.1");
+  });
+});
+
+/**
+ * Saying the version outright.
+ *
+ * The derived rules cover what the commits imply, and some releases are not implied by
+ * anything: 1.0.0 is a decision about stability rather than a consequence of a `feat`,
+ * and a docs-only push sometimes has to ship because the last one went out with the
+ * wrong README. A `Release-As:` footer says so.
+ *
+ * The asymmetry here runs the opposite way to `BREAKING CHANGE:` above, and deliberately.
+ * There, a false positive publishes a bigger number than deserved and a false negative is
+ * somebody's outage, so the match is liberal. Here, a missed override publishes the
+ * version the commits implied — merely not what was asked for — while a spurious one
+ * publishes a number nobody chose. So this match is strict, and anything unreadable stops
+ * the release rather than being ignored.
+ */
+describe("declaring a version outright", () => {
+  it("reads an exact version from a footer", () => {
+    expect(declaredRelease("feat: stabilise the API\n\nRelease-As: 1.0.0")).toEqual({ kind: "version", value: "1.0.0" });
+    expect(declaredRelease("fix: patch it\n\nRelease-as: 0.9.1")).toEqual({ kind: "version", value: "0.9.1" });
+    expect(declaredRelease("fix: patch it\n\nRelease-As:2.3.4")).toEqual({ kind: "version", value: "2.3.4" });
+    expect(declaredRelease("feat: cut a candidate\n\nRelease-As: 1.0.0-rc.1")).toEqual({ kind: "version", value: "1.0.0-rc.1" });
+  });
+
+  it("reads a named bump", () => {
+    expect(declaredRelease("docs: fix the README\n\nRelease-As: patch")).toEqual({ kind: "bump", value: "patch" });
+    expect(declaredRelease("fix: small\n\nRelease-As: MINOR")).toEqual({ kind: "bump", value: "minor" });
+  });
+
+  it("says nothing when no commit declares anything", () => {
+    expect(declaredRelease("feat: an ordinary feature")).toBeUndefined();
+    expect(declaredRelease("fix: with a body\n\nExplaining what it does.")).toBeUndefined();
+  });
+
+  /** Describing the mechanism must not invoke it — the same trap the breaking-change match avoids. */
+  it("does not fire on a subject line that mentions it", () => {
+    expect(declaredRelease("docs: explain Release-As: 1.0.0 in the release guide")).toBeUndefined();
+    expect(declaredRelease("chore: rename Release-As: to something else")).toBeUndefined();
+  });
+
+  /**
+   * Reported rather than ignored, so the caller can refuse the release. Falling back to
+   * the derived number would publish *something*, which is exactly the outcome that hides
+   * the mistake: a plausible tag goes out and the version somebody asked for never does.
+   */
+  it("marks an unreadable declaration rather than dropping it", () => {
+    expect(declaredRelease("feat: x\n\nRelease-As: banana")).toEqual({ kind: "invalid", value: "banana" });
+    expect(declaredRelease("feat: x\n\nRelease-As: 1.0")).toEqual({ kind: "invalid", value: "1.0" });
+    expect(declaredRelease("feat: x\n\nRelease-As: v1.0.0")).toEqual({ kind: "invalid", value: "v1.0.0" });
+    expect(declaredRelease("feat: x\n\nRelease-As: 01.0.0")).toEqual({ kind: "invalid", value: "01.0.0" });
+  });
+});
+
+describe("a release has to move forwards", () => {
+  it("accepts a version ahead of the current one", () => {
+    expect(isForwards("0.8.0", "0.8.1")).toBe(true);
+    expect(isForwards("0.8.0", "0.9.0")).toBe(true);
+    expect(isForwards("0.8.0", "1.0.0")).toBe(true);
+    expect(isForwards("0.8.0", "0.9.0-rc.1")).toBe(true);
+  });
+
+  /**
+   * A published version is immutable, so going backwards or standing still is not a
+   * smaller release — it is one the registry will refuse after the tag has been pushed.
+   */
+  it("refuses one that is not", () => {
+    expect(isForwards("0.8.0", "0.8.0")).toBe(false);
+    expect(isForwards("0.8.0", "0.7.9")).toBe(false);
+    expect(isForwards("1.0.0", "0.9.9")).toBe(false);
+    // A prerelease sorts below its own release, so this is a step back.
+    expect(isForwards("0.8.0", "0.8.0-rc.1")).toBe(false);
+  });
+
+  it("refuses anything it cannot read as a version", () => {
+    expect(isForwards("0.8.0", "banana")).toBe(false);
+    expect(isForwards("banana", "0.9.0")).toBe(false);
   });
 });
