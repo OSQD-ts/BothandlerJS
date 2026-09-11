@@ -123,17 +123,20 @@ jobs:
             exit 1
           fi
 
-      - name: Bump, commit and tag
+      # The version is set here and nowhere else yet: written into package.json and the
+      # lockfile, and not committed, tagged or pushed. That waits until the package is on
+      # the registry.
+      #
+      # It used to be one step — `npm version` commits and tags — run before the build,
+      # and then pushed. Twice that stranded a release: a tag and a release commit on main
+      # for a version the registry never received. 0.8.0 lost a race with a push that
+      # landed while it worked; 0.9.1 was tagged, and then its tarball came out over the
+      # size budget. Either way the next version is derived from the last tag, so a
+      # stranded one blocks every release after it until somebody notices. The dry run
+      # had it worst: it pushed a real tag every time, as a rehearsal.
+      - name: Set the version
         if: steps.version.outputs.release == 'yes'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # `npm version` writes package.json and package-lock.json, commits both and
-          # tags the commit. `[skip ci]` is belt and braces: a push made with
-          # GITHUB_TOKEN does not trigger workflows, so this cannot loop, but the marker
-          # says so to anyone reading the history.
-          npm version "${{ steps.version.outputs.version }}" -m "release: %s [skip ci]"
-          git push --follow-tags
+        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version
 
       - name: Build
         if: steps.version.outputs.release == 'yes'
@@ -157,6 +160,7 @@ jobs:
             echo "::error::the tarball contains something it should not"
             exit 1
           fi
+          rm -f "$tarball"
 
       - name: Publish (dry run)
         if: steps.version.outputs.release == 'yes' && github.event_name == 'workflow_dispatch' && inputs.dry-run
@@ -169,6 +173,45 @@ jobs:
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Only now, and only for a real publish, does anything reach the remote.
+      #
+      # The branch goes first and the tag is made only once it has landed, so the tag can
+      # only ever name a commit that is on main. That order is the fix, and it was found by
+      # running this step against a real remote with a push arriving mid-release:
+      # `git push --follow-tags` sends the branch and the tag as separate updates, and when
+      # the branch is refused the tag goes through anyway — pointing at a release commit
+      # that never reached main. That is very likely how 0.8.0 was stranded. A retry could
+      # not repair it either, since an existing remote tag is not moved by a plain push.
+      #
+      # A push made while this ran — somebody's next commit — is handled by replaying the
+      # release commit on top of theirs. It touches only the version fields, so it rebases
+      # cleanly unless somebody else changed the version by hand.
+      #
+      # If every attempt fails the package is already published and only its commit and tag
+      # are missing. That is loud rather than silent: the next run derives the same version,
+      # finds it on the registry, and stops with an error naming it. `[skip ci]` is belt and
+      # braces — a push made with GITHUB_TOKEN does not trigger workflows at all.
+      - name: Commit, tag and push the release
+        if: steps.version.outputs.release == 'yes' && (github.event_name == 'push' || !inputs.dry-run)
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "release: $version [skip ci]"
+          landed=no
+          for attempt in 1 2 3 4 5; do
+            if git push; then landed=yes; break; fi
+            echo "::warning::push $attempt was refused; replaying the release commit on top of main"
+            git pull --rebase
+          done
+          if [ "$landed" != yes ]; then
+            echo "::error::$version is published, but its release commit could not be pushed. Push it and tag it v$version by hand: the next release is derived from that tag."
+            exit 1
+          fi
+          git tag -a "v$version" -m "v$version"
+          git push origin "v$version"
 
       - name: Say what happened
         if: steps.version.outputs.release == 'yes' && (github.event_name == 'push' || !inputs.dry-run)

@@ -8,6 +8,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A release that fails can no longer leave a tag behind.** The publish workflow used to
+  commit, tag and push the version first and only then build, check and publish, so any
+  failure after the push stranded a tag on main for a version the registry never got — and
+  since the next version is derived from the last tag, that blocked every release after it.
+  It happened to 0.8.0 and to 0.9.1, which was tagged and then refused for its size and is
+  why this release is 0.9.2. The version is now set, built, checked and published first;
+  the release commit is pushed only after that, replayed onto main if somebody pushed in the
+  meantime, and tagged only once it has landed. The dry run, which used to push a real tag
+  as a rehearsal, now pushes nothing.
+
 - **The package is a quarter smaller: the CLI's sourcemaps are no longer published.**
   They were the two largest files in the tarball — the CLI bundles its own copy of the
   library, and every map embeds the full TypeScript source — and they map only the terminal

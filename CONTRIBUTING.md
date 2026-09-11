@@ -176,9 +176,21 @@ mistyping the release they meant to cut and never finding out.
 
 What the workflow does, in order: run the whole gate against that commit; work out the
 version and stop if there is nothing to release; refuse a version already on the
-registry, so a re-run is safe; bump `package.json`, commit it as `release: x.y.z [skip
-ci]` and tag it; open the tarball and check every entry that has to be there is; publish.
-Run it by hand from the Actions tab to rehearse — it defaults to a dry run.
+registry, so a re-run is safe; set the version in `package.json` without committing it;
+build, open the tarball and check every entry that has to be there is, and that it is
+under 4 MB; publish; and only then commit `release: x.y.z [skip ci]`, push it, and tag
+the commit that landed.
+
+**Nothing reaches the remote until the package is on the registry.** It used to be the
+other way round — commit, tag and push first, then build and publish — and twice that
+left a tag on main for a version npm never received: 0.8.0, when the push raced
+somebody else's, and 0.9.1, when its tarball came out over budget. A stranded tag is
+worse than a failed run, because the next version is derived from the last tag, so it
+quietly blocks every release after it. The tag is now made only once the release commit
+has landed on main, which is also what makes a push that loses a race safe to retry.
+
+Run it by hand from the Actions tab to rehearse — it defaults to a dry run, and a dry run
+now pushes nothing at all. (It used to push a real release commit and tag every time.)
 
 Publishing needs an `NPM_TOKEN` secret at the organisation level: an npm **automation**
 token, so two-factor does not block CI, with publish rights to the `@osqd` scope.
