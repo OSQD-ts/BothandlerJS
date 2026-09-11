@@ -72,6 +72,8 @@
   },
   "files": [
     "dist",
+    "!dist/cli.js.map",
+    "!dist/cli.cjs.map",
     "bin",
     "docs",
     "README.md",

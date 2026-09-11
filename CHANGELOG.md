@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The package is a quarter smaller: the CLI's sourcemaps are no longer published.**
+  They were the two largest files in the tarball — the CLI bundles its own copy of the
+  library, and every map embeds the full TypeScript source — and they map only the terminal
+  tool's own stack traces, which is no help to anybody using the library. The tarball goes
+  from 4.01 MB to 3.02 MB, back under the 4 MB budget CI holds it to — the first attempt to
+  publish this release crossed it by 17 KB and was refused. The library's own sourcemaps
+  are unchanged.
+
 ### Added
 
 - **A label can keep an actor out of the live feed, or out of analysis altogether.** Two
