@@ -17,6 +17,14 @@ export interface State {
   policy: Policy | undefined;
   /** The Actors screen's list, fetched rather than streamed. See `registry.ts`. */
   actors: ActorRow[];
+  /**
+   * Every name an operator has given an actor, keyed as the feed keys actors.
+   *
+   * The source of truth for names on this page. It arrives complete on every stats
+   * frame, which is what the registry list could not be: that list is paged, so a name
+   * was known only for actors that happened to be on the page last fetched.
+   */
+  labels: Map<string, string>;
   actorsTracked: number;
   /** Which population the Actors screen is listing. See `registry.feedActors`. */
   actorScope: "tracked" | "feed";
@@ -83,6 +91,7 @@ export const state: State = {
   snapshot: undefined,
   policy: undefined,
   actors: [],
+  labels: new Map(),
   actorsTracked: 0,
   actorScope: "tracked",
   paused: false,
@@ -202,7 +211,7 @@ export function matches(row: Row): boolean {
   // fail on.
   if (state.fromMs !== undefined && row.entry.at < state.fromMs) return false;
   if (state.toMs !== undefined && row.entry.at > state.toMs) return false;
-  return matchesFilter(state.filter, row.entry) && matchesFilterExpression(state.query, row.entry, textOf(row));
+  return matchesFilter(state.filter, row.entry) && matchesFilterExpression(state.query, row.entry, textOf(row), state.labels.get(row.entry.actor));
 }
 
 /**
@@ -317,4 +326,21 @@ export function aggregate(rows: readonly Row[]): Aggregates {
   }
 
   return totals;
+}
+
+/**
+ * Takes the names from a stats frame.
+ *
+ * Only when the frame carries them: a listener with the actors section switched off sends
+ * none, and an older handler never did, and neither of those means every actor has just
+ * lost its name.
+ */
+export function takeLabels(labels: Readonly<Record<string, string>> | undefined): void {
+  if (labels === undefined) return;
+  state.labels = new Map(Object.entries(labels));
+}
+
+/** The name an actor has been given, if any. */
+export function labelOf(key: string): string | undefined {
+  return state.labels.get(key);
 }

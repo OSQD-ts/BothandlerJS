@@ -142,6 +142,87 @@ describe("the feed's search", () => {
     expect(search("path:$in(/health,/api/items)").sort()).toEqual(["a", "b"]);
   });
 
+  /**
+   * Quotes of every kind a person actually types.
+   *
+   * Only straight double quotes used to work, because the tokenizer happened to know
+   * them. Anything else was taken as a literal character — so a filter pasted from chat
+   * or documentation, where smart punctuation turns `"` into `“ ”`, asked for an actor
+   * whose key began with a curly quote. None does, so `$notin` excluded nothing and `$in`
+   * matched nothing, and there was no sign either had gone wrong.
+   */
+  it("reads every kind of quote as a quote", () => {
+    for (const quoted of ['"203.0.113.4"', "'203.0.113.4'", "\u201c203.0.113.4\u201d", "\u2018203.0.113.4\u2019"]) {
+      expect(search(`actor:$notin(${quoted})`), `$notin(${quoted})`).toEqual(["c"]);
+      expect(search(`actor:$in(${quoted})`).sort(), `$in(${quoted})`).toEqual(["a", "b"]);
+      expect(search(`actor:${quoted}`).sort(), `actor:${quoted}`).toEqual(["a", "b"]);
+    }
+  });
+
+  /** A comma is a separator only outside quotes — which is what quoting a value is for. */
+  it("keeps a comma inside a quoted set value", () => {
+    expect(parseFilter('actor:$in("a,b", c)')).toMatchObject({ term: { values: ["a,b", "c"] } });
+    expect(parseFilter("actor:$in('a,b', c)")).toMatchObject({ term: { values: ["a,b", "c"] } });
+  });
+
+  /**
+   * An apostrophe is not a quote.
+   *
+   * A single quote opens a phrase only where a value begins. In the middle of a word it is
+   * the apostrophe in `don't` or `o'reilly`, and treating it as the start of a phrase would
+   * swallow everything typed after it.
+   */
+  it("leaves an apostrophe in the middle of a word alone", () => {
+    expect(parseFilter("don't")).toEqual({ kind: "term", term: { field: undefined, value: "don't", negated: false } });
+    expect(parseFilter("path:/o'reilly curl")).toMatchObject({ kind: "and" });
+  });
+
+  /**
+   * An address is an identifier, not text.
+   *
+   * Matched as a substring, `actor:1.2.3.4` also caught `1.2.3.40` to `1.2.3.49` and
+   * `11.2.3.4` — so excluding one client removed several, and including one let in its
+   * neighbours. It matches a whole component at a time now, which still leaves a network
+   * prefix and an address's tail findable.
+   */
+  it("matches an actor a component at a time, not a digit at a time", () => {
+    const neighbours = [
+      entry({ requestId: "exact", actor: "1.2.3.4" }),
+      entry({ requestId: "longer", actor: "1.2.3.45" }),
+      entry({ requestId: "wider", actor: "11.2.3.4" }),
+      entry({ requestId: "network", actor: "1.2.3.0/24" }),
+    ];
+    const pick = (query: string): string[] =>
+      neighbours.filter((row) => matchesFilterExpression(parseFilter(query), row, searchableText(row))).map((row) => row.requestId);
+
+    expect(pick("actor:1.2.3.4")).toEqual(["exact"]);
+    expect(pick("actor:$in(1.2.3.4)")).toEqual(["exact"]);
+    expect(pick("actor:$notin(1.2.3.4)")).toEqual(["longer", "wider", "network"]);
+    // A prefix that stops on a separator is a network, and still finds all of it.
+    expect(pick("actor:1.2.3").sort()).toEqual(["exact", "longer", "network"]);
+    // And an address can still be found by its tail.
+    expect(pick("actor:3.45")).toEqual(["longer"]);
+  });
+
+  /**
+   * A named actor answers to its name.
+   *
+   * The name is passed in rather than read off the entry, because it is given after the
+   * fact: to requests already in the feed, which is what makes filtering by it
+   * retroactive rather than only working for what arrives next.
+   */
+  it("finds an actor by the name it was given, as well as by its key", () => {
+    const named = (query: string): string[] =>
+      rows
+        .filter((row) => matchesFilterExpression(parseFilter(query), row, searchableText(row), row.actor === "203.0.113.4" ? "the noisy one" : undefined))
+        .map((row) => row.requestId);
+    expect(named("actor:noisy").sort()).toEqual(["a", "b"]);
+    expect(named('actor:$notin("the noisy one")')).toEqual(["c"]);
+    expect(named("noisy").sort(), "and a free word finds it too").toEqual(["a", "b"]);
+    // The key still works after the name is given.
+    expect(named("actor:203.0.113.4").sort()).toEqual(["a", "b"]);
+  });
+
   it("matches nothing for an empty set rather than everything", () => {
     // Half-typed input is the normal state of a live search box, and a filter that
     // widens while somebody is still typing it is a filter that lies.

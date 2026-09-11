@@ -856,6 +856,11 @@ input.label-input:focus { outline: 2px solid var(--accent); outline-offset: 1px;
 .ev-item.shadow { opacity: 0.72; border-left: 2px dashed var(--line); padding-left: 8px; }
 .shadow-verdict { margin-top: 8px; font-style: italic; }
 .shadow-verdict.changed { color: var(--ink-2); font-style: normal; }
+/* A named actor. Set apart from an address by weight rather than colour: every colour on
+   the feed already means something about a verdict, and a name means nothing about one. */
+.ua a.labelled { font-weight: 600; }
+.actor-label { font-weight: 600; font-size: 14px; margin-right: 8px; }
+.label-note b { font-weight: 600; color: var(--ink); }
 .tagline { font-size: 11px; color: var(--muted); }
 .tagline b { color: var(--ink-2); font-weight: 600; }
 
@@ -943,6 +948,7 @@ export const DASHBOARD_MARKUP = String.raw`
   <div id="view-live" role="tabpanel" aria-labelledby="tab-live" class="stack">
     <section class="panel" id="actor-panel" hidden>
       <div class="actor-head">
+        <span class="actor-label" id="actor-label" hidden></span>
         <span class="who" id="actor-key"></span>
         <span class="grow"></span>
         <button id="actor-close">Close</button>

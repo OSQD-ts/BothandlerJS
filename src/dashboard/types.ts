@@ -557,6 +557,21 @@ export interface DashboardSnapshot {
   changes: readonly DashboardChange[];
   /** Feed entries dropped from the stream by the rate cap, since start. See {@link DashboardOptions.maxEventsPerSecond}. */
   skipped: number;
+  /**
+   * The names operators have given actors, keyed the way the feed keys actors.
+   *
+   * Carried on every stats frame rather than on the feed entries, because a name is given
+   * after the fact — usually to an actor somebody noticed *in* the feed — and an entry
+   * already delivered cannot be changed. With the names beside the entries instead, the
+   * page draws every row from the current names, so naming an actor relabels its history
+   * as well as its future, on every open dashboard within a refresh.
+   *
+   * On a listener that masks addresses the keys are masked too, since a map from raw
+   * address to name is a list of raw addresses. Two actors sharing a network then share a
+   * key, and both names are kept rather than one silently winning. Absent when the
+   * `actors` section is off.
+   */
+  labels?: Record<string, string> | undefined;
   /** Startup warnings, audit anomalies, and anything else the engine has raised. */
   notices: readonly DashboardNotice[];
   /**

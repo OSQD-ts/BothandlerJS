@@ -12,7 +12,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import type { BotHandler } from "../core.js";
 import { createFacts } from "../facts.js";
-import { networkKey } from "../internal/ip.js";
+import { maskAddresses, networkKey } from "../internal/ip.js";
 import { parseRequest } from "./parse-request.js";
 import type {
   DashboardAuth,
@@ -178,8 +178,8 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
   });
   const allowedClients = options.allowedClients === undefined || options.allowedClients.length === 0 ? undefined : validateClients(options.allowedClients);
   const throttle = createAuthThrottle(options.authThrottle, handler);
-  const notices = new DashboardNotices(handler);
-  const changes = new DashboardChanges(handler);
+  const notices = new DashboardNotices(handler, undefined, { maskIp });
+  const changes = new DashboardChanges(handler, undefined, { maskIp });
   const instance = options.instance ?? hostname();
   const pageOptions = {
     title: options.title ?? "bothandlerjs",
@@ -596,6 +596,20 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
     }
   }
 
+  /** Names, keyed the way this listener keys actors. See `DashboardSnapshot.labels`. */
+  function labelsForViewer(): Record<string, string> {
+    const out: Record<string, string> = Object.create(null) as Record<string, string>;
+    for (const [key, raw] of handler.actorLabels()) {
+      const shown = maskIp ? (networkKey(key) ?? key) : key;
+      // A name is typed by a person and can quote an address as easily as anything else.
+      const label = maskIp ? maskAddresses(raw) : raw;
+      const existing = out[shown];
+      if (existing === undefined) out[shown] = label;
+      else if (!existing.split(", ").includes(label)) out[shown] = `${existing}, ${label}`;
+    }
+    return out;
+  }
+
   function snapshot(): DashboardSnapshot {
     const described = handler.policy.describe();
     return {
@@ -625,6 +639,7 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
       // person watching the traffic should see it whether or not they may make one.
       changes: sections.changes ? changes.list() : [],
       skipped: feed.skipped,
+      ...(sections.actors ? { labels: labelsForViewer() } : {}),
       ...(handler.audit !== undefined && sections.audit
         ? { audit: { ...handler.audit.summary(), checks: handler.audit.checks.map((check) => ({ id: check.id, description: check.description })) } }
         : {}),

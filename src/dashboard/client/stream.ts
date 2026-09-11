@@ -1,7 +1,7 @@
 import { $ } from "./dom.js";
 import { API, SECTIONS } from "./boot.js";
 import { app } from "./app.js";
-import { clearFeed, ingest, state } from "./store.js";
+import { clearFeed, ingest, state, takeLabels } from "./store.js";
 import { getJson } from "./api.js";
 import { resetFeedCache } from "./feed.js";
 import type { DashboardEntry, Snapshot } from "./types.js";
@@ -99,6 +99,7 @@ export function connectStream(): void {
 
   source.addEventListener("stats", (event) => {
     state.snapshot = JSON.parse((event as MessageEvent<string>).data) as Snapshot;
+    takeLabels(state.snapshot.labels);
     app.draw();
   });
 
@@ -117,6 +118,7 @@ export function connectStream(): void {
 export async function loadInitialSnapshot(): Promise<void> {
   try {
     state.snapshot = await getJson<Snapshot>("/api/stats");
+    takeLabels(state.snapshot.labels);
     app.drawNow();
   } catch {
     /* the stream is the primary path */

@@ -127,7 +127,7 @@ export interface BotHandlerEvents extends Record<string, unknown> {
    * The remedy for a false positive that has stuck to somebody, and therefore exactly
    * the operation an audit trail wants to have seen.
    */
-  "actor-change": { key: string; action: "forget" | "clear"; until?: number | undefined; by?: string | undefined };
+  "actor-change": { key: string; action: "forget" | "clear" | "label"; until?: number | undefined; label?: string | undefined; by?: string | undefined };
   /** The audit noticed the traffic change shape. */
   anomaly: TrafficAnomaly;
   warning: string;
@@ -214,6 +214,8 @@ function sanitize(item: Evidence): Evidence {
 export class BotHandler {
   readonly config: ResolvedConfig;
   readonly registry: ActorRegistry;
+  /** Keys of actors with a name. See {@link BotHandler.actorLabels}. */
+  private readonly labelled = new Set<string>();
   readonly store: BotHandlerStore;
   readonly policy: Policy;
   readonly challenge: ChallengeService | undefined;
@@ -573,7 +575,33 @@ export class BotHandler {
     const state = this.registry.peek(key);
     if (state === undefined) return;
     state.setLabel(label);
+    if (state.label === undefined) this.labelled.delete(key);
+    else this.labelled.add(key);
     this.warn(`Actor "${key}" was ${label === undefined ? "unlabelled" : `labelled "${state.label ?? ""}"`} at runtime${attribute(context)}.`);
+    // Announced like the other two things an operator can do to one actor. It was the only
+    // one that happened silently, so a dashboard learned about a name only if the person
+    // who gave it was the one looking — and every other open dashboard went on showing an
+    // address that somebody had already recognised.
+    this.events.emit("actor-change", { key, action: "label", label: state.label, by: context.by });
+  }
+
+  /**
+   * Every actor that currently has a name, keyed by actor key.
+   *
+   * Read from an index rather than by walking the registry, because the registry holds
+   * up to `maxActors` clients and this is asked for on every dashboard refresh, while
+   * names are a handful an operator typed by hand. The index can outlive what it points
+   * at — an actor ages out of the registry, and its name goes with it — so each entry is
+   * checked on the way out and dropped if the actor is gone.
+   */
+  actorLabels(): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const key of this.labelled) {
+      const label = this.registry.peek(key)?.label;
+      if (label === undefined) this.labelled.delete(key);
+      else out.set(key, label);
+    }
+    return out;
   }
 
   /** Convenience for `updateRanges("crawler:<id>", …)`, matching a signature id. */

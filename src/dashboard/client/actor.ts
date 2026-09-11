@@ -4,7 +4,7 @@ import { SECTIONS } from "./boot.js";
 import { app } from "./app.js";
 import { clockStamp, n } from "./format.js";
 import { drawBars } from "./bars.js";
-import { state } from "./store.js";
+import { labelOf, state } from "./store.js";
 
 /** Wires the panel's own Close button. Called once, and only when the panel exists. */
 export function initActor(): void {
@@ -45,6 +45,14 @@ export function drawActor(): void {
 
   panel.hidden = false;
   $("actor-key").textContent = state.actor;
+  // The name beside the key rather than instead of it. This is the panel somebody opens to
+  // look an actor up, and the key is what they will need to write a rule or an allowlist
+  // entry against — so both are here, and the name goes first because it is what they came
+  // in recognising.
+  const name = labelOf(state.actor);
+  const nameNode = $("actor-label");
+  nameNode.hidden = name === undefined;
+  nameNode.textContent = name ?? "";
 
   const mine = state.rows.filter((row) => row.entry.actor === state.actor).map((row) => row.entry);
   const latest = mine[mine.length - 1];
@@ -81,13 +89,12 @@ export function drawActor(): void {
   // of you. Absent entirely without `controls.editRanges`.
   const bar = $("actor-actions");
   clear(bar);
-  // The name this actor already has, if the registry has been fetched and knows one. A
-  // feed entry does not carry it, which is why it is looked up rather than read off the
-  // row — the same lookup the Actors table does. Without it this editor always said
-  // "Label" and always opened empty, so renaming a client from here quietly discarded
-  // the name it already had.
-  const known = state.actors.find((actor) => actor.key === state.actor)?.label;
-  const buttons = actorActions(state.actor, () => app.drawNow(), known);
+  // The name it already has, so the editor offers to *re*label and opens with that name in
+  // the box. Without it this always said "Label" and opened empty, so renaming a client
+  // from here quietly discarded the name it had. Read from the complete map every stats
+  // frame delivers, not the registry list, which is paged and knew names only for actors
+  // on the page it last fetched.
+  const buttons = actorActions(state.actor, () => app.drawNow(), name);
   bar.hidden = buttons.length === 0;
   for (const button of buttons) bar.appendChild(button);
 }

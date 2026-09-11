@@ -1,5 +1,5 @@
 import { CREDENTIAL_HEADERS } from "../notify/redact.js";
-import { networkKey } from "../internal/ip.js";
+import { maskAddresses, networkKey } from "../internal/ip.js";
 import type { BotHandler } from "../core.js";
 import type { DashboardChange, DashboardEntry, DashboardNotice, DashboardRedaction } from "./types.js";
 import type { Assessment, RequestFacts } from "../types.js";
@@ -390,12 +390,25 @@ export class DashboardNotices {
   private readonly notices: DashboardNotice[] = [];
   private readonly unsubscribe: Array<() => void> = [];
 
+  /**
+   * Masks addresses in what this list shows, on a listener that masks them.
+   *
+   * Notices are the library's warnings, and several name a client in full —
+   * `Actor "203.0.113.7" was forgotten at runtime` — because they were written for the
+   * operator's logs. Shown on a dashboard configured to hide every address, they undid
+   * that configuration from the notices panel. The warnings are free text from all over
+   * the library, so the addresses are found by shape; see `maskAddresses`.
+   */
+  private readonly shown: (message: string) => string;
+
   constructor(
     handler: BotHandler,
     private readonly limit = 100,
+    options: { maskIp?: boolean } = {},
   ) {
+    this.shown = options.maskIp === true ? maskAddresses : (message) => message;
     const now = handler.config.clock.now();
-    for (const message of handler.config.warnings) this.notices.push({ at: now, kind: "warning", source: "startup", message });
+    for (const message of handler.config.warnings) this.notices.push({ at: now, kind: "warning", source: "startup", message: this.shown(message) });
 
     this.unsubscribe.push(handler.on("warning", (message) => this.add({ at: handler.config.clock.now(), kind: "warning", message })));
     // An anomaly belongs here for the same reason a startup warning does: it is
@@ -421,6 +434,7 @@ export class DashboardNotices {
   }
 
   private add(notice: DashboardNotice): void {
+    notice = { ...notice, message: this.shown(notice.message) };
     this.notices.push(notice);
     if (this.notices.length > this.limit) this.notices.splice(0, this.notices.length - this.limit);
   }
@@ -441,12 +455,24 @@ export class DashboardNotices {
 export class DashboardChanges {
   private readonly changes: DashboardChange[] = [];
   private readonly unsubscribe: Array<() => void> = [];
+  private readonly redact: (text: string) => string;
 
   constructor(
     handler: BotHandler,
     private readonly limit = 50,
+    options: { maskIp?: boolean } = {},
   ) {
     const now = (): number => handler.config.clock.now();
+    // The timeline names the actor a change was made to, and on a listener that masks
+    // addresses it has to name it the way the feed does. It did not: forgetting or
+    // clearing an actor from anywhere — another listener, or code — put its full address
+    // on the timeline of a dashboard configured to show nobody's. Acting is switched off
+    // on a masked listener, which is presumably why this was missed; being told about
+    // actions is not.
+    const shown = (key: string): string => (options.maskIp === true ? (networkKey(key) ?? key) : key);
+    // And any address written in the text around it — a name an operator typed can quote
+    // one as easily as a warning can.
+    this.redact = options.maskIp === true ? maskAddresses : (text) => text;
     this.unsubscribe.push(
       handler.on("policy-change", ({ rules, by }) => this.add({ at: now(), kind: "policy", summary: `${rules.length} rule(s) applied`, by })),
       handler.on("guard-change", ({ before, after, by }) =>
@@ -461,7 +487,21 @@ export class DashboardChanges {
         }),
       ),
       handler.on("range-change", ({ name, size, by }) => this.add({ at: now(), kind: "range", summary: `${name}: ${size} entr${size === 1 ? "y" : "ies"}`, by })),
-      handler.on("actor-change", ({ key, action, by }) => this.add({ at: now(), kind: "actor", summary: `${key} ${action === "forget" ? "forgotten" : "cleared as human"}`, by })),
+      handler.on("actor-change", ({ key, action, label, by }) =>
+        this.add({
+          at: now(),
+          kind: "actor",
+          summary:
+            action === "forget"
+              ? `${shown(key)} forgotten`
+              : action === "clear"
+                ? `${shown(key)} cleared as human`
+                : label === undefined
+                  ? `${shown(key)} unlabelled`
+                  : `${shown(key)} labelled "${label}"`,
+          by,
+        }),
+      ),
     );
   }
 
@@ -475,6 +515,7 @@ export class DashboardChanges {
   }
 
   private add(change: DashboardChange): void {
+    change = { ...change, summary: this.redact(change.summary) };
     this.changes.push(change);
     if (this.changes.length > this.limit) this.changes.splice(0, this.changes.length - this.limit);
   }

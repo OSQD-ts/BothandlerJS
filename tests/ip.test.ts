@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { IpRangeSet, formatIp, isSpecialUse, networkKey, normalizeIp, parseCidr, parseIp, stripPort } from "../src/internal/ip.js";
+import { IpRangeSet, formatIp, isSpecialUse, maskAddresses, networkKey, normalizeIp, parseCidr, parseIp, stripPort } from "../src/internal/ip.js";
 import { BotHandler } from "../src/index.js";
 
 describe("parseIp", () => {
@@ -189,5 +189,44 @@ describe("resolving a client address behind a proxy that writes ports", () => {
   it("keeps the header ignored entirely when it is not trusted", () => {
     const handler = new BotHandler({ onWarning: () => {} });
     expect(handler.resolveIp(socket, { "x-forwarded-for": "1.2.3.4:5678" })).toBe(socket);
+  });
+});
+
+/**
+ * Addresses in prose, for a viewer who is not meant to see them.
+ *
+ * The library's warnings name clients in full because they were written for an operator's
+ * logs, and a dashboard that masks addresses shows those warnings as notices. So this has
+ * to find every address in free text — and, just as much, leave alone everything that
+ * only looks like one, since a notice mangled into nonsense is its own kind of failure.
+ */
+describe("masking the addresses in a piece of text", () => {
+  it("masks an address wherever a warning puts it", () => {
+    expect(maskAddresses('Actor "203.0.113.7" was forgotten at runtime.')).toBe('Actor "203.0.113.0/24" was forgotten at runtime.');
+    expect(maskAddresses('Actor "2001:db8::1" was labelled "office"')).toBe('Actor "2001:db8::/64" was labelled "office"');
+  });
+
+  it("keeps the full stop that ends the sentence", () => {
+    expect(maskAddresses("from 203.0.113.7.")).toBe("from 203.0.113.0/24.");
+  });
+
+  it("masks an address with a port and keeps the port", () => {
+    expect(maskAddresses("upstream 203.0.113.7:8080 refused")).toBe("upstream 203.0.113.0/24:8080 refused");
+  });
+
+  /** A CIDR in a warning is a line of somebody's configuration, not a visitor. */
+  it("leaves a configured range alone", () => {
+    expect(maskAddresses("trustedProxies 10.0.0.0/8 are configured")).toBe("trustedProxies 10.0.0.0/8 are configured");
+  });
+
+  it("leaves alone what only looks like an address", () => {
+    for (const text of [
+      "until 2026-09-11T12:00:00.000Z",
+      "Rule::x and cafe and deadbeef",
+      "version 1.2.3 of the thing",
+      "no addresses here at all",
+    ]) {
+      expect(maskAddresses(text), text).toBe(text);
+    }
   });
 });

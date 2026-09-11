@@ -3585,6 +3585,74 @@ describe("the Actors screen", () => {
     await page.close();
   });
 
+  /**
+   * A name reaches the requests already on screen.
+   *
+   * Given here from code, standing in for another operator on another dashboard: nothing
+   * on this page asked for it, so the only way it can arrive is the stats frame every
+   * open dashboard receives. The rows it changes were drawn before the name existed —
+   * that is the "retroactive" part — and a row belonging to anybody else must be left
+   * exactly as it was.
+   */
+  it("shows a name given elsewhere on the rows already in the feed", async () => {
+    const page = await open();
+    const named = "203.0.114.201";
+    const other = "203.0.114.202";
+    for (const ip of [named, other]) {
+      await handler.handle(createFacts({ method: "GET", url: `/retro/${ip}`, headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip }));
+    }
+    const rowOf = (ip: string) => page.locator("#rows tr.row", { hasText: `/retro/${ip}` });
+    await expect.poll(() => rowOf(named).count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    const otherBefore = await rowOf(other).first().evaluate((node) => node.outerHTML);
+
+    handler.labelActor(named, "retro office");
+
+    await expect.poll(() => rowOf(named).first().locator(".ua a").textContent(), { timeout: 15_000 }).toBe("retro office");
+    // The address is still there to be found: on hover, and in the row detail.
+    expect(await rowOf(named).first().locator(".ua a").getAttribute("title")).toContain(named);
+    // Nobody else's row was rebuilt, which is what keeps a selection alive on a busy feed.
+    expect(await rowOf(other).first().evaluate((node) => node.outerHTML)).toBe(otherBefore);
+
+    await rowOf(named).first().click();
+    await expect.poll(() => page.locator("tr.detail .label-note").textContent(), { timeout: 10_000 }).toContain("retro office");
+    expect(await page.locator("tr.detail .label-note").textContent()).toContain(named);
+
+    // And the drill-down puts the name beside the key.
+    await page.locator("tr.detail .tools button", { hasText: "Show this actor" }).click();
+    await expect.poll(() => page.locator("#actor-label").textContent(), { timeout: 10_000 }).toBe("retro office");
+    expect(await page.locator("#actor-key").textContent()).toBe(named);
+
+    // And the filter answers to the name.
+    await page.locator("#actor-close").click();
+    await page.locator("#search").fill('actor:$in("retro office")');
+    await expect.poll(async () => (await page.locator("#rows").textContent()) ?? "", { timeout: 10_000 }).toContain(`/retro/${named}`);
+    expect(await page.locator("#rows").textContent()).not.toContain(`/retro/${other}`);
+    await page.close();
+  });
+
+  /**
+   * The person who gives a name sees it at once, rather than on the next stats frame.
+   *
+   * The toast says "shown as X wherever it appears", and for the two seconds until the
+   * frame arrived that was untrue on the page that said it.
+   */
+  it("shows a name in the feed the moment it is saved", async () => {
+    const page = await open();
+    const ip = "203.0.114.203";
+    await handler.handle(createFacts({ method: "GET", url: "/instant-name", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip }));
+    const row = page.locator("#rows tr.row", { hasText: "/instant-name" }).first();
+    await expect.poll(() => row.count(), { timeout: 15_000 }).toBe(1);
+    await row.click();
+    await page.locator("tr.detail .tools button", { hasText: "Show this actor" }).click();
+    await page.locator('#actor-actions button:has-text("Label")').click();
+    await page.locator("#actor-actions .label-input").fill("named just now");
+    const saved = Date.now();
+    await page.locator("#actor-actions .label-save").click();
+    await expect.poll(() => row.locator(".ua a").textContent(), { timeout: 1_500 }).toBe("named just now");
+    expect(Date.now() - saved, "well inside one stats frame").toBeLessThan(1_500);
+    await page.close();
+  });
+
   it("abandons a label on Escape", async () => {
     await handler.handle(createFacts({ method: "GET", url: "/escape", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.81" }));
     const page = await open();

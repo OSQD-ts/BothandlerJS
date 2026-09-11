@@ -2,6 +2,7 @@ import { clear, el } from "./dom.js";
 import { BOOT } from "./boot.js";
 import { postJson } from "./api.js";
 import { toast } from "./app.js";
+import { state } from "./store.js";
 
 /**
  * The three things you can do to one client, rather than to a class of request.
@@ -84,7 +85,15 @@ function labelControl(key: string, current: string | undefined, after: AfterActi
       { key, action: "label", ...(trimmed === "" ? {} : { label: trimmed }) },
       trimmed === "" ? `Cleared the label on ${key}` : `Labelled ${key}`,
       trimmed === "" ? "It shows as its address again." : `Shown as "${trimmed}" wherever it appears.`,
-      after,
+      () => {
+        // Applied here as well as by the next stats frame, which is two seconds away. The
+        // toast says "shown as X wherever it appears", and for those two seconds it would
+        // otherwise be untrue on the very page that said it. The frame then confirms it,
+        // and is what carries the name to every other dashboard.
+        if (trimmed === "") state.labels.delete(key);
+        else state.labels.set(key, trimmed);
+        after();
+      },
     );
   };
 

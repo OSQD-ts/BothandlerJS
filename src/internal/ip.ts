@@ -381,3 +381,46 @@ export function networkKey(ip: string): string {
   masked.set(bytes.subarray(0, 8), 0);
   return `${formatIp(masked)}/64`;
 }
+
+/** A run of the characters an address is written in. Checked one run at a time. */
+const ADDRESS_RUN = /[0-9A-Fa-f:.]+/g;
+const WORD = /[\p{L}\p{N}_]/u;
+
+/**
+ * Masks every client address written in a piece of prose, the way {@link networkKey}
+ * masks an actor key.
+ *
+ * For text that was written for an operator and is then shown to a viewer who is not
+ * meant to see addresses — a runtime warning like `Actor "203.0.113.7" was forgotten`,
+ * displayed as a notice on a dashboard that masks every address in its feed. Those
+ * messages are free text, produced all over the library, so the addresses in them are
+ * found by shape and confirmed by {@link parseIp} rather than by knowing where each one
+ * was interpolated.
+ *
+ * Conservative in what it touches:
+ * - only a run standing on its own — `Rule::x` and a hex word are not addresses, and
+ *   neither is the time in `2026-09-11T12:00:00`;
+ * - not a CIDR such as `10.0.0.0/8`, which in a warning is a line of somebody's
+ *   configuration, not a visitor;
+ * - a sentence's full stop is not part of the address before it;
+ * - an IPv4 address with a port is masked with the port kept.
+ */
+export function maskAddresses(text: string): string {
+  return text.replace(ADDRESS_RUN, (run: string, offset: number, whole: string) => {
+    const before = offset === 0 ? "" : (whole[offset - 1] as string);
+    if (WORD.test(before)) return run;
+    const candidate = run.replace(/\.+$/, "");
+    const after = whole[offset + candidate.length] ?? "";
+    if (after === "/" || (after !== "" && WORD.test(after))) return run;
+    const trailing = run.slice(candidate.length);
+    if (parseIp(candidate) !== null) return `${networkKey(candidate)}${trailing}`;
+    // `203.0.113.7:8080`. The run contains a colon, so it was read as an IPv6 address and
+    // rejected — but the part before the last colon is a perfectly good IPv4 one.
+    const colon = candidate.lastIndexOf(":");
+    if (colon > 0 && /^\d+$/.test(candidate.slice(colon + 1))) {
+      const host = candidate.slice(0, colon);
+      if (!host.includes(":") && parseIp(host) !== null) return `${networkKey(host)}${candidate.slice(colon)}${trailing}`;
+    }
+    return run;
+  });
+}

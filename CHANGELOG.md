@@ -8,6 +8,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A named actor is shown by its name, everywhere, including in history.** Naming an actor
+  used to change one line of the Actors table, and only after that table was re-fetched.
+  The feed now shows the name in place of the address — on every row from that actor,
+  including the ones that arrived before it was named — with the address one hover away. The
+  row detail shows both; the drill-down puts the name beside the key; the Actors screen
+  reads the name from the same place.
+
+  The names travel on every stats frame, so a name given on one dashboard reaches every
+  other open one within a refresh; the person who gave it sees it at once. Only the rows of
+  the renamed actor are redrawn, so a selection somebody is making elsewhere in the feed
+  survives. Naming now emits `actor-change` with `action: "label"` like the other two
+  operations on an actor, and appears on the change timeline. The filter answers to names
+  as well as keys.
+
+
 - **A release can say its own version, in a commit footer.** `Release-As: 1.0.0` publishes
   exactly that; `Release-As: minor` forces a bump whatever the commits imply; and either
   will release a push that would otherwise publish nothing. The derived rules cover what
@@ -244,6 +259,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 ### Fixed
+
+- **`$in`, `$notin` and quoted values failed silently with any quote but `"`.** The
+  tokenizer knew straight double quotes and nothing else, so a value in single or curly
+  quotes — which is what smart punctuation produces when a filter is pasted from chat,
+  documentation or a Mac — was taken as literal characters. `actor:$notin(“203.0.113.4”)`
+  looked for an actor whose key began with a curly quote, found none, and excluded nothing.
+  Every kind of quote is a quote now, a single quote only where a value begins so `don't`
+  still searches for `don't`, and a comma inside a quoted set value no longer splits it.
+
+- **`actor:1.2.3.4` also matched `1.2.3.45`.** Actor keys were matched as substrings like
+  every other field, so excluding one client with `$notin` removed several that shared its
+  digits, and `$in` let them in. `actor` and `id` match a whole component at a time now,
+  which still leaves a network prefix and an address's tail findable.
+
+- **A dashboard that masks addresses showed them in its notices and on its change
+  timeline.** Forgetting, clearing or naming an actor logs a warning that names it in full,
+  and warnings are shown as notices; the change timeline named it in full too. Acting is
+  switched off on a masked listener, but being told about actions taken elsewhere was not,
+  so both undid the masking. Addresses in notices, change summaries and names are masked on
+  those listeners now, found by shape and confirmed by the address parser, with configured
+  ranges such as `10.0.0.0/8` left alone.
 
 - **A panel being typed into was rebuilt out from under whoever was typing.** Several
   panels are drawn by clearing them and building them again, which is fine for a list of

@@ -303,6 +303,100 @@ describe("the feed", () => {
     expect(entries[4]!.path).toBe("/p/19");
   });
 
+  /**
+   * Names travel with the counters, so every open dashboard learns them.
+   *
+   * Naming an actor used to reach only the page of whoever gave the name, and only after
+   * that page re-fetched the Actors list. Nothing announced it, so a second dashboard went
+   * on showing an address somebody had already recognised.
+   */
+  it("sends the names given to actors, and announces each one", async () => {
+    const { handler, base } = await serve();
+    await hit(handler);
+    const announced: Array<{ key: string; action: string; label?: string | undefined }> = [];
+    handler.on("actor-change", (change) => announced.push(change));
+
+    handler.labelActor("203.0.113.7", "the noisy one");
+    expect(announced).toEqual([expect.objectContaining({ key: "203.0.113.7", action: "label", label: "the noisy one" })]);
+    const stats = await json<{ labels?: Record<string, string> }>(await fetch(base + "/api/stats"));
+    expect(stats.labels).toEqual({ "203.0.113.7": "the noisy one" });
+
+    // And unnamed again, which is also a change somebody might want to know about.
+    handler.labelActor("203.0.113.7", undefined);
+    expect(announced.at(-1)).toMatchObject({ action: "label", label: undefined });
+    expect((await json<{ labels?: Record<string, string> }>(await fetch(base + "/api/stats"))).labels).toEqual({});
+  });
+
+  /**
+   * A name outlives nothing.
+   *
+   * The names are kept in a small index so a refresh need not walk every tracked actor, and
+   * that index can outlast what it points at. Forgetting an actor has to take its name
+   * with it — otherwise the page would go on naming a client the handler no longer knows.
+   */
+  it("drops the name of an actor that has been forgotten", async () => {
+    const { handler, base } = await serve();
+    await hit(handler);
+    handler.labelActor("203.0.113.7", "gone soon");
+    expect([...handler.actorLabels()]).toEqual([["203.0.113.7", "gone soon"]]);
+    handler.forgetActor("203.0.113.7");
+    expect([...handler.actorLabels()]).toEqual([]);
+    expect((await json<{ labels?: Record<string, string> }>(await fetch(base + "/api/stats"))).labels).toEqual({});
+  });
+
+  /**
+   * On a listener that hides addresses, the names must hide them too.
+   *
+   * A map from raw address to name is a list of raw addresses. So the keys are masked the
+   * way the feed masks actors — which also means a page can still look a name up by the
+   * key its own rows carry — and two actors sharing a network keep both names rather than
+   * one silently winning.
+   */
+  it("keys the names by the masked network on a listener that masks addresses", async () => {
+    const { handler, base } = await serve({ redact: { maskIp: true } });
+    for (const ip of ["203.0.113.7", "203.0.113.8"]) {
+      await handler.assess(createFacts({ method: "GET", url: "/", headers: { host: "shop.example", "user-agent": "curl/8.4.0" }, ip }));
+    }
+    handler.labelActor("203.0.113.7", "office");
+    handler.labelActor("203.0.113.8", "partner");
+    const body = await (await fetch(base + "/api/stats")).text();
+    const { labels } = JSON.parse(body) as { labels?: Record<string, string> };
+    expect(Object.keys(labels ?? {})).toEqual(["203.0.113.0/24"]);
+    expect((labels?.["203.0.113.0/24"] ?? "").split(", ").sort()).toEqual(["office", "partner"]);
+    expect(body, "no raw address anywhere in the frame").not.toMatch(/203\.0\.113\.[78]\b/);
+  });
+
+  /**
+   * The timeline of changes has the same obligation, and did not meet it.
+   *
+   * Acting is switched off on a masked listener, but being *told* about actions is not: an
+   * actor forgotten from another listener, or from code, put its full address on the
+   * timeline of a dashboard configured to show nobody's.
+   */
+  it("masks the actor on the change timeline too", async () => {
+    const { handler, base } = await serve({ redact: { maskIp: true } });
+    await hit(handler);
+    handler.labelActor("203.0.113.7", "office");
+    handler.clearActor("203.0.113.7", 60_000);
+    handler.forgetActor("203.0.113.7");
+    const body = await (await fetch(base + "/api/stats")).text();
+    const { changes } = JSON.parse(body) as { changes: Array<{ summary: string }> };
+    expect(changes.map((change) => change.summary)).toEqual([
+      '203.0.113.0/24 labelled "office"',
+      "203.0.113.0/24 cleared as human",
+      "203.0.113.0/24 forgotten",
+    ]);
+    expect(body).not.toMatch(/203\.0\.113\.7\b/);
+  });
+
+  it("sends no names when the actors section is switched off", async () => {
+    const { handler, base } = await serve({ sections: { actors: false } });
+    await hit(handler);
+    handler.labelActor("203.0.113.7", "hidden");
+    const stats = await json<{ labels?: Record<string, string> }>(await fetch(base + "/api/stats"));
+    expect(stats.labels).toBeUndefined();
+  });
+
   it("masks addresses when asked, and shows them when not", async () => {
     const { handler, base } = await serve({ redact: { maskIp: true } });
     await hit(handler);

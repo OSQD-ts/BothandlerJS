@@ -20,6 +20,15 @@ narrowing means — and `$or`, `$not` and set membership are there for when it i
 Negation is `-` or `!`, and works on any term. Quoting keeps spaces together, which is the
 only way to search for a phrase.
 
+**Any quote works** — `"…"`, `'…'`, and the curly `“…”` and `‘…’` that smart punctuation
+produces when a filter is pasted from chat, documentation or anything on a Mac. Only straight
+double quotes used to, and the rest were taken as literal characters: `actor:$notin(“203.0.113.4”)`
+looked for an actor whose key began with a curly quote, found none, and excluded nothing —
+with no sign anything was wrong. A single quote counts only where a value begins, so the
+apostrophe in `don't` is still an apostrophe.
+
+Inside a set, a comma separates values only outside quotes: `$in("a,b", c)` is two values.
+
 ## Operators
 
 | Form | Means |
@@ -56,7 +65,7 @@ colon and so can a User-Agent — so `foo:bar` searches for the text `foo:bar`.
 | Field | Also | Matches against |
 | --- | --- | --- |
 | `path` | `url` | the request path |
-| `actor` | `ip` | the actor key, usually the address |
+| `actor` | `ip` | the actor key, usually the address — or the name an operator gave it |
 | `ua` | `useragent`, `agent` | the User-Agent string |
 | `verdict` | | `confirmed-bot`, `verified-bot`, `suspected-bot`, `human`, `unknown` |
 | `class` | `botclass` | `scanner`, `scraper`, `impersonator`, `http-client`, `automation`, … |
@@ -70,6 +79,31 @@ colon and so can a User-Agent — so `foo:bar` searches for the text `foo:bar`.
 | `bypass` | | why detection was skipped, when it was |
 | `id` | `request` | the request id |
 | `score` | | 0–100. Takes `>` and `<` as well as `=` |
+
+### How an actor matches
+
+**A whole component at a time.** Most fields match as a substring, and that is right for
+them — `path:/api` is a prefix search people rely on, and a User-Agent is prose. It is wrong
+for an address: `actor:1.2.3.4` used to match `1.2.3.40` to `1.2.3.49` and `11.2.3.4` as
+well, so `$notin` removed several clients to exclude one and `$in` let in the neighbours.
+A value now has to start and end on a boundary between runs of letters and digits:
+
+| Query | Matches `1.2.3.4` | `1.2.3.45` | `11.2.3.4` | `1.2.3.0/24` |
+| --- | :-: | :-: | :-: | :-: |
+| `actor:1.2.3.4` | ✓ | | | |
+| `actor:1.2.3` | ✓ | ✓ | | ✓ |
+| `actor:3.45` | | ✓ | | |
+
+So a network prefix still finds the whole network, and an address can still be found by its
+tail. `id:` matches the same way.
+
+**By its name, too.** Once somebody has named an actor, `actor:` answers to either — the key
+or any part of the name — and so does a bare word. The name is looked up at the moment the
+filter runs, so it reaches requests that arrived before the name was given.
+
+**On a listener that masks addresses**, every actor is a network — `203.0.113.0/24` — because
+that is all the feed was sent. A full address typed into the filter matches nothing there,
+because the page never had it; filter by the network instead.
 
 `score` is the only numeric field. `score:>70`, `score:<20` and `score:60` all work;
 everything else matches a substring, case-insensitively.

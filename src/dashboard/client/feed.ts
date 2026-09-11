@@ -1,5 +1,5 @@
 import { $, byId, clear, cssEscape, el, rootNode } from "./dom.js";
-import { feedPage, goToFeedPage, ingest, matchingCount, matchingRows, resetPaging, setSearch, setTimeframe, sortRows, state } from "./store.js";
+import { feedPage, goToFeedPage, ingest, labelOf, matchingCount, matchingRows, resetPaging, setSearch, setTimeframe, sortRows, state } from "./store.js";
 import { deleteFilter, saveFilter, savedFilters } from "./saved.js";
 import { suggestFor } from "./query.js";
 import { getJson } from "./api.js";
@@ -31,6 +31,15 @@ interface Rendered {
   detail: HTMLTableRowElement | undefined;
   rev: number;
   open: boolean;
+  /**
+   * The actor's name when this row was drawn.
+   *
+   * Part of what decides whether a row is stale, because a name is given after the fact
+   * and naming an actor has to reach the rows already on screen. Only the rows of the
+   * actor that was renamed are rebuilt; every other row keeps its node, and with it any
+   * text somebody is in the middle of selecting.
+   */
+  label: string | undefined;
 }
 
 const rendered = new Map<string, Rendered>();
@@ -432,13 +441,15 @@ export function drawFeed(): void {
   for (const row of shown) {
     const id = row.entry.requestId;
     const open = state.open.has(id);
+    const label = labelOf(row.entry.actor);
     let cached = rendered.get(id);
-    if (cached === undefined || cached.rev !== row.rev || cached.open !== open) {
+    if (cached === undefined || cached.rev !== row.rev || cached.open !== open || cached.label !== label) {
       cached = {
         row: buildRow(row.entry, open),
         detail: open ? buildDetail(row.entry) : undefined,
         rev: row.rev,
         open,
+        label,
       };
       rendered.set(id, cached);
     }
@@ -511,10 +522,16 @@ function buildRow(entry: DashboardEntry, open: boolean): HTMLTableRowElement {
   toggle.dataset["request"] = entry.requestId;
   request.appendChild(toggle);
   const ua = el("span", "ua");
+  // The name instead of the address, when somebody has given it one. Recognising a client
+  // is the whole reason for naming it, and an address in its place makes the reader do
+  // the recognising again on every row. The address stays one hover away, and in the row
+  // detail, because it is still the thing a rule or an allowlist is written against.
+  const label = labelOf(entry.actor);
+  const who = label ?? entry.actor;
   if (SECTIONS.actors) {
-    const actorLink = el("a", null, entry.actor);
+    const actorLink = el("a", label === undefined ? null : "labelled", who);
     actorLink.href = "#actor";
-    actorLink.title = "Show everything from this actor";
+    actorLink.title = label === undefined ? "Show everything from this actor" : `${label} — ${entry.actor}. Show everything from this actor`;
     actorLink.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -523,9 +540,9 @@ function buildRow(entry: DashboardEntry, open: boolean): HTMLTableRowElement {
     ua.appendChild(actorLink);
     ua.appendChild(document.createTextNode(` · ${entry.userAgent}`));
   } else {
-    ua.appendChild(document.createTextNode(`${entry.actor} · ${entry.userAgent}`));
+    ua.appendChild(document.createTextNode(`${who} · ${entry.userAgent}`));
   }
-  ua.title = `${entry.actor} · ${entry.userAgent}`;
+  ua.title = label === undefined ? `${entry.actor} · ${entry.userAgent}` : `${label} (${entry.actor}) · ${entry.userAgent}`;
   request.appendChild(ua);
   tr.appendChild(request);
 
@@ -690,7 +707,18 @@ function buildDetail(entry: DashboardEntry): HTMLTableRowElement {
 
   const foot = el("div", "detail-foot");
   foot.appendChild(el("span", null, clockTime(entry.at)));
-  foot.appendChild(el("span", null, `actor ${entry.actor}`));
+  // Both, here. The row above shows the name; this is where somebody comes to find out
+  // what the name stands for, and which key a rule would have to name to reach it.
+  const named = labelOf(entry.actor);
+  if (named === undefined) foot.appendChild(el("span", null, `actor ${entry.actor}`));
+  else {
+    const tag = el("span", "label-note");
+    tag.appendChild(document.createTextNode("actor "));
+    tag.appendChild(el("b", null, named));
+    tag.appendChild(document.createTextNode(` · ${entry.actor}`));
+    tag.title = "A name an operator gave this actor. It is a note for people reading the dashboard; detection never reads it.";
+    foot.appendChild(tag);
+  }
   if (entry.rule !== undefined) foot.appendChild(el("span", null, `rule “${entry.rule}”`));
   foot.appendChild(el("span", null, `assessed in ${entry.durationMs.toFixed(3)}ms`));
   foot.appendChild(el("span", "mono", entry.requestId));

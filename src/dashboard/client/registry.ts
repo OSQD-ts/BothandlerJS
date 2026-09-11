@@ -4,7 +4,7 @@ import { actorActions, isConfirming } from "./actions.js";
 import { app } from "./app.js";
 import { clockStamp, n } from "./format.js";
 import { getJson } from "./api.js";
-import { matchingRows, setSearch, state } from "./store.js";
+import { labelOf, matchingRows, setSearch, state } from "./store.js";
 import { renderPager } from "./pager.js";
 import type { ActorRow } from "./types.js";
 
@@ -143,9 +143,10 @@ export function feedActors(): ActorRow[] {
     seen.stats = entry.actorStats ?? seen.stats;
   }
 
-  // A feed entry does not carry the actor's label, so it is taken from the registry list
-  // when that actor happens to be on it. Better a name where one is known than none.
-  const labels = new Map(state.actors.filter((actor) => actor.label !== undefined).map((actor) => [actor.key, actor.label as string]));
+  // A feed entry does not carry the actor's label, so it comes from the names every stats
+  // frame delivers — complete, unlike the registry list, which is paged and so knew a name
+  // only for actors that happened to be on the page last fetched.
+  const labels = state.labels;
   const out: ActorRow[] = [];
   for (const [key, seen] of byKey) {
     const label = labels.get(key);
@@ -227,9 +228,12 @@ export function drawActors(): void {
     // The label first when there is one, with the key beneath it: somebody who named this
     // actor did so because the key was not the useful part.
     const who = el("td", "who");
-    if (actor.label === undefined) who.textContent = actor.key;
+    // The page's own names first: they arrive complete on every stats frame, and they
+    // reflect a name given a moment ago rather than the one this list was fetched with.
+    const name = labelOf(actor.key) ?? actor.label;
+    if (name === undefined) who.textContent = actor.key;
     else {
-      who.appendChild(el("div", "label", actor.label));
+      who.appendChild(el("div", "label", name));
       who.appendChild(el("div", "sub", actor.key));
     }
     row.appendChild(who);
@@ -273,7 +277,7 @@ export function drawActors(): void {
       app.syncUrl();
     });
     actions.appendChild(inFeed);
-    for (const button of actorActions(actor.key, () => void loadActors(), actor.label)) actions.appendChild(button);
+    for (const button of actorActions(actor.key, () => void loadActors(), labelOf(actor.key) ?? actor.label)) actions.appendChild(button);
     row.appendChild(actions);
 
     body.appendChild(row);

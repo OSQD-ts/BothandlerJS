@@ -166,7 +166,12 @@ type Token = { kind: "word"; text: string } | { kind: "open" } | { kind: "close"
 function tokenize(input: string): Token[] {
   const tokens: Token[] = [];
   let current = "";
-  let quoted = false;
+  // Which quote opened the run we are in, if any. Closed only by the same character, so a
+  // single quote inside a double-quoted phrase is just a character.
+  let quote: '"' | "'" | undefined;
+  // The same, but inside a `$in(...)` set, where quotes are kept for `splitSet` to read
+  // and a bracket inside one must not be taken as the end of the set.
+  let setQuote: '"' | "'" | undefined;
   let depth = 0;
 
   const flush = (): void => {
@@ -179,22 +184,38 @@ function tokenize(input: string): Token[] {
 
   for (let i = 0; i < input.length; i++) {
     const character = input[i] as string;
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (quoted) {
-      current += character;
-      continue;
-    }
-    // Inside a `$in(...)` list every character belongs to the word, brackets included.
+    // Inside a `$in(...)` list every character belongs to the word, brackets and quotes
+    // included. The quotes used to be stripped here like everywhere else, which threw
+    // away the only thing that says where a value ends: `$notin("a,b")` became `a,b` and
+    // was split into two values. They are kept now, and `splitSet` reads them.
     if (depth > 0) {
       current += character;
-      if (character === "(") depth++;
+      if (setQuote !== undefined) {
+        if (character === setQuote) setQuote = undefined;
+      } else if (character === '"' || character === "'") {
+        setQuote = character;
+      } else if (character === "(") depth++;
       else if (character === ")") {
         depth--;
         if (depth === 0) flush();
       }
+      continue;
+    }
+    if (quote !== undefined) {
+      if (character === quote) quote = undefined;
+      else current += character;
+      continue;
+    }
+    if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    // A single quote is a quote only where a value begins — at the start of a word or
+    // straight after a field's colon. Anywhere else it is an apostrophe: `don't` and
+    // `o'reilly` are words people search for, and treating their apostrophe as the start
+    // of a phrase would swallow the rest of the query.
+    if (character === "'" && (current === "" || current === "-" || current === "!" || current.endsWith(":"))) {
+      quote = "'";
       continue;
     }
     if (character === "(") {
@@ -223,6 +244,49 @@ function tokenize(input: string): Token[] {
   return tokens;
 }
 
+/** A value wrapped in a matching pair of quotes, without them. Anything else, untouched. */
+function unquote(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length < 2) return trimmed;
+  const first = trimmed[0];
+  return (first === '"' || first === "'") && trimmed.endsWith(first) ? trimmed.slice(1, -1) : trimmed;
+}
+
+/**
+ * The values of a `$in(...)` set, honouring quotes.
+ *
+ * A comma separates values only outside quotes, so `$notin("a,b", c)` is two values and
+ * not three. A value is quoted only if its quote opens it — an apostrophe in the middle of
+ * one is a character — and a quote left open is the normal state of a box somebody is
+ * still typing into, so it runs to the end rather than being refused.
+ */
+function splitSet(inside: string): string[] {
+  const values: string[] = [];
+  let at = 0;
+  while (at < inside.length) {
+    while (at < inside.length && /\s/.test(inside[at] as string)) at++;
+    if (at >= inside.length) break;
+    const open = inside[at];
+    let value: string;
+    if (open === '"' || open === "'") {
+      const close = inside.indexOf(open, at + 1);
+      value = close === -1 ? inside.slice(at + 1) : inside.slice(at + 1, close);
+      at = close === -1 ? inside.length : close + 1;
+      // Anything between a closing quote and the next comma is not part of any value.
+      const comma = inside.indexOf(",", at);
+      at = comma === -1 ? inside.length : comma + 1;
+    } else {
+      const comma = inside.indexOf(",", at);
+      const end = comma === -1 ? inside.length : comma;
+      value = inside.slice(at, end);
+      at = end + 1;
+    }
+    const cleaned = value.trim().toLowerCase();
+    if (cleaned !== "") values.push(cleaned);
+  }
+  return values;
+}
+
 /** Turns one word into a leaf. Returns `undefined` for a word with nothing in it. */
 function toTerm(word: string): Term | undefined {
   const negated = word.startsWith("-") || word.startsWith("!");
@@ -243,17 +307,14 @@ function toTerm(word: string): Term | undefined {
   const set = /^\$(in|notin)\(([\s\S]*)$/i.exec(rest);
   if (set !== null) {
     const inside = (set[2] as string).endsWith(")") ? (set[2] as string).slice(0, -1) : (set[2] as string);
-    const values = inside
-      .split(",")
-      .map((entry) => entry.trim().toLowerCase())
-      .filter((entry) => entry !== "");
+    const values = splitSet(inside);
     // An empty set matches nothing rather than everything: `$in()` is half-typed, and
     // a filter that widens while somebody is still typing it is a filter that lies.
     const inverted = (set[1] as string).toLowerCase() === "notin";
     return { field, value: values[0] ?? "", negated: negated !== inverted, values };
   }
 
-  let value = rest.toLowerCase();
+  let value = unquote(rest).toLowerCase();
   let compare: Term["compare"];
   if (NUMERIC.has(field)) {
     compare = value.startsWith(">") ? ">" : value.startsWith("<") ? "<" : "=";
@@ -353,9 +414,25 @@ function parseTokens(tokens: readonly Token[]): Filter {
  */
 const MAX_QUERY_CHARS = 8192;
 
+/**
+ * Typographic quotes, and the plain ones they stand for.
+ *
+ * Nobody types a curly quote into a filter meaning a curly quote. They arrive by paste —
+ * from chat, from documentation, from anything with smart punctuation turned on, which on
+ * a Mac is the default — and until this they were taken as literal characters. So
+ * `actor:$notin(“203.0.113.4”)` looked for an actor whose key began with a curly quote,
+ * found none, and excluded nothing, with no sign anything was wrong: the query was valid,
+ * it simply asked for something that never exists.
+ */
+const TYPOGRAPHIC_QUOTES = /[\u201c\u201d\u201e\u201f\u2033\u2036]|[\u2018\u2019\u201a\u201b\u2032\u2035]/g;
+
+function plainQuotes(input: string): string {
+  return input.replace(TYPOGRAPHIC_QUOTES, (quote) => ("\u201c\u201d\u201e\u201f\u2033\u2036".includes(quote) ? '"' : "'"));
+}
+
 /** Parses a query. An empty or unparseable one matches everything. */
 export function parseFilter(input: string): Filter {
-  const trimmed = input.trim();
+  const trimmed = plainQuotes(input.trim());
   return parseTokens(tokenize(trimmed.length > MAX_QUERY_CHARS ? trimmed.slice(0, MAX_QUERY_CHARS) : trimmed));
 }
 
@@ -412,14 +489,62 @@ function fieldValue(entry: DashboardEntry, field: string): string {
   }
 }
 
-function matchesTerm(term: Term, entry: DashboardEntry, haystack: string): boolean {
-  if (term.field === undefined) return haystack.includes(term.value);
+/**
+ * Fields whose values are identifiers, matched a whole component at a time.
+ *
+ * Everything else is matched as a substring, and that is right for most of them —
+ * `path:/api` is a prefix search people rely on, and a User-Agent is prose. It is wrong
+ * for an address. `actor:1.2.3.4` also matched `1.2.3.40` through `1.2.3.49` and
+ * `11.2.3.4`, so excluding one client with `$notin` silently removed a handful of others
+ * that happened to share its digits, and `$in` quietly let them in.
+ *
+ * A component is a run of letters and digits; the value has to start and end on a
+ * boundary between runs. So `203.0.113` still finds the whole of that /24 — the next
+ * character is a dot — and `113.5` still finds `203.0.113.5` by its tail, but `1.2.3.4`
+ * no longer finds anything that is not `1.2.3.4`.
+ */
+const IDENTIFIERS = new Set(["actor", "requestId"]);
+
+const ALPHANUMERIC = /[\p{L}\p{N}]/u;
+
+function matchesIdentifier(actual: string, wanted: string): boolean {
+  if (wanted === "") return false;
+  let from = 0;
+  for (;;) {
+    const at = actual.indexOf(wanted, from);
+    if (at === -1) return false;
+    const before = at === 0 ? "" : (actual[at - 1] as string);
+    const after = at + wanted.length >= actual.length ? "" : (actual[at + wanted.length] as string);
+    // A boundary on the side of the value that is itself alphanumeric. A value that
+    // already ends on a separator — `203.0.113.` — has chosen its own boundary.
+    const startsClean = before === "" || !ALPHANUMERIC.test(before) || !ALPHANUMERIC.test(wanted[0] as string);
+    const endsClean = after === "" || !ALPHANUMERIC.test(after) || !ALPHANUMERIC.test(wanted[wanted.length - 1] as string);
+    if (startsClean && endsClean) return true;
+    from = at + 1;
+  }
+}
+
+/**
+ * Whether one wanted value is satisfied by this entry's field.
+ *
+ * `label` is the actor's name, when it has one. `actor:` answers to either the key or the
+ * name, because a client somebody has named is a client they will go on to search for by
+ * that name — and searching for it by key after naming it was the only thing that worked.
+ */
+function fieldMatches(entry: DashboardEntry, field: string, wanted: string, label: string | undefined): boolean {
+  const actual = fieldValue(entry, field).toLowerCase();
+  if (IDENTIFIERS.has(field) ? matchesIdentifier(actual, wanted) : actual.includes(wanted)) return true;
+  return field === "actor" && label !== undefined && label.toLowerCase().includes(wanted);
+}
+
+function matchesTerm(term: Term, entry: DashboardEntry, haystack: string, label: string | undefined): boolean {
+  if (term.field === undefined) return haystack.includes(term.value) || (label !== undefined && label.toLowerCase().includes(term.value));
   if (term.values !== undefined) {
-    // The set form. Membership is the same substring test one value would get, so
+    // The set form. Membership is the same test one value would get, so
     // `action:$in(block, drop)` reads exactly like two `action:` terms under `$or`.
     if (term.values.length === 0) return false;
-    const actual = fieldValue(entry, term.field).toLowerCase();
-    return term.values.some((value) => actual.includes(value));
+    const field = term.field;
+    return term.values.some((value) => fieldMatches(entry, field, value, label));
   }
   if (term.field === "score") {
     const wanted = Number(term.value);
@@ -428,22 +553,28 @@ function matchesTerm(term: Term, entry: DashboardEntry, haystack: string): boole
     if (term.compare === "<") return entry.score < wanted;
     return entry.score === wanted;
   }
-  return fieldValue(entry, term.field).toLowerCase().includes(term.value);
+  return fieldMatches(entry, term.field, term.value, label);
 }
 
-/** True when the query is satisfied. An empty one matches everything. */
-export function matches(filter: Filter, entry: DashboardEntry, haystack: string): boolean {
+/**
+ * True when the query is satisfied. An empty one matches everything.
+ *
+ * `label` is the name an operator gave this entry's actor, if any. It is passed in rather
+ * than read off the entry because names are given after the fact — to requests already in
+ * the feed — and a lookup at match time is what makes that retroactive.
+ */
+export function matches(filter: Filter, entry: DashboardEntry, haystack: string, label?: string): boolean {
   switch (filter.kind) {
     case "all":
       return true;
     case "term":
-      return matchesTerm(filter.term, entry, haystack) !== filter.term.negated;
+      return matchesTerm(filter.term, entry, haystack, label) !== filter.term.negated;
     case "not":
-      return !matches(filter.of, entry, haystack);
+      return !matches(filter.of, entry, haystack, label);
     case "and":
-      return filter.parts.every((part) => matches(part, entry, haystack));
+      return filter.parts.every((part) => matches(part, entry, haystack, label));
     case "or":
-      return filter.parts.some((part) => matches(part, entry, haystack));
+      return filter.parts.some((part) => matches(part, entry, haystack, label));
   }
 }
 
