@@ -128,7 +128,7 @@ export class Metrics {
   readonly perDetectorTiming: boolean;
 
   private requests = 0;
-  private readonly bypassed: Record<BypassReason, number> = { allowlist: 0, "ignored-path": 0 };
+  private readonly bypassed: Record<BypassReason, number> = { allowlist: 0, "ignored-path": 0, label: 0 };
   private readonly verdicts = zeroed(VERDICTS);
   private readonly botClasses = zeroed(BOT_CLASSES);
   private readonly actions = zeroed(ACTIONS);

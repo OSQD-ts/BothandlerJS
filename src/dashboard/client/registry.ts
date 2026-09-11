@@ -235,6 +235,12 @@ export function drawActors(): void {
     else {
       who.appendChild(el("div", "label", name));
       who.appendChild(el("div", "sub", actor.key));
+      // What the label switches, said where the name is. An actor that is hidden from the
+      // feed or not analysed at all looks exactly like any other row here otherwise, and
+      // this is the screen somebody comes to when they are wondering where it went.
+      const switches = state.labelSwitches.get(actor.key);
+      const tags = [switches?.hide === true ? "hidden from feed" : "", switches?.skip === true ? "not analysed" : ""].filter((tag) => tag !== "");
+      if (tags.length > 0) who.appendChild(el("div", "tagline", tags.join(" · ")));
     }
     row.appendChild(who);
     row.appendChild(el("td", "num tnum", n(actor.requests)));

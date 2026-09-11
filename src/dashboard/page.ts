@@ -345,6 +345,12 @@ button.tile:hover { border-color: var(--focus); }
 /* Saved filters: a list of small removable things. Quiet, because it is not what
    somebody came to the page to look at. */
 .saved { display: flex; align-items: center; gap: 6px; }
+/* Scoped under .saved as well as qualified with the element name. input[type="text"]
+   { width: 100% } has the same specificity as input.saved-name and comes later in this
+   sheet, so it won the tie and the box filled the bar. A selector that outranks it wins
+   wherever the two happen to sit. */
+.saved input.saved-name { width: 18ch; flex: 0 0 auto; font: inherit; font-size: 12px; padding: 4px 8px; }
+.saved-confirm { border-color: var(--accent); color: var(--accent); }
 /* Two open-ended bounds rather than a list of durations: "from the incident until now",
    "everything up to when it stopped" and "between these two moments" are the same control
    with one end left empty. */
@@ -835,7 +841,11 @@ input::placeholder { color: color-mix(in srgb, var(--muted) 80%, transparent); }
 .acts.editing > :not(.label-edit), .bar-actions.editing > :not(.label-edit) { display: none; }
 /* inline-flex rather than inline-block: the row is three fixed-size controls and a flex
    line is the layout that cannot spill them past its own edge. */
-.label-edit { display: inline-flex; align-items: center; gap: 4px; }
+.label-edit { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.label-line { display: inline-flex; align-items: center; gap: 4px; }
+.label-options { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 11px; color: var(--muted); max-width: 32ch; white-space: normal; }
+.label-option { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+.label-warn { flex-basis: 100%; color: var(--ink-2); }
 .label-edit button { flex: 0 0 auto; }
 #actor-rows td.acts .label-save, #actor-actions .label-save { border-color: var(--accent); color: var(--accent); }
 /* Qualified with the element name on purpose: input[type="text"] { width: 100% } above
@@ -962,7 +972,7 @@ export const DASHBOARD_MARKUP = String.raw`
 
     <div class="two">
       <section class="panel feed-panel">
-        <h2>Requests <span class="sub" id="feed-count"></span><span class="sub win" id="feed-window"></span><span class="sub warn-text" id="feed-skipped" hidden></span><button class="sub load-skipped" id="feed-load-skipped" type="button" hidden>Load them</button></h2>
+        <h2>Requests <span class="sub" id="feed-count"></span><span class="sub win" id="feed-window"></span><span class="sub warn-text" id="feed-skipped" hidden></span><button class="sub load-skipped" id="feed-load-skipped" type="button" hidden>Load them</button><span class="sub" id="feed-hidden" hidden></span><button class="sub load-skipped" id="feed-show-hidden" type="button" aria-pressed="false" hidden>Show</button></h2>
         <div class="toolbar">
           <div class="filters" id="filters"></div>
           <div class="search">

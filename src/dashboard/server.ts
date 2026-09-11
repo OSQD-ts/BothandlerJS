@@ -13,6 +13,7 @@ import type { Socket } from "node:net";
 import type { BotHandler } from "../core.js";
 import { createFacts } from "../facts.js";
 import { maskAddresses, networkKey } from "../internal/ip.js";
+import { SavedFilterStore, cleanSavedFilter } from "./saved-filters.js";
 import { parseRequest } from "./parse-request.js";
 import type {
   DashboardAuth,
@@ -180,6 +181,7 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
   const throttle = createAuthThrottle(options.authThrottle, handler);
   const notices = new DashboardNotices(handler, undefined, { maskIp });
   const changes = new DashboardChanges(handler, undefined, { maskIp });
+  const saved = new SavedFilterStore(options.savedFilters?.file, (message) => handler.warn(message));
   const instance = options.instance ?? hostname();
   const pageOptions = {
     title: options.title ?? "bothandlerjs",
@@ -357,6 +359,42 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
         return send(response, 200, "application/json; charset=utf-8", bootstrap);
       case "/api/stats":
         return send(response, 200, "application/json; charset=utf-8", JSON.stringify(snapshot()));
+      case "/api/filters": {
+        // Part of the feed, so it goes with the feed. Not behind a `controls` flag: a saved
+        // filter changes what one screen shows and nothing about what happens to anybody's
+        // requests, and the unsafe-method check above already keeps other pages out.
+        if (!sections.feed) return sectionOff(response, "feed");
+        if (request.method === "GET" || request.method === "HEAD") {
+          send(response, 200, "application/json; charset=utf-8", JSON.stringify({ filters: saved.list() }));
+          return;
+        }
+        if (request.method !== "POST") {
+          sendError(response, 405, "Use GET or POST.");
+          return;
+        }
+        const body = await readJson(request);
+        if ("error" in body) {
+          send(response, 400, "application/json; charset=utf-8", JSON.stringify({ error: body.error }));
+          return;
+        }
+        const payload = body.value as { action?: unknown; name?: unknown } | null;
+        if (payload?.action === "delete") {
+          if (typeof payload.name !== "string") {
+            sendError(response, 400, "Expected `name` naming the filter to delete.");
+            return;
+          }
+          saved.delete(payload.name);
+        } else {
+          const entry = cleanSavedFilter(payload);
+          if (entry === undefined) {
+            sendError(response, 400, "Expected a filter with a `name` and a `query`.");
+            return;
+          }
+          saved.save(entry);
+        }
+        send(response, 200, "application/json; charset=utf-8", JSON.stringify({ filters: saved.list() }));
+        return;
+      }
       case "/api/feed":
         if (!sections.feed) return sectionOff(response, "feed");
         // `skipped` travels with the backlog on purpose. The page uses it to work out how
@@ -438,7 +476,7 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
           send(response, 400, "application/json; charset=utf-8", JSON.stringify({ error: body.error }));
           return;
         }
-        const payload = body.value as { key?: unknown; action?: unknown; forMs?: unknown; label?: unknown } | null;
+        const payload = body.value as { key?: unknown; action?: unknown; forMs?: unknown; label?: unknown; hideFromFeed?: unknown; skipAnalysis?: unknown } | null;
         const key = typeof payload?.key === "string" ? payload.key.slice(0, 200) : "";
         const action = payload?.action;
         if (key === "") {
@@ -451,10 +489,17 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
           const forMs = typeof payload?.forMs === "number" && Number.isFinite(payload.forMs) ? Math.min(24 * 60 * 60_000, Math.max(0, payload.forMs)) : DEFAULT_CLEARANCE_MS;
           handler.clearActor(key, forMs, { by });
         } else if (action === "label") {
-          // A label is a note for whoever reads this next, and nothing in detection reads
-          // it — so it is gated with the other actor controls but cannot change a verdict.
+          // The name is a note, and nothing in detection reads it. The two switches are not
+          // notes: one hides the actor from the feed and the other stops it being analysed
+          // at all. They sit behind the same gate as allowlisting, which is the right one —
+          // switching analysis off for an actor is allowlisting it by another name. Strict
+          // booleans, so a stray string cannot switch anything.
           const label = typeof payload?.label === "string" ? payload.label : undefined;
-          handler.labelActor(key, label, { by });
+          handler.labelActor(
+            key,
+            label === undefined ? undefined : { name: label, hideFromFeed: payload?.hideFromFeed === true, skipAnalysis: payload?.skipAnalysis === true },
+            { by },
+          );
         } else {
           sendError(response, 400, 'Expected `action` to be "forget", "clear" or "label".');
           return;
@@ -596,6 +641,23 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
     }
   }
 
+  /**
+   * Which labelled actors carry a switch. See `DashboardSnapshot.labelSwitches`.
+   *
+   * Not sent on a listener that masks addresses. There the feed keys every actor by its
+   * network, so hiding by label would hide the whole /24 — including everybody in it who
+   * was never labelled. Showing too much is the safe way to be wrong about traffic, so a
+   * masked dashboard shows everything and says so.
+   */
+  function labelSwitchesForViewer(): Record<string, { hide?: true; skip?: true }> {
+    const out: Record<string, { hide?: true; skip?: true }> = Object.create(null) as Record<string, { hide?: true; skip?: true }>;
+    for (const [key, entry] of handler.actorLabelEntries()) {
+      if (entry.hideFromFeed !== true && entry.skipAnalysis !== true) continue;
+      out[key] = { ...(entry.hideFromFeed === true ? { hide: true as const } : {}), ...(entry.skipAnalysis === true ? { skip: true as const } : {}) };
+    }
+    return out;
+  }
+
   /** Names, keyed the way this listener keys actors. See `DashboardSnapshot.labels`. */
   function labelsForViewer(): Record<string, string> {
     const out: Record<string, string> = Object.create(null) as Record<string, string>;
@@ -640,6 +702,7 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
       changes: sections.changes ? changes.list() : [],
       skipped: feed.skipped,
       ...(sections.actors ? { labels: labelsForViewer() } : {}),
+      ...(sections.actors && !maskIp ? { labelSwitches: labelSwitchesForViewer() } : {}),
       ...(handler.audit !== undefined && sections.audit
         ? { audit: { ...handler.audit.summary(), checks: handler.audit.checks.map((check) => ({ id: check.id, description: check.description })) } }
         : {}),

@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createServer, request as httpRequest } from "node:http";
 import { connect } from "node:net";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { BotHandler, ConfigError, ManualClock, createDashboardHandler, createFacts } from "../src/index.js";
 import { CHROME_HEADERS } from "./helpers.js";
 import type { DashboardOptions, DashboardServer } from "../src/index.js";
@@ -1519,6 +1522,43 @@ describe("acting on an actor", () => {
     expect(handler.registry.peek("203.0.113.7")).toBeUndefined();
   });
 
+  /**
+   * A label's switches, set from the dashboard.
+   *
+   * Behind the same control as allowlisting — switching analysis off for an actor is
+   * allowlisting it by another name — and read as strict booleans, so a stray string in a
+   * request body cannot switch anything on.
+   */
+  it("labels with switches, and sends them back on the stats frame", async () => {
+    const { handler, base } = await serve({ controls: { editRanges: true } });
+    await hit(handler);
+    const result = await post(base + "/api/actor", { key: "203.0.113.7", action: "label", label: "uptime", hideFromFeed: true, skipAnalysis: true });
+    expect(result.status).toBe(200);
+    expect(handler.actorLabelEntries().get("203.0.113.7")).toEqual({ name: "uptime", hideFromFeed: true, skipAnalysis: true });
+
+    const stats = await json<{ labels?: Record<string, string>; labelSwitches?: Record<string, unknown> }>(await fetch(base + "/api/stats"));
+    expect(stats.labels).toEqual({ "203.0.113.7": "uptime" });
+    expect(stats.labelSwitches).toEqual({ "203.0.113.7": { hide: true, skip: true } });
+
+    // Truthy is not true.
+    await post(base + "/api/actor", { key: "203.0.113.7", action: "label", label: "uptime", hideFromFeed: "yes", skipAnalysis: 1 });
+    expect(handler.actorLabelEntries().get("203.0.113.7")).toEqual({ name: "uptime" });
+  });
+
+  /**
+   * A masked listener keys every actor by its network, so hiding one by label would hide
+   * everybody sharing it — including people nobody labelled. It gets no switches, and so
+   * shows everything.
+   */
+  it("sends no switches to a listener that masks addresses", async () => {
+    const { handler, base } = await serve({ redact: { maskIp: true } });
+    await hit(handler);
+    handler.labelActor("203.0.113.7", { name: "hidden", hideFromFeed: true });
+    const stats = await json<{ labels?: Record<string, string>; labelSwitches?: unknown }>(await fetch(base + "/api/stats"));
+    expect(stats.labels).toEqual({ "203.0.113.0/24": "hidden" });
+    expect(stats.labelSwitches).toBeUndefined();
+  });
+
   it("grants clearance for a bounded time", async () => {
     const { handler, base } = await serve({ controls: { editRanges: true } });
     await post(base + "/api/actor", { key: "203.0.113.7", action: "clear", forMs: 60_000 });
@@ -2003,3 +2043,80 @@ describe("the page's standing invariants", () => {
   });
 });
 
+/**
+ * Filters saved from the feed, kept by the listener.
+ *
+ * They used to be kept only in one browser's storage, which an embedded dashboard never
+ * touches and a sandboxed frame may not have, and the button that saved them asked for a
+ * name with `prompt()`, which a sandboxed frame blocks. Now the listener keeps them, in a
+ * file when told to, so they are there after a reload, in another browser, and after the
+ * process itself restarts.
+ */
+describe("saved filters", () => {
+  type Listed = { filters: Array<{ name: string; query: string; filter: string }> };
+  const dirs: string[] = [];
+  const scratch = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "bh-saved-"));
+    dirs.push(dir);
+    return dir;
+  };
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("saves, lists newest first, replaces by name, and deletes", async () => {
+    const { base } = await serve();
+    expect(await json<Listed>(await fetch(base + "/api/filters"))).toEqual({ filters: [] });
+    await post(base + "/api/filters", { name: "curl only", query: "ua:curl", filter: "all" });
+    await post(base + "/api/filters", { name: "denied", query: "", filter: "deny" });
+    expect((await json<Listed>(await fetch(base + "/api/filters"))).filters.map((entry) => entry.name)).toEqual(["denied", "curl only"]);
+
+    // Saving under a name that exists replaces it, and moves it to the top.
+    await post(base + "/api/filters", { name: "curl only", query: "ua:curl -path:/health", filter: "all" });
+    const listed = (await json<Listed>(await fetch(base + "/api/filters"))).filters;
+    expect(listed.map((entry) => entry.name)).toEqual(["curl only", "denied"]);
+    expect(listed[0]?.query).toBe("ua:curl -path:/health");
+
+    const after = await post(base + "/api/filters", { action: "delete", name: "curl only" });
+    expect(after.body.filters.map((entry: { name: string }) => entry.name)).toEqual(["denied"]);
+  });
+
+  /** A rerun: a second process pointed at the same file finds what the first one saved. */
+  it("survives a restart when given a file", async () => {
+    const file = join(scratch(), "nested", "saved-filters.json");
+    const first = await serve({ savedFilters: { file } });
+    await post(first.base + "/api/filters", { name: "kept", query: "actor:203.0.113.4", filter: "proven" });
+    await first.dashboard.close();
+
+    const second = await serve({ savedFilters: { file } });
+    expect(await json<Listed>(await fetch(second.base + "/api/filters"))).toEqual({ filters: [{ name: "kept", query: "actor:203.0.113.4", filter: "proven" }] });
+    expect(JSON.parse(readFileSync(file, "utf8"))).toHaveLength(1);
+  });
+
+  it("refuses what is not a filter, and bounds what is", async () => {
+    const { base } = await serve();
+    expect((await post(base + "/api/filters", { query: "no name" })).status).toBe(400);
+    expect((await post(base + "/api/filters", { name: "   ", query: "x" })).status).toBe(400);
+    // A chip the page does not have becomes the neutral one rather than being stored.
+    await post(base + "/api/filters", { name: "odd chip", query: "x", filter: "<script>" });
+    await post(base + "/api/filters", { name: "n".repeat(500), query: "x" });
+    const listed = (await json<Listed>(await fetch(base + "/api/filters"))).filters;
+    expect(listed.find((entry) => entry.name === "odd chip")?.filter).toBe("all");
+    expect(listed.every((entry) => entry.name.length <= 60)).toBe(true);
+  });
+
+  /** A damaged file costs the list, not the dashboard. */
+  it("starts empty and says so when its file is not valid JSON", async () => {
+    const file = join(scratch(), "saved-filters.json");
+    writeFileSync(file, "{ not json");
+    const warnings: string[] = [];
+    const { base } = await serve({ savedFilters: { file } }, { onWarning: (message: string) => warnings.push(message) });
+    expect(await json<Listed>(await fetch(base + "/api/filters"))).toEqual({ filters: [] });
+    expect(warnings.join(" ")).toContain("not valid JSON");
+  });
+
+  it("goes with the feed when the feed section is off", async () => {
+    const { base } = await serve({ sections: { feed: false } });
+    expect((await fetch(base + "/api/filters")).status).toBe(403);
+  });
+});

@@ -58,9 +58,10 @@ export function actorActions(key: string, after: AfterAction, current?: string):
     void act({ key, action: "clear", forMs: 60 * 60_000 }, `Cleared ${key}`, "Held as human for an hour, then reassessed.", after);
   });
 
-  // A note rather than an action: nothing in detection reads a label, which is why it sits
-  // beside the buttons that change what happens rather than looking like one of them.
-  const label = labelControl(key, current, after);
+  // A name is a note, and nothing in detection reads it. A label can also carry two
+  // switches, and those are not notes — which is why they are opt-in inside the editor
+  // rather than being what the button does.
+  const label = labelControl(key, current, state.labelSwitches.get(key), after);
 
   return [confirmingButton("Allowlist", `Allowlist ${key} — it stops being assessed at all`, () => allowlist(key, after)), forget, clear, label];
 }
@@ -74,24 +75,55 @@ export function actorActions(key: string, after: AfterAction, current?: string):
  * no error and no way to tell. Editing in place also keeps the actor's own row on screen
  * while you name it, which is the row you are naming it after.
  */
-function labelControl(key: string, current: string | undefined, after: AfterAction): HTMLElement {
-  const host = el("span", "label-edit");
-  const button = el("button", null, current === undefined ? "Label" : "Relabel");
-  button.title = "Give this actor a name, for whoever reads this next. It never changes a verdict.";
+/** A checkbox with its words, for the editor's second line. */
+function option(text: string, checked: boolean, title: string): { label: HTMLLabelElement; box: HTMLInputElement } {
+  const label = el("label", "label-option") as HTMLLabelElement;
+  const box = el("input") as HTMLInputElement;
+  box.type = "checkbox";
+  box.checked = checked;
+  label.title = title;
+  label.append(box, document.createTextNode(` ${text}`));
+  return { label, box };
+}
 
-  const commit = (value: string): void => {
+function labelControl(key: string, current: string | undefined, switches: { hide?: true; skip?: true } | undefined, after: AfterAction): HTMLElement {
+  const host = el("span", "label-edit");
+  const tags = [switches?.hide === true ? "hidden" : "", switches?.skip === true ? "not analysed" : ""].filter((tag) => tag !== "");
+  const button = el("button", null, current === undefined ? "Label" : "Relabel");
+  button.title =
+    tags.length === 0
+      ? "Give this actor a name, for whoever reads this next. A name on its own never changes a verdict."
+      : `Named "${current ?? ""}", ${tags.join(" and ")}. Change the name or what it switches.`;
+
+  const commit = (value: string, hide: boolean, skip: boolean): void => {
     const trimmed = value.trim().slice(0, 120);
+    // Without a name there is no label, and so nothing for the switches to hang on. That
+    // is deliberate: "why is this actor hidden?" should always have an answer on screen.
+    const kept = trimmed !== "";
+    const detail = !kept
+      ? "It shows as its address again, and is hidden and analysed like anybody else."
+      : skip
+        ? `Named "${trimmed}", and not analysed from now on — the same as allowlisting it. Its requests stop appearing in the live feed; the Statistics screen counts them.`
+        : hide
+          ? `Shown as "${trimmed}", and kept out of the live feed. Still analysed, and still counted.`
+          : `Shown as "${trimmed}" wherever it appears.`;
     void act(
-      { key, action: "label", ...(trimmed === "" ? {} : { label: trimmed }) },
-      trimmed === "" ? `Cleared the label on ${key}` : `Labelled ${key}`,
-      trimmed === "" ? "It shows as its address again." : `Shown as "${trimmed}" wherever it appears.`,
+      { key, action: "label", ...(kept ? { label: trimmed, hideFromFeed: hide, skipAnalysis: skip } : {}) },
+      kept ? `Labelled ${key}` : `Cleared the label on ${key}`,
+      detail,
       () => {
         // Applied here as well as by the next stats frame, which is two seconds away. The
-        // toast says "shown as X wherever it appears", and for those two seconds it would
+        // toast says what now happens to this actor, and for those two seconds it would
         // otherwise be untrue on the very page that said it. The frame then confirms it,
-        // and is what carries the name to every other dashboard.
-        if (trimmed === "") state.labels.delete(key);
-        else state.labels.set(key, trimmed);
+        // and is what carries the change to every other dashboard.
+        if (!kept) {
+          state.labels.delete(key);
+          state.labelSwitches.delete(key);
+        } else {
+          state.labels.set(key, trimmed);
+          if (hide || skip) state.labelSwitches.set(key, { ...(hide ? { hide: true as const } : {}), ...(skip ? { skip: true as const } : {}) });
+          else state.labelSwitches.delete(key);
+        }
         after();
       },
     );
@@ -125,6 +157,26 @@ function labelControl(key: string, current: string | undefined, after: AfterActi
     // Still true, and still worth saying — the buttons are for people who do not know it.
     input.title = "Enter to save, Escape to cancel";
 
+    // The two switches, on a line of their own under the name. Beside it they would widen
+    // an editor that sits in a table cell which does not wrap, which is precisely how Save
+    // ended up past the edge of the panel three times before.
+    const hide = option("Hide from feed", switches?.hide === true, "Keep this actor's requests out of the live feed. They are still analysed, decided and counted, and the feed says how many it is hiding.");
+    const skip = option(
+      "Don't analyse",
+      switches?.skip === true,
+      "Do not analyse this actor at all — the same as allowlisting it. Nothing that arrives under this key is judged, and like allowlisted traffic it does not appear in the live feed; the Statistics screen counts it.",
+    );
+    // Said in words the moment it is ticked, rather than only in a tooltip. Switching
+    // analysis off is allowlisting by another name, and the allowlist button makes you
+    // read what it is about to do before it does it; this is the same courtesy.
+    const warning = el("span", "label-warn", "Not judged at all, and gone from the live feed — the same as allowlisting this actor.");
+    warning.hidden = !skip.box.checked;
+    skip.box.addEventListener("change", () => {
+      warning.hidden = !skip.box.checked;
+    });
+    const options = el("span", "label-options");
+    options.append(hide.label, skip.label, warning);
+
     // The table must not repaint this editor out from under the person using it.
     armed++;
     container?.classList.add("editing");
@@ -135,7 +187,7 @@ function labelControl(key: string, current: string | undefined, after: AfterActi
       settled = true;
       armed--;
       container?.classList.remove("editing");
-      if (accept) commit(input.value);
+      if (accept) commit(input.value, hide.box.checked, skip.box.checked);
       // Restoring the button is only right when nothing was saved: a save repaints the
       // whole table from the server, and touching a detached node would be a no-op that
       // looks like a bug the next time somebody reads this.
@@ -145,7 +197,7 @@ function labelControl(key: string, current: string | undefined, after: AfterActi
       }
     };
 
-    for (const control of [input, save, cancel]) {
+    for (const control of [input, save, cancel, hide.box, skip.box]) {
       control.addEventListener("keydown", (event) => {
         const pressed = (event as KeyboardEvent).key;
         if (pressed === "Escape") {
@@ -163,7 +215,9 @@ function labelControl(key: string, current: string | undefined, after: AfterActi
     // `pointerdown`: an earlier version used the latter, which does not fire at all when
     // a button is activated from the keyboard — so Save worked with a mouse and silently
     // did nothing with Tab and Enter.
-    for (const control of [save, cancel]) control.addEventListener("mousedown", (event) => event.preventDefault());
+    // The checkboxes and their words need it too: a browser that does not focus a checkbox
+    // on click reports the blur with nowhere to go, which reads as clicking away.
+    for (const control of [save, cancel, hide.label, skip.label]) control.addEventListener("mousedown", (event) => event.preventDefault());
     save.addEventListener("click", () => finish(true));
     cancel.addEventListener("click", () => finish(false));
 
@@ -176,7 +230,9 @@ function labelControl(key: string, current: string | undefined, after: AfterActi
       finish(false);
     });
 
-    host.append(input, save, cancel);
+    const line = el("span", "label-line");
+    line.append(input, save, cancel);
+    host.append(line, options);
     input.focus();
     input.select();
   });

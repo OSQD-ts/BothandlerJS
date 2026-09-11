@@ -130,9 +130,29 @@ rather than replacing it. Picking **Denied** and typing `path:/api` gives you de
 ## Saved filters
 
 Anything you can type can be saved by name and recalled from the dropdown beside the box.
-Saved filters live in **your browser**, not on the server: they are yours, they do not need
-a write endpoint, and clearing site data clears them. They record the query *and* the chip,
-because a filter is usually both.
+Press **Save**, type a name, press Enter. Choose one from the list to load it, and **Delete**
+appears beside it. A filter records the query *and* the chip, because it is usually both.
+
+**The dashboard keeps them**, one list per listener, so a saved filter is there after a
+reload, in another browser, and on a dashboard embedded in a page of your own. By default the
+listener keeps them in memory; give it a file and they survive the process restarting too:
+
+```ts
+detector.serveDashboard({ savedFilters: { file: "./.bothandler/saved-filters.json" } });
+```
+
+The file is written whole, via a temporary file, so a process killed mid-write leaves the
+previous list rather than half of a new one. Without a file, your browser also keeps a copy
+and hands it back to a listener that comes up empty after a restart — so leaving the option
+unset keeps at least what the old browser-only version did.
+
+They used to live only in the browser, and that failed in the places that mattered. An
+embedded dashboard never touches the host page's storage, so nothing was kept at all. And
+Save asked for a name with `prompt()`, which a sandboxed frame — VS Code's built-in browser
+among them — blocks outright, so the button did nothing.
+
+Each listener has its own list. A dashboard that masks addresses has a different audience
+from one that does not, so give two listeners the same file only if they share one.
 
 ## Hiding traffic
 

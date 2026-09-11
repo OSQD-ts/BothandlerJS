@@ -171,11 +171,13 @@ export function drawStatsPanels(): void {
 
     const health = $("stat-health");
     clear(health);
-    const bypassed = metrics.bypassed.allowlist + metrics.bypassed["ignored-path"];
+    // `?? 0` for a handler from before the third reason existed.
+    const bypassed = metrics.bypassed.allowlist + metrics.bypassed["ignored-path"] + (metrics.bypassed.label ?? 0);
     const rows: Array<[string, string]> = [
       ["Requests assessed", n(metrics.requests)],
       ["Bypassed — allowlist", n(metrics.bypassed.allowlist)],
       ["Bypassed — ignored path", n(metrics.bypassed["ignored-path"])],
+      ["Bypassed — labelled not to analyse", n(metrics.bypassed.label ?? 0)],
       ["Detection ran on", pct(metrics.requests - bypassed, metrics.requests)],
       ["Actors tracked", n(metrics.actorsTracked)],
       ["Guard stops", n(metrics.downgrades)],

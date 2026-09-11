@@ -1,4 +1,4 @@
-import { ActorRegistry, ActorState } from "./state.js";
+import { ActorRegistry, ActorState, cleanLabel } from "./state.js";
 import { ChallengeService } from "./challenge/index.js";
 import { Emitter } from "./internal/emitter.js";
 import { MemoryStore } from "./stores/memory.js";
@@ -28,7 +28,7 @@ import { ConfigError, resolveClientIp, resolveConfig, validateRules } from "./co
 import { withTimeout } from "./internal/async.js";
 import type { ActionOutcome, CustomHandler } from "./actions/types.js";
 import type { Rule } from "./policy/types.js";
-import type { Assessment, DetectorFailure, Evidence, RequestFacts } from "./types.js";
+import type { ActorLabel, Assessment, BypassReason, DetectorFailure, Evidence, RequestFacts } from "./types.js";
 import type { BotHandlerConfig, ResolvedConfig } from "./config.js";
 import type { AuditOptions, TrafficAnomaly } from "./audit.js";
 import type { DashboardOptions, DashboardServer } from "./dashboard/types.js";
@@ -127,7 +127,15 @@ export interface BotHandlerEvents extends Record<string, unknown> {
    * The remedy for a false positive that has stuck to somebody, and therefore exactly
    * the operation an audit trail wants to have seen.
    */
-  "actor-change": { key: string; action: "forget" | "clear" | "label"; until?: number | undefined; label?: string | undefined; by?: string | undefined };
+  "actor-change": {
+    key: string;
+    action: "forget" | "clear" | "label";
+    until?: number | undefined;
+    label?: string | undefined;
+    hideFromFeed?: true | undefined;
+    skipAnalysis?: true | undefined;
+    by?: string | undefined;
+  };
   /** The audit noticed the traffic change shape. */
   anomaly: TrafficAnomaly;
   warning: string;
@@ -168,6 +176,16 @@ export interface AssessOptions {
 }
 
 /** Description of a registered detector, for documentation and diagnostics. */
+/** Most actors that can be labelled at once. See `BotHandler.labelActor`. */
+const MAX_LABELS = 10_000;
+
+/** What `labelActor` takes: a name, and optionally the two switches a label can carry. */
+export interface LabelInput {
+  name: string;
+  hideFromFeed?: boolean | undefined;
+  skipAnalysis?: boolean | undefined;
+}
+
 export interface DetectorDescription {
   id: string;
   description: string;
@@ -214,8 +232,18 @@ function sanitize(item: Evidence): Evidence {
 export class BotHandler {
   readonly config: ResolvedConfig;
   readonly registry: ActorRegistry;
-  /** Keys of actors with a name. See {@link BotHandler.actorLabels}. */
-  private readonly labelled = new Set<string>();
+  /**
+   * Every label, by actor key, kept apart from the actors themselves.
+   *
+   * Labels used to live on the actor's state and die with it, which was merely untidy
+   * while a label was only a name — a client unseen overnight woke up unnamed. It became
+   * a bug the moment a label could switch analysis off: a skipped actor is never recorded,
+   * so its state was guaranteed to age out, taking the switch with it, and the actor would
+   * be judged again on whatever request came next. Here they last until somebody removes
+   * them, and apply to a key the registry has not seen yet — which is what `labelActor`'s
+   * own documentation always said it was for.
+   */
+  private readonly labelStore = new Map<string, ActorLabel>();
   readonly store: BotHandlerStore;
   readonly policy: Policy;
   readonly challenge: ChallengeService | undefined;
@@ -512,6 +540,9 @@ export class BotHandler {
    * first request would be.
    */
   forgetActor(key: string, context: ChangeContext = {}): void {
+    // Forgetting is total, and always took the name with it. It still does, now that the
+    // name is kept apart from the history it used to be part of.
+    this.labelStore.delete(key);
     this.registry.forget(key);
     this.warn(`Actor "${key}" was forgotten at runtime${attribute(context)}.`);
     this.events.emit("actor-change", { key, action: "forget", by: context.by });
@@ -552,7 +583,7 @@ export class BotHandler {
     // an ignored asset path answering 404 all day would otherwise set the baseline that
     // decides whether anybody else's misses are unusual. Measured: a run where every
     // judged request was answered 200 reported a site miss rate of 0.89.
-    if (!this.isIgnoredPath(facts.path) && !this.isAllowlisted(facts.ip)) {
+    if (!this.isIgnoredPath(facts.path) && !this.isAllowlisted(facts.ip) && !this.skipsAnalysis(facts)) {
       this.site?.recordOutcome(facts.path, status);
     }
     if (!Number.isFinite(status)) return;
@@ -571,36 +602,57 @@ export class BotHandler {
    * monitoring, a partner's feed, the office egress — rather than waiting for somebody to
    * recognise the address twice.
    */
-  labelActor(key: string, label: string | undefined, context: ChangeContext = {}): void {
-    const state = this.registry.peek(key);
-    if (state === undefined) return;
-    state.setLabel(label);
-    if (state.label === undefined) this.labelled.delete(key);
-    else this.labelled.add(key);
-    this.warn(`Actor "${key}" was ${label === undefined ? "unlabelled" : `labelled "${state.label ?? ""}"`} at runtime${attribute(context)}.`);
+  labelActor(key: string, label: string | LabelInput | undefined, context: ChangeContext = {}): void {
+    const input = typeof label === "string" ? { name: label } : label;
+    const name = cleanLabel(input?.name);
+    if (name === undefined) {
+      this.labelStore.delete(key);
+      this.registry.peek(key)?.setLabel(undefined);
+      this.warn(`Actor "${key}" was unlabelled at runtime${attribute(context)}.`);
+      this.events.emit("actor-change", { key, action: "label", label: undefined, by: context.by });
+      return;
+    }
+    // Bounded, because every one of these is kept until somebody removes it and every
+    // stats frame carries all of them. Ten thousand is past any number a person names by
+    // hand; code labelling a feed of addresses should be using the allowlist instead.
+    if (!this.labelStore.has(key) && this.labelStore.size >= MAX_LABELS) {
+      this.warn(`Actor "${key}" was not labelled: ${MAX_LABELS} actors are labelled already, which is the limit. Remove some, or use the allowlist for a list this long.`);
+      return;
+    }
+    const entry: ActorLabel = {
+      name,
+      ...(input?.hideFromFeed === true ? { hideFromFeed: true as const } : {}),
+      ...(input?.skipAnalysis === true ? { skipAnalysis: true as const } : {}),
+    };
+    this.labelStore.set(key, entry);
+    this.registry.peek(key)?.setLabel(name);
+    const switches = [entry.hideFromFeed ? "hidden from the live feed" : "", entry.skipAnalysis ? "not analysed at all" : ""].filter((part) => part !== "");
+    this.warn(`Actor "${key}" was labelled "${name}"${switches.length === 0 ? "" : `, ${switches.join(" and ")}`} at runtime${attribute(context)}.`);
     // Announced like the other two things an operator can do to one actor. It was the only
     // one that happened silently, so a dashboard learned about a name only if the person
     // who gave it was the one looking — and every other open dashboard went on showing an
     // address that somebody had already recognised.
-    this.events.emit("actor-change", { key, action: "label", label: state.label, by: context.by });
+    this.events.emit("actor-change", {
+      key,
+      action: "label",
+      label: name,
+      ...(entry.hideFromFeed ? { hideFromFeed: true } : {}),
+      ...(entry.skipAnalysis ? { skipAnalysis: true } : {}),
+      by: context.by,
+    });
   }
 
-  /**
-   * Every actor that currently has a name, keyed by actor key.
-   *
-   * Read from an index rather than by walking the registry, because the registry holds
-   * up to `maxActors` clients and this is asked for on every dashboard refresh, while
-   * names are a handful an operator typed by hand. The index can outlive what it points
-   * at — an actor ages out of the registry, and its name goes with it — so each entry is
-   * checked on the way out and dropped if the actor is gone.
-   */
+  /** Every actor that has a name, keyed by actor key. */
   actorLabels(): Map<string, string> {
     const out = new Map<string, string>();
-    for (const key of this.labelled) {
-      const label = this.registry.peek(key)?.label;
-      if (label === undefined) this.labelled.delete(key);
-      else out.set(key, label);
-    }
+    for (const [key, entry] of this.labelStore) out.set(key, entry.name);
+    return out;
+  }
+
+  /** Every label with its switches, keyed by actor key. Copies; changing them changes nothing. */
+  actorLabelEntries(): Map<string, ActorLabel> {
+    const out = new Map<string, ActorLabel>();
+    for (const [key, entry] of this.labelStore) out.set(key, { ...entry });
     return out;
   }
 
@@ -769,6 +821,11 @@ export class BotHandler {
     return this.config.ranges.get("allowlist")?.contains(ip) ?? false;
   }
 
+  /** Whether this request's actor carries a label that switches analysis off. */
+  private skipsAnalysis(facts: RequestFacts): boolean {
+    return this.labelStore.size > 0 && this.labelStore.get(this.actorKeyFor(facts))?.skipAnalysis === true;
+  }
+
   isIgnoredPath(path: string): boolean {
     if (this.ignoreExact.has(path)) return true;
     return pathMatches(this.ignorePatterns, path);
@@ -794,6 +851,11 @@ export class BotHandler {
     if (this.isAllowlisted(facts.ip)) return this.bypassed(facts, requestId, started, "allowlist", record);
 
     const actorKey = this.actorKeyFor(facts);
+    // After the address checks, because those are cheaper and they are configuration; a
+    // label is something an operator did at runtime. The size check keeps a deployment
+    // that labels nothing — nearly all of them — off the map entirely.
+    const labelled = this.labelStore.size === 0 ? undefined : this.labelStore.get(actorKey);
+    if (labelled?.skipAnalysis === true) return this.bypassed(facts, requestId, started, "label", record);
     // A dry run gets an actor of its own, created and discarded here. Anything else
     // would make asking the question change the answer to the next one: `observe`
     // records a request against the real actor, which moves its rate, its path breadth
@@ -801,6 +863,9 @@ export class BotHandler {
     // are reading. The cost is that a dry run has no history, and that is the honest
     // reading of a request that has not happened.
     const state = record ? this.registry.observe(actorKey, facts) : detachedActor(actorKey, facts);
+    // An actor that aged out and came back is a new state with no name. The store still
+    // has it, so it is put back before anything reads the snapshot.
+    if (labelled !== undefined && state.label !== labelled.name) state.setLabel(labelled.name);
     const ua = parseUserAgent(facts.headers["user-agent"]);
     const signatureMatches = ua.lower.length > 0 ? this.signatures.matchAll(ua.lower) : [];
     // Filed against the actor before the detectors run, so a detector reading the set sees
@@ -1234,7 +1299,7 @@ export class BotHandler {
     this.fail(error, `detector:${detector.id}`);
   }
 
-  private bypassed(facts: RequestFacts, requestId: string, started: number, reason: "allowlist" | "ignored-path", record = true): Assessment {
+  private bypassed(facts: RequestFacts, requestId: string, started: number, reason: BypassReason, record = true): Assessment {
     const actorKey = this.actorKeyFor(facts);
     const existing: ActorState | undefined = this.registry.peek(actorKey);
     const assessment: Assessment = {

@@ -92,6 +92,40 @@ and you are satisfied. `forgetActor` drops what is remembered about them; `clear
 exempts them for a stated number of milliseconds, so the exemption expires on its own rather
 than becoming a permanent hole nobody remembers opening. Both emit `actor-change`. See [actors](../concepts/actors.md).
 
+### Labels, and what a label can switch
+
+```ts
+detector.labelActor("10.0.4.17", "office egress");                                   // a name
+detector.labelActor("10.0.4.18", { name: "uptime monitor", skipAnalysis: true });     // not analysed
+detector.labelActor("10.0.4.19", { name: "load balancer", hideFromFeed: true });      // kept off the feed
+detector.labelActor("10.0.4.17", undefined);                                         // removed
+```
+
+A **name on its own changes nothing**, and that has always been the point of it: a note
+that could move a verdict would make writing notes a way to be wrong about people at scale.
+What a label can also carry is two explicit switches, both of which only ever reduce what
+happens to a request:
+
+| Switch | What happens to the actor's requests |
+| --- | --- |
+| `hideFromFeed` | Kept out of the live feed. Still analysed, decided, acted on and counted. The feed says how many it is hiding and can show them again — hidden traffic is still traffic. |
+| `skipAnalysis` | Not analysed at all, exactly like an allowlisted address: no detector runs, no rule sees it, and it does not enter the feed. Counted as `bypassed.label`. Keyed by actor, so it works for an actor key that is not an IP. |
+
+`skipAnalysis` is allowlisting by another name and deserves the same care; the dashboard
+puts it behind the same `controls.editRanges` as the allowlist, and says what it does in
+words the moment the box is ticked.
+
+Labels are kept apart from the actors they name, so they last until somebody removes them
+— an actor that ages out of the registry comes back still named — and they apply to a key
+the handler has not seen yet. That independence is not a nicety: a skipped actor is never
+recorded, so a switch stored on its state would have aged out with it and the actor would
+have been judged again on its next request, silently. `forgetActor` removes the label along
+with everything else. At most 10,000 actors can be labelled; past that it warns rather than
+dropping one.
+
+On a dashboard that masks addresses, names are shown keyed by network, and the switches are
+not sent: hiding one actor by label there would hide everybody sharing its network.
+
 ---
 
 ## `by`, and the audit trail

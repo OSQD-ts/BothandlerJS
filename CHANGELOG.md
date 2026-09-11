@@ -8,6 +8,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A label can keep an actor out of the live feed, or out of analysis altogether.** Two
+  switches in the label editor, and in `labelActor(key, { name, hideFromFeed, skipAnalysis })`.
+  *Hide from feed* is a view: the requests are still analysed, decided and counted, and the
+  feed says how many it is hiding with a button to show them. *Don't analyse* is allowlisting
+  by actor: no detector runs, the requests do not enter the feed, and they are counted as
+  `bypassed.label`. It sits behind the same control as the allowlist and says what it does
+  the moment it is ticked. A name without a switch still changes nothing.
+
+  Labels are now kept apart from the actors they name, so they last until removed and apply
+  to a key not yet seen. That was required, not incidental: a skipped actor is never
+  recorded, so a switch stored on its state would have aged out with it, and the actor
+  would have been judged again with nobody told.
+
+
 - **A named actor is shown by its name, everywhere, including in history.** Naming an actor
   used to change one line of the Actors table, and only after that table was re-fetched.
   The feed now shows the name in place of the address — on every row from that actor,
@@ -259,6 +273,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 ### Fixed
+
+- **Saving a filter did nothing in an embedded or sandboxed dashboard, and a saved filter
+  could never be deleted.** Save asked for a name with `prompt()`, which a sandboxed frame —
+  VS Code's built-in browser among them — blocks outright; and filters lived only in
+  browser storage, which an embedded dashboard never touches. Delete was offered only when
+  the list had something selected, checked the instant the list was built, when nothing
+  ever is. The name is typed into the page now, Delete appears for the filter you chose,
+  and the listener keeps the list — in memory, or in a file with
+  `savedFilters: { file }` so it survives a restart. The browser keeps a copy and hands it
+  back to a listener that restarts empty, so nothing the old version kept is lost.
 
 - **`$in`, `$notin` and quoted values failed silently with any quote but `"`.** The
   tokenizer knew straight double quotes and nothing else, so a value in single or curly

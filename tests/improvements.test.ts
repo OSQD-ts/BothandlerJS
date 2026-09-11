@@ -255,7 +255,7 @@ describe("metrics", () => {
     await handler.assess(makeFacts({ ip: "198.51.100.1", path: "/healthz" }));
     const metrics = handler.metrics()!;
     expect(metrics.requests).toBe(2);
-    expect(metrics.bypassed).toEqual({ allowlist: 1, "ignored-path": 1 });
+    expect(metrics.bypassed).toEqual({ allowlist: 1, "ignored-path": 1, label: 0 });
     expect(metrics.duration.count).toBe(0);
   });
 
@@ -280,7 +280,7 @@ describe("metrics", () => {
 
   it("escapes a custom detector id that would otherwise break the format", () => {
     const text = toPrometheus({
-      requests: 1, bypassed: { allowlist: 0, "ignored-path": 0 },
+      requests: 1, bypassed: { allowlist: 0, "ignored-path": 0, label: 0 },
       verdicts: { "confirmed-bot": 0, "verified-bot": 0, "suspected-bot": 0, human: 0, unknown: 1 },
       botClasses: { human: 0, "verified-bot": 0, "declared-bot": 0, automation: 0, "http-client": 0, scanner: 0, scraper: 0, impersonator: 0, unknown: 1 },
       actions: { allow: 1, tag: 0, log: 0, delay: 0, "rate-limit": 0, challenge: 0, redirect: 0, block: 0, drop: 0, custom: 0 },

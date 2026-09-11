@@ -354,7 +354,38 @@ export type BypassReason =
   /** The address matched the configured allowlist. */
   | "allowlist"
   /** The path matched `ignorePaths`. */
-  | "ignored-path";
+  | "ignored-path"
+  /** The actor carries a label marked `skipAnalysis`. See {@link ActorLabel}. */
+  | "label";
+
+/**
+ * A name an operator gave an actor, and what — if anything — it switches.
+ *
+ * The name on its own changes nothing and never has: a note that could move a verdict
+ * would make writing notes a way to be wrong about people at scale. The two switches
+ * are separate, explicit, and both only ever reduce what happens to a request —
+ * neither can make anybody more suspicious.
+ */
+export interface ActorLabel {
+  name: string;
+  /**
+   * Kept out of the live feed. Still analysed, still decided, still acted on, and still
+   * counted — this is a view, not a policy. The feed says how many it is hiding and can
+   * show them again, because traffic nobody can see is exactly where a problem hides.
+   */
+  hideFromFeed?: true | undefined;
+  /**
+   * Not analysed at all, the way an allowlisted address is not: no detector runs, no
+   * evidence is produced, no rule sees it. Keyed by actor rather than by address, so it
+   * works for an actor key that is not an IP. As consequential as allowlisting, and for
+   * the same reason — whatever arrives under this key is waved through.
+   *
+   * Like allowlisted traffic, these requests never enter the live feed: a skip produces
+   * no assessment for the feed to show. They are counted, as `bypassed.label` in the
+   * metrics and on the Statistics screen.
+   */
+  skipAnalysis?: true | undefined;
+}
 
 export interface DetectorFailure {
   detector: string;

@@ -99,7 +99,7 @@ export function connectStream(): void {
 
   source.addEventListener("stats", (event) => {
     state.snapshot = JSON.parse((event as MessageEvent<string>).data) as Snapshot;
-    takeLabels(state.snapshot.labels);
+    takeLabels(state.snapshot.labels, state.snapshot.labelSwitches);
     app.draw();
   });
 
@@ -118,7 +118,7 @@ export function connectStream(): void {
 export async function loadInitialSnapshot(): Promise<void> {
   try {
     state.snapshot = await getJson<Snapshot>("/api/stats");
-    takeLabels(state.snapshot.labels);
+    takeLabels(state.snapshot.labels, state.snapshot.labelSwitches);
     app.drawNow();
   } catch {
     /* the stream is the primary path */

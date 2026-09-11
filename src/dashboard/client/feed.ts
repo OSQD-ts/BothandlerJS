@@ -1,6 +1,6 @@
 import { $, byId, clear, cssEscape, el, rootNode } from "./dom.js";
-import { feedPage, goToFeedPage, ingest, labelOf, matchingCount, matchingRows, resetPaging, setSearch, setTimeframe, sortRows, state } from "./store.js";
-import { deleteFilter, saveFilter, savedFilters } from "./saved.js";
+import { feedPage, goToFeedPage, hiddenCount, ingest, labelOf, matchingCount, matchingRows, resetPaging, setSearch, setTimeframe, sortRows, state } from "./store.js";
+import { deleteFilter, refreshSavedFilters, saveFilter, savedFilters } from "./saved.js";
 import { suggestFor } from "./query.js";
 import { getJson } from "./api.js";
 import { renderPager } from "./pager.js";
@@ -45,6 +45,11 @@ interface Rendered {
 const rendered = new Map<string, Rendered>();
 
 export function initFeed(): void {
+  byId<HTMLButtonElement>("feed-show-hidden").addEventListener("click", () => {
+    state.showHidden = !state.showHidden;
+    resetPaging();
+    app.drawNow();
+  });
   const loadThem = byId<HTMLButtonElement>("feed-load-skipped");
   loadThem.addEventListener("click", () => {
     // Disabled while it is in flight, because the fetch is the whole ring and a second
@@ -253,12 +258,26 @@ function initSuggestions(input: HTMLInputElement): void {
   input.addEventListener("focus", () => showSuggestions(input));
 }
 
-/** The saved-filter control: a list to load from, and buttons to add and remove. */
+/**
+ * The saved-filter control: a list to load from, a name box to save under, and Delete.
+ *
+ * Save used to ask for a name with `prompt()`, which a sandboxed frame blocks outright — an
+ * embedded dashboard, VS Code's built-in browser — so there it did nothing, silently. The
+ * label editor stopped using `prompt()` for the same reason; this is the same fix. Delete
+ * was never shown at all: it was offered only when the list had something selected, and
+ * that was checked the instant the list was built, when nothing ever is.
+ */
 function initSavedFilters(input: HTMLInputElement): void {
   const host = $("saved-filters");
+  // Which saved filter is selected, kept across redraws so Delete knows what it deletes.
+  let selected = "";
+  let naming = false;
+
   const redraw = (): void => {
     clear(host);
     const entries = savedFilters();
+    if (!entries.some((entry) => entry.name === selected)) selected = "";
+
     const select = document.createElement("select");
     select.setAttribute("aria-label", "Saved filters");
     const first = document.createElement("option");
@@ -271,43 +290,100 @@ function initSavedFilters(input: HTMLInputElement): void {
       option.textContent = entry.name;
       select.appendChild(option);
     }
+    select.value = selected;
     select.addEventListener("change", () => {
-      const chosen = entries.find((entry) => entry.name === select.value);
-      if (chosen === undefined) return;
-      input.value = chosen.query;
-      setSearch(chosen.query);
-      state.filter = chosen.filter as typeof state.filter;
-      reflectFilterButtons();
-      resetPaging();
-      app.syncUrl();
-      app.drawNow();
+      selected = select.value;
+      const chosen = entries.find((entry) => entry.name === selected);
+      if (chosen !== undefined) {
+        input.value = chosen.query;
+        setSearch(chosen.query);
+        state.filter = chosen.filter as typeof state.filter;
+        reflectFilterButtons();
+        resetPaging();
+        app.syncUrl();
+        app.drawNow();
+      }
+      redraw();
     });
     host.appendChild(select);
 
-    const save = el("button", null, "Save");
-    (save as HTMLButtonElement).type = "button";
-    save.title = "Save this filter, in this browser, under a name";
+    if (naming) {
+      const name = el("input", "saved-name") as HTMLInputElement;
+      name.type = "text";
+      name.maxLength = 60;
+      name.placeholder = "Name this filter";
+      name.setAttribute("aria-label", "Name for this filter");
+      name.title = "Enter to save, Escape to cancel";
+      // The name it was loaded as, so re-saving an edited filter overwrites it by default.
+      name.value = selected;
+      const confirm = el("button", "saved-confirm", "Save") as HTMLButtonElement;
+      confirm.type = "button";
+      const cancel = el("button", null, "Cancel") as HTMLButtonElement;
+      cancel.type = "button";
+
+      const done = (): void => {
+        naming = false;
+        redraw();
+      };
+      const commit = (): void => {
+        const chosen = name.value.trim();
+        if (chosen === "") {
+          name.focus();
+          return;
+        }
+        void saveFilter({ name: chosen, query: input.value.trim(), filter: state.filter }).then((result) => {
+          selected = chosen;
+          done();
+          if (result.ok) toast("ok", "Filter saved", `"${chosen}" is kept by this dashboard, for anybody who opens it.`);
+          else toast("warn", "Saved in this browser only", `The dashboard did not take it${result.error === undefined ? "" : ` (${result.error})`}. It will be offered again the next time the dashboard starts empty.`);
+        });
+      };
+      name.addEventListener("keydown", (event) => {
+        if ((event as KeyboardEvent).key === "Enter") {
+          event.preventDefault();
+          commit();
+        } else if ((event as KeyboardEvent).key === "Escape") {
+          event.preventDefault();
+          done();
+        }
+      });
+      confirm.addEventListener("click", commit);
+      cancel.addEventListener("click", done);
+      host.append(name, confirm, cancel);
+      name.focus();
+      name.select();
+      return;
+    }
+
+    const save = el("button", null, "Save") as HTMLButtonElement;
+    save.type = "button";
+    save.title = "Save this filter under a name. The dashboard keeps it, for anybody who opens it.";
     save.addEventListener("click", () => {
-      const name = prompt("Save this filter as:")?.trim();
-      if (name === undefined || name === "") return;
-      saveFilter({ name, query: input.value.trim(), filter: state.filter });
+      naming = true;
       redraw();
-      toast("ok", "Filter saved", `"${name}" is in this browser. It is not shared with anybody else.`);
     });
     host.appendChild(save);
 
-    if (select.value !== "") {
-      const remove = el("button", null, "Delete");
-      (remove as HTMLButtonElement).type = "button";
+    if (selected !== "") {
+      const remove = el("button", null, "Delete") as HTMLButtonElement;
+      remove.type = "button";
+      remove.title = `Delete the saved filter "${selected}". The query in the box is left as it is.`;
       remove.addEventListener("click", () => {
-        deleteFilter(select.value);
-        redraw();
+        const gone = selected;
+        void deleteFilter(gone).then(() => {
+          selected = "";
+          redraw();
+          toast("ok", "Filter deleted", `"${gone}" is no longer saved.`);
+        });
       });
       host.appendChild(remove);
     }
-
   };
+
   redraw();
+  // Drawn at once from whatever is known, then again when the listener has answered —
+  // the page should not wait on a round trip to show the filter bar.
+  void refreshSavedFilters().then(redraw);
 }
 
 
@@ -493,6 +569,20 @@ export function drawFeed(): void {
   // The badge used to state the gap and leave it there. It is now next to the button that
   // closes it.
   byId<HTMLButtonElement>("feed-load-skipped").hidden = skipped === 0;
+
+  // What a label is keeping off the screen, said out loud for the same reason the gap
+  // above is: hidden traffic is still being judged and acted on, and a feed that hides
+  // part of what is happening must never look like a quieter one. The count is of
+  // requests in the window, and the button puts them back without touching any label.
+  const hidden = hiddenCount();
+  const hiddenNote = $("feed-hidden");
+  const showHidden = byId<HTMLButtonElement>("feed-show-hidden");
+  hiddenNote.hidden = hidden === 0;
+  showHidden.hidden = hidden === 0;
+  hiddenNote.textContent = state.showHidden ? `showing ${n(hidden)} hidden by label` : `${n(hidden)} hidden by label`;
+  hiddenNote.title = "Requests from actors whose label says to keep them out of the live feed. They are still analysed, decided and counted.";
+  showHidden.textContent = state.showHidden ? "Hide" : "Show";
+  showHidden.setAttribute("aria-pressed", String(state.showHidden));
   note.title =
     state.laggedDrops > 0
       ? `${n(state.laggedDrops)} were skipped because this connection could not keep up, and the rest by the rate cap. All of them are still in the window, the preview and the export.`

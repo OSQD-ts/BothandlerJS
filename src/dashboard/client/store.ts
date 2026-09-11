@@ -25,6 +25,16 @@ export interface State {
    * was known only for actors that happened to be on the page last fetched.
    */
   labels: Map<string, string>;
+  /** Labelled actors whose label switches something. See `DashboardSnapshot.labelSwitches`. */
+  labelSwitches: Map<string, { hide?: true; skip?: true }>;
+  /**
+   * Whether requests from actors labelled "hide from the live feed" are shown anyway.
+   *
+   * Off by default, which is what hiding means. On a click, because hidden traffic is still
+   * traffic that is being judged and acted on, and "I cannot see it" must never quietly
+   * become "nothing is happening".
+   */
+  showHidden: boolean;
   actorsTracked: number;
   /** Which population the Actors screen is listing. See `registry.feedActors`. */
   actorScope: "tracked" | "feed";
@@ -92,6 +102,8 @@ export const state: State = {
   policy: undefined,
   actors: [],
   labels: new Map(),
+  labelSwitches: new Map(),
+  showHidden: false,
   actorsTracked: 0,
   actorScope: "tracked",
   paused: false,
@@ -206,7 +218,13 @@ export function sortRows(): void {
   state.rows.sort((a, b) => a.entry.at - b.entry.at);
 }
 
+/** Whether this row belongs to an actor whose label hides it from the feed. */
+export function hiddenByLabel(row: Row): boolean {
+  return state.labelSwitches.size > 0 && state.labelSwitches.get(row.entry.actor)?.hide === true;
+}
+
 export function matches(row: Row): boolean {
+  if (!state.showHidden && hiddenByLabel(row)) return false;
   // The timeframe first, because it is a number comparison and the cheapest thing here to
   // fail on.
   if (state.fromMs !== undefined && row.entry.at < state.fromMs) return false;
@@ -335,9 +353,23 @@ export function aggregate(rows: readonly Row[]): Aggregates {
  * none, and an older handler never did, and neither of those means every actor has just
  * lost its name.
  */
-export function takeLabels(labels: Readonly<Record<string, string>> | undefined): void {
+export function takeLabels(
+  labels: Readonly<Record<string, string>> | undefined,
+  switches?: Readonly<Record<string, { hide?: true; skip?: true }>> | undefined,
+): void {
   if (labels === undefined) return;
   state.labels = new Map(Object.entries(labels));
+  // Absent on a masked listener, where hiding by label would hide a whole network. That
+  // means "nothing is hidden here", so it clears rather than keeping stale switches.
+  state.labelSwitches = new Map(Object.entries(switches ?? {}));
+}
+
+/** How many rows in the ring are being kept out of the feed by a label. */
+export function hiddenCount(): number {
+  if (state.labelSwitches.size === 0) return 0;
+  let count = 0;
+  for (const row of state.rows) if (hiddenByLabel(row)) count++;
+  return count;
 }
 
 /** The name an actor has been given, if any. */

@@ -687,6 +687,86 @@ describe("finding things in the feed", () => {
     await page.close();
   });
 
+  /**
+   * Saving a filter, the whole way round.
+   *
+   * Nothing tested this before, which is how both of its bugs shipped: Save asked for a
+   * name with `prompt()`, which a sandboxed frame blocks, and Delete was never shown
+   * because it checked for a selection the instant the list was built. Any dialog at all
+   * fails this test — a name is typed into the page now.
+   */
+  it("saves a filter without a dialog, keeps it across a reload, and deletes it", async () => {
+    const page = await open();
+    const dialogs: string[] = [];
+    page.on("dialog", (dialog) => {
+      dialogs.push(dialog.type());
+      void dialog.dismiss();
+    });
+    await page.locator("#search").fill("ua:curl");
+    await page.locator('#saved-filters button:has-text("Save")').click();
+    const name = page.locator("#saved-filters input.saved-name");
+    await expect.poll(() => name.count()).toBe(1);
+    await name.fill("browser-saved");
+    await name.press("Enter");
+    await expect.poll(() => page.locator("#saved-filters select option", { hasText: "browser-saved" }).count(), { timeout: 5_000 }).toBe(1);
+    expect(dialogs, "no prompt, no alert, nothing").toEqual([]);
+
+    // Kept by the dashboard, so a reload finds it.
+    await page.reload();
+    await page.waitForSelector("tbody tr.row");
+    await expect.poll(() => page.locator("#saved-filters select option", { hasText: "browser-saved" }).count(), { timeout: 5_000 }).toBe(1);
+
+    // Choosing it loads it, and offers Delete — which was never offered before.
+    await page.locator("#saved-filters select").selectOption("browser-saved");
+    await expect.poll(() => page.locator("#search").inputValue()).toBe("ua:curl");
+    const remove = page.locator('#saved-filters button:has-text("Delete")');
+    await expect.poll(() => remove.count()).toBe(1);
+    await remove.click();
+    await expect.poll(() => page.locator("#saved-filters select option", { hasText: "browser-saved" }).count(), { timeout: 5_000 }).toBe(0);
+    await page.close();
+  });
+
+  /**
+   * Moving saved filters to the listener must not lose what the browser used to keep.
+   *
+   * A listener with no file comes up empty after a restart. The browser keeps a copy for
+   * exactly that case and hands it back, so the default is at least as durable as the old
+   * browser-only design was. Simulated here by an empty listener and a copy in storage.
+   */
+  it("hands this browser's copy back to a listener that came up empty", async () => {
+    const base = url.replace(/\/$/, "");
+    const listed = async (): Promise<string[]> =>
+      ((await (await fetch(`${base}/api/filters`)).json()) as { filters: Array<{ name: string }> }).filters.map((entry) => entry.name);
+    for (const name of await listed()) {
+      await fetch(`${base}/api/filters`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "delete", name }) });
+    }
+    expect(await listed()).toEqual([]);
+
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.addInitScript(() => {
+      localStorage.setItem("bothandler.filters", JSON.stringify([{ name: "from-before-the-restart", query: "ua:curl", filter: "all" }]));
+    });
+    await page.goto(url);
+    await page.waitForSelector("tbody tr.row");
+    await expect.poll(listed, { timeout: 5_000 }).toEqual(["from-before-the-restart"]);
+    await expect.poll(() => page.locator("#saved-filters select option", { hasText: "from-before-the-restart" }).count()).toBe(1);
+
+    await fetch(`${base}/api/filters`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "delete", name: "from-before-the-restart" }) });
+    await page.close();
+  });
+
+  it("does not push the saved-filter controls out of the bar while naming one", async () => {
+    const page = await open(1024);
+    await page.locator('#saved-filters button:has-text("Save")').click();
+    const bar = (await page.locator("#saved-filters").boundingBox()) ?? { x: 0, width: 0 };
+    const confirm = (await page.locator("#saved-filters .saved-confirm").boundingBox()) ?? { x: 0, width: 1e9 };
+    const nameBox = (await page.locator("#saved-filters input.saved-name").boundingBox()) ?? { width: 1e9 };
+    expect(nameBox.width, "the name box is its own size, not the bar's").toBeLessThan(300);
+    expect(confirm.x + confirm.width).toBeLessThanOrEqual(bar.x + bar.width + 1);
+    await page.locator("#saved-filters input.saved-name").press("Escape");
+    await page.close();
+  });
+
   it("comes back the same way after a reload", async () => {
     const page = await open(1440, "#live?f=proven&q=path%3A%2Fproducts");
     expect(await page.locator("#search").inputValue()).toBe("path:/products");
@@ -2216,6 +2296,29 @@ defineBotDashboard();
    * synchronously. A custom element that assumes its first connect is its only one breaks
    * here, and breaks only for people running a dev build.
    */
+  /**
+   * The environment where saving was broken outright. An embedded dashboard never touches
+   * the host page's storage, so under the old browser-only design nothing it saved was
+   * kept anywhere. The listener keeps it now.
+   */
+  it("saves a filter from inside a host page", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(embedUrl);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector("#saved-filters button") != null, undefined, { timeout: 15_000 });
+    await page.locator("#search").fill("path:/embedded");
+    await page.locator('#saved-filters button:has-text("Save")').click();
+    await page.locator("#saved-filters input.saved-name").fill("embedded-saved");
+    await page.locator("#saved-filters input.saved-name").press("Enter");
+    await expect.poll(() => page.locator("#saved-filters select option", { hasText: "embedded-saved" }).count(), { timeout: 5_000 }).toBe(1);
+    // And nothing was written into the host page's storage, which is not ours to write.
+    expect(await page.evaluate(() => localStorage.getItem("bothandler.filters"))).toBeNull();
+
+    await page.locator("#saved-filters select").selectOption("embedded-saved");
+    await page.locator('#saved-filters button:has-text("Delete")').click();
+    await expect.poll(() => page.locator("#saved-filters select option", { hasText: "embedded-saved" }).count(), { timeout: 5_000 }).toBe(0);
+    await page.close();
+  });
+
   it("survives a synchronous mount, unmount, mount", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const failures: string[] = [];
@@ -3650,6 +3753,109 @@ describe("the Actors screen", () => {
     await page.locator("#actor-actions .label-save").click();
     await expect.poll(() => row.locator(".ua a").textContent(), { timeout: 1_500 }).toBe("named just now");
     expect(Date.now() - saved, "well inside one stats frame").toBeLessThan(1_500);
+    await page.close();
+  });
+
+  /**
+   * Hiding an actor from the feed, from the label editor.
+   *
+   * The rows go, and the feed says how many it is hiding and can show them again — hidden
+   * traffic is still being judged and acted on, and a feed that hides part of what is
+   * happening must never look like a quieter one. Nobody else's rows are touched.
+   */
+  it("hides an actor's requests from the feed by label, and says how many", async () => {
+    const hiddenIp = "203.0.114.210";
+    const shownIp = "203.0.114.211";
+    try {
+      const page = await open();
+      for (let i = 0; i < 3; i++) await handler.handle(createFacts({ method: "GET", url: `/hideme/${i}`, headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: hiddenIp }));
+      await handler.handle(createFacts({ method: "GET", url: "/keepme", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: shownIp }));
+      const feed = async (): Promise<string> => (await page.locator("#rows").textContent()) ?? "";
+      await expect.poll(feed, { timeout: 15_000 }).toContain("/hideme/0");
+
+      await page.locator("#rows tr.row", { hasText: "/hideme/0" }).first().click();
+      await page.locator("tr.detail .tools button", { hasText: "Show this actor" }).click();
+      await page.locator('#actor-actions button:has-text("Label")').click();
+      await page.locator("#actor-actions .label-input").fill("noisy monitor");
+      await page.locator("#actor-actions .label-option", { hasText: "Hide from feed" }).locator("input").check();
+      await page.locator("#actor-actions .label-save").click();
+
+      await expect.poll(feed, { timeout: 5_000 }).not.toContain("/hideme/");
+      expect(await feed(), "somebody else's requests stay").toContain("/keepme");
+      await expect.poll(() => page.locator("#feed-hidden").textContent()).toBe("3 hidden by label");
+
+      // And back, without touching the label.
+      await page.locator("#feed-show-hidden").click();
+      await expect.poll(feed).toContain("/hideme/0");
+      expect(handler.actorLabelEntries().get(hiddenIp)).toEqual({ name: "noisy monitor", hideFromFeed: true });
+      await page.close();
+    } finally {
+      handler.labelActor(hiddenIp, undefined);
+    }
+  });
+
+  /**
+   * Switching analysis off, from the label editor.
+   *
+   * The consequence is said in words the moment the box is ticked, as the allowlist button
+   * does before it acts. After that the actor is treated exactly like an allowlisted
+   * address: its next request is not judged, does not enter the feed, and is counted on
+   * the Statistics screen instead — which is where skipped traffic has always shown up.
+   */
+  it("stops analysing an actor by label, and says so on its requests", async () => {
+    const ip = "203.0.114.212";
+    try {
+      const page = await open();
+      await handler.handle(createFacts({ method: "GET", url: "/skipme/0", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip }));
+      await expect.poll(async () => (await page.locator("#rows").textContent()) ?? "", { timeout: 15_000 }).toContain("/skipme/0");
+
+      await page.locator("#rows tr.row", { hasText: "/skipme/0" }).first().click();
+      await page.locator("tr.detail .tools button", { hasText: "Show this actor" }).click();
+      await page.locator('#actor-actions button:has-text("Label")').click();
+      await page.locator("#actor-actions .label-input").fill("uptime check");
+      expect(await page.locator("#actor-actions .label-warn").isVisible(), "no warning before it is ticked").toBe(false);
+      await page.locator("#actor-actions .label-option", { hasText: "Don't analyse" }).locator("input").check();
+      expect(await page.locator("#actor-actions .label-warn").textContent()).toContain("same as allowlisting");
+      await page.locator("#actor-actions .label-save").click();
+      await expect.poll(() => handler.actorLabelEntries().get(ip)?.skipAnalysis, { timeout: 5_000 }).toBe(true);
+
+      const before = handler.metrics()?.bypassed.label ?? 0;
+      const next = await handler.handle(createFacts({ method: "GET", url: "/skipme/1", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip }));
+      expect(next.assessment.bypass).toBe("label");
+      expect(next.assessment.evidence, "not judged").toEqual([]);
+      expect(handler.metrics()?.bypassed.label).toBe(before + 1);
+
+      // Not in the feed, like allowlisted traffic — and counted where skipped traffic is.
+      await page.waitForTimeout(800);
+      expect(await page.locator("#rows").textContent()).not.toContain("/skipme/1");
+      await page.click("#tab-stats");
+      await expect.poll(() => page.locator("#stat-health").textContent(), { timeout: 15_000 }).toContain("Bypassed — labelled not to analyse");
+      await page.close();
+    } finally {
+      handler.labelActor(ip, undefined);
+    }
+  });
+
+  /**
+   * The editor grew a second line, and it lives in a table cell that does not wrap — the
+   * place Save ended up off the edge of the panel three times before. Every control in it
+   * has to be inside the panel, not merely present.
+   */
+  it("keeps the label editor's switches inside the panel", async () => {
+    const page = await open();
+    await handler.handle(createFacts({ method: "GET", url: "/editor-fit", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.114.213" }));
+    await page.click("#tab-actors");
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    await page.click('#actor-rows tr:first-child button:has-text("Label")');
+    await expect.poll(() => page.locator("#actor-rows .label-input").count()).toBe(1);
+    await page.locator("#actor-rows .label-option", { hasText: "Don't analyse" }).locator("input").check();
+
+    const panel = (await page.locator("#view-actors .panel").first().boundingBox()) ?? { x: 0, width: 0 };
+    for (const selector of [".label-save", '.label-option:has-text("Hide from feed")', '.label-option:has-text("Don\'t analyse")', ".label-warn"]) {
+      const box = (await page.locator(`#actor-rows ${selector}`).first().boundingBox()) ?? { x: 0, width: 1e9 };
+      expect(box.x + box.width, `${selector} is inside the panel`).toBeLessThanOrEqual(panel.x + panel.width + 1);
+    }
+    await page.locator('#actor-rows .label-edit button:has-text("Cancel")').first().click();
     await page.close();
   });
 

@@ -302,10 +302,7 @@ export class ActorState {
 
   /** Names this actor, or clears the name when given nothing. Trimmed and bounded. */
   setLabel(label: string | undefined): void {
-    // A label is typed by an operator but printed everywhere — the dashboard, the change
-    // log, the warning emitted when it is set — so it is quoted like anything else.
-    const trimmed = label === undefined ? undefined : safeSummary(label).trim().slice(0, 120);
-    this.actorLabel = trimmed === undefined || trimmed === "" ? undefined : trimmed;
+    this.actorLabel = cleanLabel(label);
   }
 
   get label(): string | undefined {
@@ -725,4 +722,15 @@ export function walkStepOf(path: string): { template: string; id: number } | und
   let template = `/${parts.join("/")}`;
   if (template.length > TEMPLATE_CHARS) template = `${template.slice(0, TEMPLATE_CHARS)}…`;
   return { template, id: value };
+}
+
+/**
+ * A label as it is kept: quoted, trimmed, bounded, and `undefined` when nothing is left.
+ *
+ * A label is typed by an operator but printed everywhere — the dashboard, the change log,
+ * the warning emitted when it is set — so it is quoted like anything else.
+ */
+export function cleanLabel(label: string | undefined): string | undefined {
+  const trimmed = label === undefined ? undefined : safeSummary(label).trim().slice(0, 120);
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
 }

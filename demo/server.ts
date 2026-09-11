@@ -250,6 +250,10 @@ site.get("/", (request, response) => {
 const dashboard = await detector.serveDashboard({
   port: GUI_PORT,
   title: "bothandlerjs demo",
+  // Kept in a file so a filter saved in one run of the demo is still there in the next.
+  // Without it the dashboard keeps them in memory, and the browser's copy re-seeds it after
+  // a restart — which works in an ordinary tab and nowhere that blocks storage.
+  savedFilters: { file: ".bothandler/saved-filters.json" },
   links: [{ label: "Demo site", href: `http://localhost:${SITE_PORT}/` }],
   // Both controls are on because this is a demo on loopback and the whole point is to
   // let you press things. Both are off by default in the library: `reset` discards the

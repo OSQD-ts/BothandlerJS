@@ -293,6 +293,20 @@ export interface DashboardOptions {
    */
   maxEventsPerSecond?: number;
   controls?: DashboardControls;
+  /**
+   * Where this listener keeps filters people save from the feed.
+   *
+   * Kept by the listener rather than by one browser, so a saved filter is there after a
+   * reload, in another browser, and on a dashboard embedded in a page that owns its own
+   * storage. In memory unless `file` is set; with a file they survive the process
+   * restarting as well. Each listener has its own list — give two listeners the same file
+   * only if they share an audience.
+   *
+   * ```ts
+   * serveDashboard({ savedFilters: { file: "./.bothandler/saved-filters.json" } })
+   * ```
+   */
+  savedFilters?: { file?: string | undefined } | undefined;
   /** Which parts of the page exist on this listener. See {@link DashboardSections}. */
   sections?: DashboardSections;
   redact?: DashboardRedaction;
@@ -572,6 +586,14 @@ export interface DashboardSnapshot {
    * `actors` section is off.
    */
   labels?: Record<string, string> | undefined;
+  /**
+   * The labelled actors whose label switches something: `hide` keeps them out of the live
+   * feed, `skip` means they are not analysed. Only actors with a switch appear.
+   *
+   * Absent on a listener that masks addresses, where the feed keys actors by network and
+   * hiding one would hide everybody sharing it. See `labelSwitchesForViewer` in the server.
+   */
+  labelSwitches?: Record<string, { hide?: true; skip?: true }> | undefined;
   /** Startup warnings, audit anomalies, and anything else the engine has raised. */
   notices: readonly DashboardNotice[];
   /**
