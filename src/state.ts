@@ -628,6 +628,20 @@ export class ActorRegistry {
    * one up the LRU, so watching the list cannot change what it lists.
    */
   top(limit: number, now: number, offset = 0): ActorSummary[] {
+    return this.page({ limit, now, offset }).actors;
+  }
+
+  /**
+   * One page of the ranking, with the number of actors that could have been on one.
+   *
+   * `where` is applied before the slice, which is the whole point of it being here: the
+   * Actors screen is paged on the server, so a filter applied after the slice would narrow
+   * the page rather than the registry — "the busiest fifty, of which three match" instead
+   * of "the three that match". `matching` is what lets the pager say how many there are,
+   * which the unfiltered list has never been able to say cheaply and now can.
+   */
+  page(options: { limit: number; now: number; offset?: number; where?: (actor: ActorSummary) => boolean }): { actors: ActorSummary[]; matching: number } {
+    const { limit, now, offset = 0, where } = options;
     const summaries = this.actors.values().map((state) => {
       const cadence = state.intervalStats();
       return {
@@ -640,14 +654,15 @@ export class ActorRegistry {
         cadenceCv: cadence.count >= 3 ? cadence.coefficientOfVariation : undefined,
       };
     });
-    summaries.sort((a, b) => b.requests - a.requests);
+    const matched = where === undefined ? summaries : summaries.filter(where);
+    matched.sort((a, b) => b.requests - a.requests);
     // `offset` is what lets a dashboard page past the busiest few. The sort is total and
     // stable for a given snapshot, so a page boundary falls in the same place twice —
     // but the underlying counts move, so paging deep into a live registry can still show
     // an actor twice or not at all. That is inherent in ranking something that changes,
     // not something an offset can fix.
     const from = Math.max(0, offset);
-    return summaries.slice(from, from + Math.max(0, limit));
+    return { actors: matched.slice(from, from + Math.max(0, limit)), matching: matched.length };
   }
 
   forget(key: string): void {

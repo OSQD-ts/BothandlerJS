@@ -1,6 +1,7 @@
 import { $, byId, clear, el } from "./dom.js";
 import { SECTIONS } from "./boot.js";
 import { actorActions, isConfirming } from "./actions.js";
+import { matchesActor, parseActorFilter } from "../actor-filter.js";
 import { app } from "./app.js";
 import { clockStamp, n } from "./format.js";
 import { getJson } from "./api.js";
@@ -27,6 +28,8 @@ import type { ActorRow } from "./types.js";
 interface ActorsBody {
   actors: ActorRow[];
   tracked: number;
+  /** How many matched the query, for the pager. Absent from a handler older than it. */
+  matching?: number;
   actionable: boolean;
 }
 
@@ -35,9 +38,13 @@ let timer: ReturnType<typeof setInterval> | undefined;
 export async function loadActors(): Promise<void> {
   if (!SECTIONS.registry) return;
   try {
-    const body = await getJson<ActorsBody>(`/api/actors?limit=${state.actorsPageSize}&offset=${state.actorsPage * state.actorsPageSize}`);
+    // The query goes with it. The list is paged on the server, so filtering it here would
+    // filter the page rather than the registry.
+    const query = state.actorsQuery.trim() === "" ? "" : `&q=${encodeURIComponent(state.actorsQuery)}`;
+    const body = await getJson<ActorsBody>(`/api/actors?limit=${state.actorsPageSize}&offset=${state.actorsPage * state.actorsPageSize}${query}`);
     state.actors = body.actors;
     state.actorsTracked = body.tracked;
+    state.actorsMatching = body.matching ?? body.tracked;
     drawActors();
   } catch {
     /* the rest of the page is unaffected */
@@ -75,28 +82,37 @@ const ACTORS_PAGE_SIZES = [25, 50, 100, 200] as const;
  * below the current page that is cheaper than asking for it, and asking in order to grey
  * out a button is not worth a request.
  */
-function drawActorsPager(full: boolean): void {
+function drawActorsPager(shown: number, fromFeed: boolean): void {
   const page = state.actorsPage;
-  const hidden = page === 0 && !full;
-  const from = page * state.actorsPageSize + 1;
+  const size = state.actorsPageSize;
+  const matching = state.actorsMatching;
+  const hidden = page === 0 && shown >= matching;
+  const from = page * size + 1;
+  // Both lists page the same way now. The feed-derived one is sliced here — it is a list
+  // this page built — and the registry is sliced on the server; the difference is a
+  // reload or a redraw, which is what `go` and `set` decide between.
+  const turn = (): void => {
+    if (fromFeed) app.drawNow();
+    else void loadActors();
+  };
   const model = {
     page,
     from,
-    to: from + state.actors.length - 1,
-    total: state.actorsTracked,
+    to: from + shown - 1,
+    total: matching,
     atStart: page === 0,
-    atEnd: !full,
+    atEnd: (page + 1) * size >= matching,
     go: (next: number): void => {
       state.actorsPage = Math.max(0, next);
-      void loadActors();
+      turn();
     },
     size: {
-      current: state.actorsPageSize,
+      current: size,
       choices: ACTORS_PAGE_SIZES,
       set: (next: number): void => {
         state.actorsPageSize = next;
         state.actorsPage = 0;
-        void loadActors();
+        turn();
       },
     },
   };
@@ -204,6 +220,42 @@ export function initActorScope(): void {
   $("actors-scope-feed").addEventListener("click", () => choose("feed"));
 }
 
+/**
+ * The Actors screen's own filter box. Called once.
+ *
+ * The same language as the feed's, over actors — see `actor-filter.ts`. Typing redraws the
+ * feed-derived list at once, because that list is already here; for the tracked list it
+ * waits a moment first, because that one is a request, and a request per keystroke against
+ * a registry of twenty thousand is a denial of service somebody typed by accident.
+ */
+export function initActorsSearch(): void {
+  if (!SECTIONS.registry) return;
+  const input = byId<HTMLInputElement>("actors-search");
+  input.value = state.actorsQuery;
+  let pending: ReturnType<typeof setTimeout> | undefined;
+  input.addEventListener("input", () => {
+    state.actorsQuery = input.value;
+    // Any change to what matches goes back to the first page: page four of a narrower
+    // list is somebody reading rows their filter no longer selects, or nothing at all.
+    state.actorsPage = 0;
+    app.syncUrl();
+    if (state.actorScope === "feed") {
+      app.drawNow();
+      return;
+    }
+    if (pending !== undefined) clearTimeout(pending);
+    pending = setTimeout(() => void loadActors(), 250);
+  });
+}
+
+/** Puts a query into the box and applies it, for the URL and the back button. */
+export function applyActorsQuery(query: string): void {
+  if (!SECTIONS.registry) return;
+  state.actorsQuery = query;
+  state.actorsPage = 0;
+  byId<HTMLInputElement>("actors-search").value = query;
+}
+
 export function drawActors(): void {
   if (!SECTIONS.registry) return;
   // A repaint replaces every button in the table, including a confirmation somebody is
@@ -213,14 +265,27 @@ export function drawActors(): void {
   clear(body);
 
   const fromFeed = state.actorScope === "feed";
-  const actors = fromFeed ? feedActors() : state.actors;
-  $("actors-count").textContent = fromFeed
-    ? `${n(actors.length)} in the feed you are looking at · ${n(state.actorsTracked)} tracked`
-    : `${n(actors.length)} shown · ${n(state.actorsTracked)} tracked`;
-  // The pager belongs to the registry's server-side paging. The feed's actors are a
-  // client-side list of whatever is on screen, so there is nothing to page through.
-  drawActorsPager(!fromFeed && actors.length === state.actorsPageSize);
-  if (fromFeed) for (const id of ["actors-pager-top", "actors-pager"]) byId<HTMLElement>(id).hidden = true;
+  const query = state.actorsQuery.trim();
+  let actors: ActorRow[];
+  if (fromFeed) {
+    // Filtered and paged here, because this list is built from rows the page already has.
+    const all = query === "" ? feedActors() : feedActors().filter((actor) => matchesActor(parseActorFilter(query), actor));
+    state.actorsMatching = all.length;
+    const size = state.actorsPageSize;
+    // A page that no longer exists — the feed moved on under a deep page — lands on the
+    // last one that does rather than on nothing at all.
+    if (state.actorsPage * size >= all.length) state.actorsPage = Math.max(0, Math.ceil(all.length / size) - 1);
+    actors = all.slice(state.actorsPage * size, state.actorsPage * size + size);
+  } else {
+    actors = state.actors;
+  }
+
+  const population = fromFeed ? "in the feed you are looking at" : "tracked";
+  $("actors-count").textContent =
+    query === ""
+      ? `${n(state.actorsMatching)} ${population}`
+      : `${n(state.actorsMatching)} matching · ${n(fromFeed ? state.actorsMatching : state.actorsTracked)} ${fromFeed ? population : "tracked"}`;
+  drawActorsPager(actors.length, fromFeed);
   byId<HTMLElement>("actors-empty").hidden = actors.length > 0;
 
   for (const actor of actors) {

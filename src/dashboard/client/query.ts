@@ -64,6 +64,16 @@ export type Filter =
   | { kind: "or"; parts: readonly Filter[] };
 
 /** Field names, plus the shorthands people type instead. */
+/**
+ * What a name in front of a colon means.
+ *
+ * Passed through the parser rather than reached for, because the Actors screen runs the
+ * same language over a different shape: the operators, the quoting, the negation and the
+ * precedence are the language, and the fields are what it is about. Two parsers would be
+ * two dialects within a week.
+ */
+export type Vocabulary = Readonly<{ fields: Readonly<Record<string, string>>; numeric: ReadonlySet<string> }>;
+
 const FIELDS: Record<string, string> = {
   path: "path",
   url: "path",
@@ -88,7 +98,10 @@ const FIELDS: Record<string, string> = {
   certain: "certain",
 };
 
-const NUMERIC = new Set(["score"]);
+const NUMERIC: ReadonlySet<string> = new Set(["score"]);
+
+/** The feed's own vocabulary, and the default everywhere that does not say otherwise. */
+export const ENTRY_VOCABULARY: Vocabulary = { fields: FIELDS, numeric: NUMERIC };
 
 /** Every field name the language accepts, including the aliases. For suggestions. */
 export const FIELD_NAMES: readonly string[] = Object.keys(FIELDS).sort();
@@ -288,14 +301,14 @@ function splitSet(inside: string): string[] {
 }
 
 /** Turns one word into a leaf. Returns `undefined` for a word with nothing in it. */
-function toTerm(word: string): Term | undefined {
+function toTerm(word: string, vocabulary: Vocabulary): Term | undefined {
   const negated = word.startsWith("-") || word.startsWith("!");
   const body = negated ? word.slice(1) : word;
   if (body === "") return undefined;
 
   const colon = body.indexOf(":");
   const name = colon === -1 ? "" : body.slice(0, colon).toLowerCase();
-  const field = FIELDS[name];
+  const field = vocabulary.fields[name];
   // A colon with an unknown name in front of it is not a field term — a path can
   // contain one, and so can a User-Agent. It falls through to a free term.
   if (colon === -1 || field === undefined) return { field: undefined, value: body.toLowerCase(), negated };
@@ -316,7 +329,7 @@ function toTerm(word: string): Term | undefined {
 
   let value = unquote(rest).toLowerCase();
   let compare: Term["compare"];
-  if (NUMERIC.has(field)) {
+  if (vocabulary.numeric.has(field)) {
     compare = value.startsWith(">") ? ">" : value.startsWith("<") ? "<" : "=";
     if (compare !== "=") value = value.slice(1);
   }
@@ -331,7 +344,7 @@ function toTerm(word: string): Term | undefined {
  * is dropped rather than raised, because every one of them is a query somebody is
  * halfway through typing.
  */
-function parseTokens(tokens: readonly Token[]): Filter {
+function parseTokens(tokens: readonly Token[], vocabulary: Vocabulary): Filter {
   let at = 0;
   let depth = 0;
 
@@ -365,7 +378,7 @@ function parseTokens(tokens: readonly Token[]): Filter {
       return parseUnary();
     }
     at++;
-    const term = toTerm(token.text);
+    const term = toTerm(token.text, vocabulary);
     return term === undefined ? undefined : { kind: "term", term };
   };
 
@@ -412,7 +425,7 @@ function parseTokens(tokens: readonly Token[]): Filter {
  * this code should be relying on somebody else to enforce. Eight kilobytes is past any
  * query a person writes and matches the ceiling `createFacts` puts on a request target.
  */
-const MAX_QUERY_CHARS = 8192;
+export const MAX_QUERY_CHARS = 8192;
 
 /**
  * Typographic quotes, and the plain ones they stand for.
@@ -431,9 +444,48 @@ function plainQuotes(input: string): string {
 }
 
 /** Parses a query. An empty or unparseable one matches everything. */
-export function parseFilter(input: string): Filter {
+export function parseFilter(input: string, vocabulary: Vocabulary = ENTRY_VOCABULARY): Filter {
   const trimmed = plainQuotes(input.trim());
-  return parseTokens(tokenize(trimmed.length > MAX_QUERY_CHARS ? trimmed.slice(0, MAX_QUERY_CHARS) : trimmed));
+  return parseTokens(tokenize(trimmed.length > MAX_QUERY_CHARS ? trimmed.slice(0, MAX_QUERY_CHARS) : trimmed), vocabulary);
+}
+
+/**
+ * Walks a parsed query, asking `test` about each leaf.
+ *
+ * The shape of a query — what `$and`, `$or`, `$not` and a leading `-` mean — belongs to
+ * the language and is the same whatever is being filtered. Only the leaves know what they
+ * are about, so only the leaves are handed over.
+ */
+export function evaluate(filter: Filter, test: (term: Term) => boolean): boolean {
+  switch (filter.kind) {
+    case "all":
+      return true;
+    case "term":
+      return test(filter.term) !== filter.term.negated;
+    case "not":
+      return !evaluate(filter.of, test);
+    case "and":
+      return filter.parts.every((part) => evaluate(part, test));
+    case "or":
+      return filter.parts.some((part) => evaluate(part, test));
+  }
+}
+
+/** Whether a value satisfies one leaf, by the rules the feed uses. Shared with the Actors screen. */
+export function termMatchesText(term: Term, actual: string, identifier: boolean): boolean {
+  const test = (wanted: string): boolean => (identifier ? matchesIdentifier(actual, wanted) : actual.includes(wanted));
+  if (term.values !== undefined) return term.values.length > 0 && term.values.some(test);
+  return test(term.value);
+}
+
+/** Whether a number satisfies one leaf, by the rules `score:>50` uses. */
+export function termMatchesNumber(term: Term, actual: number | undefined): boolean {
+  if (actual === undefined) return false;
+  const wanted = Number(term.values !== undefined ? term.values[0] : term.value);
+  if (Number.isNaN(wanted)) return false;
+  if (term.compare === ">") return actual > wanted;
+  if (term.compare === "<") return actual < wanted;
+  return actual === wanted;
 }
 
 /** Everything about a request, as one lower-case string. What a free term is matched against. */
@@ -564,18 +616,7 @@ function matchesTerm(term: Term, entry: DashboardEntry, haystack: string, label:
  * the feed — and a lookup at match time is what makes that retroactive.
  */
 export function matches(filter: Filter, entry: DashboardEntry, haystack: string, label?: string): boolean {
-  switch (filter.kind) {
-    case "all":
-      return true;
-    case "term":
-      return matchesTerm(filter.term, entry, haystack, label) !== filter.term.negated;
-    case "not":
-      return !matches(filter.of, entry, haystack, label);
-    case "and":
-      return filter.parts.every((part) => matches(part, entry, haystack, label));
-    case "or":
-      return filter.parts.some((part) => matches(part, entry, haystack, label));
-  }
+  return evaluate(filter, (term) => matchesTerm(term, entry, haystack, label));
 }
 
 /** The named filter buttons, which are a second, independent narrowing. */

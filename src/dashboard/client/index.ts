@@ -7,7 +7,7 @@ import { connectStream, loadInitialSnapshot } from "./stream.js";
 import { drawAudit, drawChanges, drawChips, drawLivePanels, drawNoticeBadge, drawNotices, drawPeers, drawStatsPanels, drawTiles, updateWindowLabels } from "./panels.js";
 import { drawFeed, initFeed, reflectFilterButtons, resetFeedCache } from "./feed.js";
 import { drawLatency, drawScores, drawTraffic } from "./charts.js";
-import { applyActorScope, drawActors, initActorScope, trackActors } from "./registry.js";
+import { applyActorScope, applyActorsQuery, drawActors, initActorScope, initActorsSearch, trackActors } from "./registry.js";
 import { drawPolicyTab, initPolicy, loadPolicy } from "./policy.js";
 import { loadRanges } from "./ranges.js";
 import { initTester } from "./tester.js";
@@ -165,13 +165,14 @@ function syncUrl(replace = true): void {
   if (state.filter !== "all") params.set("f", state.filter);
   if (state.search !== "") params.set("q", state.search);
   if (state.actorScope !== "tracked") params.set("a", state.actorScope);
+  if (state.actorsQuery !== "") params.set("aq", state.actorsQuery);
   const query = params.toString();
   const hash = `#${state.tab}${query === "" ? "" : `?${query}`}`;
   if (location.hash === hash) return;
   history[replace ? "replaceState" : "pushState"]({ tab: state.tab }, "", hash);
 }
 
-function readUrl(): { tab: TabName; filter: FilterName; search: string; actorScope: "tracked" | "feed" } {
+function readUrl(): { tab: TabName; filter: FilterName; search: string; actorScope: "tracked" | "feed"; actorsQuery: string } {
   // And it is not ours to read either: a host page using hash routing would otherwise
   // decide which tab this opens on.
   const raw = isEmbedded() ? "" : location.hash.slice(1);
@@ -186,6 +187,7 @@ function readUrl(): { tab: TabName; filter: FilterName; search: string; actorSco
     // Anything but the one alternative reads as the default rather than as an error:
     // a hand-edited URL should land somewhere, and this is the somewhere it lands.
     actorScope: params.get("a") === "feed" ? "feed" : "tracked",
+    actorsQuery: params.get("aq") ?? "",
   };
 }
 
@@ -236,6 +238,7 @@ function initTabs(): void {
     setSearch(url.search);
     reflectFilterButtons();
     applyActorScope(url.actorScope);
+    applyActorsQuery(url.actorsQuery);
     showTab(url.tab, { push: false });
   });
 }
@@ -426,6 +429,7 @@ function start(): void {
   if (SECTIONS.feed) initFeed();
   initActor();
   initActorScope();
+  initActorsSearch();
   initTester();
   initPolicy();
 
@@ -449,6 +453,7 @@ function start(): void {
   setSearch(url.search);
   if (SECTIONS.feed) reflectFilterButtons();
   applyActorScope(url.actorScope);
+  applyActorsQuery(url.actorsQuery);
   showTab(url.tab, { replace: true });
 
   suspendScrollAnchoring();

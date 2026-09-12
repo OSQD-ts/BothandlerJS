@@ -2120,3 +2120,87 @@ describe("saved filters", () => {
     expect((await fetch(base + "/api/filters")).status).toBe(403);
   });
 });
+
+/**
+ * Filtering the Actors screen.
+ *
+ * Filtered on the server, because the list is paged there. The case that matters is an
+ * actor that ranks below the first page: filtering on the page would narrow the fifty it
+ * was sent, which answers "the busiest fifty, of which one matches" instead of "the one
+ * that matches".
+ */
+describe("the actors endpoint", () => {
+  type Body = { actors: Array<{ key: string; requests: number; label?: string }>; tracked: number; matching: number };
+  const list = async (base: string, query = ""): Promise<Body> => json<Body>(await fetch(`${base}/api/actors?limit=10${query}`));
+
+  /** Busiest first, so the address with the fewest requests is the furthest down the list. */
+  async function populate(handler: BotHandler, count: number): Promise<void> {
+    for (let i = 0; i < count; i++) {
+      for (let hit = 0; hit <= count - i; hit++) {
+        await handler.assess(createFacts({ method: "GET", url: "/x", headers: { host: "shop.example", "user-agent": "curl/8.4.0" }, ip: `198.51.100.${i + 1}` }));
+      }
+    }
+  }
+
+  it("finds an actor that ranks below the page it would have been on", async () => {
+    const { handler, base } = await serve();
+    await populate(handler, 25);
+    const firstPage = await list(base);
+    expect(firstPage.actors).toHaveLength(10);
+    const quietest = "198.51.100.25";
+    expect(firstPage.actors.map((actor) => actor.key), "not on the first page").not.toContain(quietest);
+
+    const found = await list(base, `&q=${encodeURIComponent(`actor:${quietest}`)}`);
+    expect(found.actors.map((actor) => actor.key)).toEqual([quietest]);
+    expect(found.matching).toBe(1);
+    expect(found.tracked, "and it still says how many there are altogether").toBe(25);
+  });
+
+  it("pages what the filter left, rather than filtering the page", async () => {
+    const { handler, base } = await serve();
+    await populate(handler, 25);
+    const all = await list(base, "&q=requests:>1");
+    expect(all.matching).toBeGreaterThan(10);
+    expect(all.actors).toHaveLength(10);
+
+    const second = await json<Body>(await fetch(`${base}/api/actors?limit=10&offset=10&q=requests%3A%3E1`));
+    expect(second.matching).toBe(all.matching);
+    expect(second.actors[0]?.key, "the eleventh match, not the eleventh actor").not.toBe(all.actors[0]?.key);
+    const seen = new Set([...all.actors, ...second.actors].map((actor) => actor.key));
+    expect(seen.size, "no actor appears on both pages").toBe(all.actors.length + second.actors.length);
+  });
+
+  it("filters by a name given to an actor", async () => {
+    const { handler, base } = await serve();
+    await populate(handler, 12);
+    handler.labelActor("198.51.100.12", "the quiet one");
+    const found = await list(base, "&q=label%3Aquiet");
+    expect(found.actors.map((actor) => actor.key)).toEqual(["198.51.100.12"]);
+    expect(found.actors[0]?.label).toBe("the quiet one");
+  });
+
+  /**
+   * Half-typed input reaches here, because the box sends what is in it. It is answered by
+   * the same rules the feed uses — an empty set matches nothing, rather than widening to
+   * everything while somebody is still typing — and nothing throws.
+   */
+  it("answers half-typed input the way the feed does", async () => {
+    const { handler, base } = await serve();
+    await populate(handler, 5);
+    expect((await list(base, "&q=label%3A%24in(")).matching, "an empty set selects nothing").toBe(0);
+    expect((await list(base, "&q=%20%20")).matching, "and whitespace is no filter at all").toBe(5);
+    for (const half of ["%24", "(", ")", "-", "%24and", "actor%3A"]) {
+      expect((await fetch(`${base}/api/actors?limit=10&q=${half}`)).status, half).toBe(200);
+    }
+  });
+});
+
+/**
+ * A deployment's own secret headers.
+ *
+ * Reported from a production integration: a bypass secret travelling as
+ * `x-<company>-automation` was printed in full into a feed export — next to
+ * `authorization` and `cookie` showing as `[redacted]` — and the export was pasted into a
+ * chat. The built-in list only covers headers this library has heard of, and the one
+ * holding a deployment's own credential is by definition one it has not.
+ */

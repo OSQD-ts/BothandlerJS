@@ -14,6 +14,9 @@ import type { BotHandler } from "../core.js";
 import { createFacts } from "../facts.js";
 import { maskAddresses, networkKey } from "../internal/ip.js";
 import { SavedFilterStore, cleanSavedFilter } from "./saved-filters.js";
+import { matchesActor, parseActorFilter } from "./actor-filter.js";
+import { MAX_QUERY_CHARS } from "./client/query.js";
+import type { ActorSummary } from "../state.js";
 import { parseRequest } from "./parse-request.js";
 import type {
   DashboardAuth,
@@ -422,11 +425,33 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
         // being told they are all there is. Clamped like the limit: an offset from a
         // query string is a number somebody typed.
         const offset = Math.max(0, Math.floor(Number(url.searchParams.get("offset") ?? 0) || 0));
-        const actors = handler.registry.top(limit, handler.config.clock.now(), offset).map((actor) => ({
-          ...actor,
+        // Filtered here rather than on the page, because the page only has the page. A
+        // filter applied after the slice narrows the busiest fifty; this narrows the
+        // registry and then pages what is left. The names are overlaid first, so
+        // `label:office` finds an actor named while it was not being tracked.
+        const names = handler.actorLabels();
+        const query = (url.searchParams.get("q") ?? "").slice(0, MAX_QUERY_CHARS);
+        const filter = query.trim() === "" ? undefined : parseActorFilter(query);
+        const named = (actor: ActorSummary): ActorSummary => {
+          const label = names.get(actor.key) ?? actor.label;
+          return label === undefined ? actor : { ...actor, label };
+        };
+        const { actors: page, matching } = handler.registry.page({
+          limit,
+          now: handler.config.clock.now(),
+          offset,
+          ...(filter === undefined ? {} : { where: (actor: ActorSummary) => matchesActor(filter, named(actor)) }),
+        });
+        const actors = page.map((actor) => ({
+          ...named(actor),
           key: maskIp ? (networkKey(actor.key) ?? actor.key) : actor.key,
         }));
-        return send(response, 200, "application/json; charset=utf-8", JSON.stringify({ actors, tracked: handler.registry.size, actionable: allowActing }));
+        return send(
+          response,
+          200,
+          "application/json; charset=utf-8",
+          JSON.stringify({ actors, tracked: handler.registry.size, matching, actionable: allowActing }),
+        );
       }
 
       case "/api/ranges": {

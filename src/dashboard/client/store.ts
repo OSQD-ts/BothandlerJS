@@ -38,6 +38,17 @@ export interface State {
   actorsTracked: number;
   /** Which population the Actors screen is listing. See `registry.feedActors`. */
   actorScope: "tracked" | "feed";
+  /** The Actors screen's own query, in the feed's language over actors. */
+  actorsQuery: string;
+  /**
+   * How many actors the query matches.
+   *
+   * Counted by whoever filtered: the server for the tracked list, which is paged there, and
+   * the page itself for the feed-derived one. It is what lets the pager say how many pages
+   * there are — something the unfiltered tracked list could never say cheaply, because it
+   * only ever knew whether the page it asked for came back full.
+   */
+  actorsMatching: number;
   paused: boolean;
   filter: FilterName;
   search: string;
@@ -106,6 +117,8 @@ export const state: State = {
   showHidden: false,
   actorsTracked: 0,
   actorScope: "tracked",
+  actorsQuery: "",
+  actorsMatching: 0,
   paused: false,
   filter: "all",
   search: "",
