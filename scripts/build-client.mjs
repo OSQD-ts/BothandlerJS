@@ -108,19 +108,36 @@ export const VERSION = ${JSON.stringify(version)};
 `;
 }
 
+/**
+ * The two generated files, and whether `--check` holds them to being current.
+ *
+ * The client bundle is derived from source under `src/dashboard/client/`, so a committed
+ * copy that disagrees with that source is a real defect — somebody edited the client and
+ * shipped the old bundle — and CI should refuse it.
+ *
+ * The version constant is derived from `package.json`, which the release workflow bumps
+ * *by design* and without running a generate step: it sets the version, builds (which
+ * regenerates this from the new number), publishes, and commits the bumped manifest. So
+ * the committed constant trails the manifest between a release and the next build, and
+ * checking it would turn every successful release into a failing CI run on the commit
+ * right after it. It cannot ship stale — `prebuild`, `pretest` and `pretypecheck` all
+ * regenerate it first — so being current in git is not a property worth enforcing.
+ */
 const outputs = [
-  [target, await buildClient(), "dashboard client bundle", "src/dashboard/client.generated.ts"],
-  [versionTarget, await buildVersion(), "version constant", "src/version.generated.ts"],
+  [target, await buildClient(), "dashboard client bundle", "src/dashboard/client.generated.ts", true],
+  [versionTarget, await buildVersion(), "version constant", "src/version.generated.ts", false],
 ];
 
-for (const [file, contents, label, name] of outputs) {
+for (const [file, contents, label, name, checked] of outputs) {
   const existing = await readFile(file, "utf8").catch(() => "");
-  if (process.argv.includes("--check")) {
+  if (process.argv.includes("--check") && checked) {
     if (existing !== contents) {
       console.error(`${name} is out of date. Run \`npm run client:build\`.`);
       process.exit(1);
     }
     console.log(`${label} is up to date`);
+  } else if (process.argv.includes("--check")) {
+    console.log(`${label} not checked — it follows package.json, which the release bumps`);
   } else if (existing === contents) {
     console.log(`${label} unchanged`);
   } else {
