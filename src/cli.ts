@@ -9,15 +9,18 @@
  * so you can read them and decide whether any of them are people.
  */
 import { createReadStream } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { BotHandler } from "./core.js";
 import { createFacts } from "./facts.js";
 import { PRESETS } from "./policy/presets.js";
 import { robotsFromRules } from "./robots.js";
 import { DEFAULT_TRAP_PATHS } from "./detectors/trap.js";
+import { VERSION } from "./version.generated.js";
 import type { PresetName } from "./policy/presets.js";
 import type { Assessment, RequestFacts } from "./types.js";
 import type { Decision } from "./policy/types.js";
+import type { Scorecard } from "./corpus/runner.js";
 
 const USAGE = `bothandlerjs — bot traffic detection
 
@@ -35,6 +38,13 @@ check options
   --json              Emit the scorecard as JSON
   --strict            Also fail on cases whose expected action differs (default: only
                       the invariants — nothing marked as a person may be denied)
+  --baseline <file>   Compare against a scorecard saved earlier with --json, and report
+                      what moved. Exits non-zero if a case that used to be served is
+                      not any more. The upgrade check, in one command:
+
+                        bothandlerjs check --preset indexers-only --json > before.json
+                        npm install @osqd/bothandlerjs@latest
+                        bothandlerjs check --preset indexers-only --baseline before.json
 
 explain
   Reads a User-Agent, a curl command or a block of request headers, from an argument
@@ -80,7 +90,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     return 0;
   }
   if (command === "--version" || command === "-v") {
-    process.stdout.write("bothandlerjs 0.2.0\n");
+    process.stdout.write(`bothandlerjs ${VERSION}\n`);
     return 0;
   }
 
@@ -346,6 +356,104 @@ function table(out: (line?: string) => void, counts: Map<string, number>, total:
 // ---------------------------------------------------------------------------
 
 /**
+ * One case's outcome, as a baseline file records it.
+ *
+ * Deliberately small: an id, who the case is, and what the policy did to them. A
+ * baseline is compared against a *different version of this library*, so anything richer
+ * would be comparing two things that were free to change shape in between.
+ */
+interface BaselineRow {
+  id: string;
+  audience: string;
+  action: string;
+  verdict: string;
+  /** Absent on a skipped case, which is a fact about the run rather than about the case. */
+  skipped?: boolean;
+}
+
+function baselineRows(scorecard: Scorecard): BaselineRow[] {
+  return scorecard.results.map((result) => ({
+    id: result.case.id,
+    audience: result.case.audience,
+    action: result.skipped === undefined ? result.final.decision.action : "skipped",
+    verdict: result.skipped === undefined ? result.final.assessment.verdict : "skipped",
+    ...(result.skipped === undefined ? {} : { skipped: true }),
+  }));
+}
+
+/** Actions that withhold or alter the response. Moving *into* this set is the news. */
+const DENYING: ReadonlySet<string> = new Set(["block", "drop", "redirect", "tarpit", "challenge"]);
+
+/**
+ * Compares this run against a baseline taken on an earlier version.
+ *
+ * The upgrade guide has always asked for this comparison and then left everybody to
+ * write the script: run the corpus against your own rules, dump JSON, install the new
+ * version, run it again, diff the two. An integration reported writing exactly that, on
+ * every upgrade, and it is how they learned that eighteen new signatures changed nothing
+ * for their policy while five benign bots moved from `block` to `rate-limit`.
+ *
+ * What it reports is movement, not absolute numbers: a case that reached a different
+ * action than it used to. Cases the corpus gained or lost since the baseline are listed
+ * separately rather than counted as movement, because a case that did not exist cannot
+ * have moved.
+ */
+function compareBaseline(scorecard: Scorecard, preset: string, baseline: unknown, path: string): { lines: string[]; regressions: number } {
+  const lines: string[] = [];
+  const parsed = baseline as { preset?: string; version?: string; cases?: BaselineRow[] };
+  const rows = Array.isArray(parsed.cases) ? parsed.cases : undefined;
+  if (rows === undefined) {
+    lines.push(`\n  ${path} carries no per-case rows, so there is nothing to compare against.`);
+    lines.push("  It was written by a version older than this one. Take a fresh baseline with --json.");
+    return { lines, regressions: 0 };
+  }
+
+  const before = new Map(rows.map((row) => [row.id, row]));
+  const now = baselineRows(scorecard);
+  const moved: Array<{ row: BaselineRow; from: string }> = [];
+  const added: BaselineRow[] = [];
+  for (const row of now) {
+    const previous = before.get(row.id);
+    if (previous === undefined) {
+      added.push(row);
+      continue;
+    }
+    before.delete(row.id);
+    if (previous.action !== row.action) moved.push({ row, from: previous.action });
+  }
+  const removed = [...before.values()];
+
+  lines.push(`\n  Compared against ${path}${parsed.version === undefined ? "" : ` (${parsed.version})`}${parsed.preset === undefined || parsed.preset === preset ? "" : ` — taken on preset "${parsed.preset}", not "${preset}"`}`);
+
+  // Grouped by audience, because "who moved" is the question. An action change among
+  // hostile cases is tuning; the same change among humans is an incident.
+  if (moved.length === 0) lines.push("  Nothing moved.");
+  else {
+    const byAudience = new Map<string, Array<{ row: BaselineRow; from: string }>>();
+    for (const entry of moved) byAudience.set(entry.row.audience, [...(byAudience.get(entry.row.audience) ?? []), entry]);
+    lines.push(`  ${moved.length} case(s) reached a different action:\n`);
+    for (const [audience, entries] of [...byAudience].sort((a, b) => b[1].length - a[1].length)) {
+      lines.push(`    ${audience}`);
+      for (const { row, from } of entries) lines.push(`      ${`${from} → ${row.action}`.padEnd(28)} ${row.id}`);
+    }
+  }
+
+  if (added.length > 0) lines.push(`\n  ${added.length} case(s) the corpus has gained since: ${added.slice(0, 12).map((row) => row.id).join(", ")}${added.length > 12 ? ", …" : ""}`);
+  if (removed.length > 0) lines.push(`\n  ${removed.length} case(s) the corpus no longer has: ${removed.slice(0, 12).map((row) => row.id).join(", ")}${removed.length > 12 ? ", …" : ""}`);
+
+  // The regression that matters: somebody who used to be served and now is not. A human
+  // moving into a denying action is already a false positive and already fails the run;
+  // this catches the same movement among everybody else, which is the change an upgrade
+  // is most likely to make and least likely to mention.
+  const nowRefused = moved.filter(({ row, from }) => DENYING.has(row.action) && !DENYING.has(from));
+  if (nowRefused.length > 0) {
+    lines.push(`\n  ${nowRefused.length} case(s) were served before and are not now:\n`);
+    for (const { row, from } of nowRefused) lines.push(`    ${`${from} → ${row.action}`.padEnd(28)} ${row.audience.padEnd(15)} ${row.id}`);
+  }
+  return { lines, regressions: nowRefused.length };
+}
+
+/**
  * Runs a policy against the traffic corpus.
  *
  * The question this library is organised around, asked offline and before a deploy:
@@ -399,6 +507,7 @@ async function check(flags: Map<string, string>): Promise<number> {
     process.stdout.write(
       `${JSON.stringify(
         {
+          version: VERSION,
           preset,
           total: scorecard.total,
           passed: scorecard.passed,
@@ -407,6 +516,10 @@ async function check(flags: Map<string, string>): Promise<number> {
           skipped: scorecard.skipped.length,
           byAudience: scorecard.byAudience,
           unexercisedDetectors: scorecard.unexercisedDetectors,
+          // One row per case, which is what makes this file a baseline rather than a
+          // summary. `--baseline` reads exactly this and reports what moved; without it
+          // the tallies can match while every case underneath them has changed.
+          cases: baselineRows(scorecard),
         },
         null,
         2,
@@ -448,10 +561,28 @@ async function check(flags: Map<string, string>): Promise<number> {
   if (scorecard.unexercisedDetectors.length > 0) {
     lines.push(`\n  Detectors no case exercised: ${scorecard.unexercisedDetectors.join(", ")}`);
   }
+
+  let regressions = 0;
+  const baselinePath = flags.get("baseline");
+  if (baselinePath !== undefined) {
+    let baseline: unknown;
+    try {
+      baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    } catch (error) {
+      // Reported rather than thrown: the run itself succeeded, and its result is worth
+      // printing even when the file you wanted to compare it against is not there.
+      process.stdout.write(lines.join("\n"));
+      process.stderr.write(`\n  Could not read the baseline ${baselinePath}: ${(error as Error).message}\n`);
+      return 1;
+    }
+    const compared = compareBaseline(scorecard, preset, baseline, baselinePath);
+    lines.push(...compared.lines);
+    regressions = compared.regressions;
+  }
   lines.push("");
   process.stdout.write(lines.join("\n"));
 
-  return scorecard.falsePositives.length > 0 || (flags.has("strict") && scorecard.failed > 0) ? 1 : 0;
+  return scorecard.falsePositives.length > 0 || regressions > 0 || (flags.has("strict") && scorecard.failed > 0) ? 1 : 0;
 }
 
 /**
@@ -737,7 +868,7 @@ function readTimestamp(record: Record<string, unknown>): number | undefined {
  * protect-data`. It read the request as the value of `--json`, left no positional
  * argument at all, and `explain` sat waiting on a pipe nobody was writing to.
  */
-const VALUE_FLAGS = new Set(["preset", "audience", "limit", "show", "format", "ip", "url", "method"]);
+const VALUE_FLAGS = new Set(["preset", "audience", "limit", "show", "format", "ip", "url", "method", "baseline"]);
 
 /**
  * The arguments that are neither a flag nor a flag's value.

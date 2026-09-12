@@ -103,3 +103,85 @@ describe("the tool's own front door", () => {
     expect(await cli.code).toBe(1);
   });
 });
+
+/**
+ * `check --baseline`, which is the upgrade ritual the docs already ask for.
+ *
+ * An integration reported writing this script themselves on every upgrade: run the
+ * corpus, dump JSON, install the new version, run it again, diff the two. It is how they
+ * learned that eighteen new signatures changed nothing for their policy while five benign
+ * bots moved from `block` to `rate-limit`. This makes it one command with an exit code.
+ *
+ * The corpus run is the slow part, so these share one baseline between them.
+ */
+describe("comparing a run against a baseline", () => {
+  const baseline = (async (): Promise<{ path: string; parsed: { cases: Array<{ id: string; audience: string; action: string }> } }> => {
+    const { mkdtemp, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const cli = run(["check", "--preset", "indexers-only", "--json"]);
+    await cli.code;
+    const parsed = JSON.parse(cli.out()) as { cases: Array<{ id: string; audience: string; action: string }> };
+    const dir = await mkdtemp(join(tmpdir(), "bothandler-baseline-"));
+    const path = join(dir, "before.json");
+    await writeFile(path, cli.out(), "utf8");
+    return { path, parsed };
+  })();
+
+  it("records one row per case, which is what makes the file a baseline", async () => {
+    const { parsed } = await baseline;
+    expect(parsed.cases.length).toBeGreaterThan(100);
+    // Enough to say what moved, and no more: a baseline is compared against a different
+    // version of this library, so anything richer compares two moving things. Read off a
+    // case that ran, since a skipped one carries one extra field saying so.
+    const ran = parsed.cases.find((row) => !("skipped" in row));
+    expect(Object.keys(ran as object).sort()).toEqual(["action", "audience", "id", "verdict"]);
+  });
+
+  it("says nothing moved when nothing moved, and succeeds", async () => {
+    const { path } = await baseline;
+    const cli = run(["check", "--preset", "indexers-only", "--baseline", path]);
+    expect(await cli.code).toBe(0);
+    expect(cli.out()).toContain("Nothing moved");
+  });
+
+  it("reports what moved, and fails when somebody served before is refused now", async () => {
+    const { writeFile } = await import("node:fs/promises");
+    const { path, parsed } = await baseline;
+    // A baseline in which two crawlers were served. They are refused in this run, which
+    // is the regression an upgrade is most likely to introduce and least likely to say.
+    const doctored = {
+      preset: "indexers-only",
+      cases: parsed.cases.map((row) => (row.action === "block" && row.audience === "benign-bot" ? { ...row, action: "allow" } : row)),
+    };
+    const altered = `${path}.doctored.json`;
+    await writeFile(altered, JSON.stringify(doctored), "utf8");
+
+    const cli = run(["check", "--preset", "indexers-only", "--baseline", altered]);
+    expect(await cli.code, "a case that used to be served and is not now must fail the run").toBe(1);
+    const text = cli.out();
+    expect(text).toContain("reached a different action");
+    expect(text).toContain("were served before and are not now");
+    // Grouped by who they are, because an action change among hostile cases is tuning and
+    // the same change among humans is an incident.
+    expect(text).toContain("benign-bot");
+  });
+
+  it("says so rather than throwing when the baseline is not there", async () => {
+    const cli = run(["check", "--preset", "indexers-only", "--baseline", "/nonexistent/before.json"]);
+    expect(await cli.code).toBe(1);
+    // The run itself succeeded, so its result is still worth printing.
+    expect(cli.out()).toContain("shapes of real traffic");
+    expect(cli.err()).toContain("Could not read the baseline");
+  });
+
+  it("says a baseline from an older version has nothing to compare", async () => {
+    const { writeFile } = await import("node:fs/promises");
+    const { path } = await baseline;
+    const old = `${path}.old.json`;
+    await writeFile(old, JSON.stringify({ preset: "indexers-only", total: 500, passed: 500 }), "utf8");
+    const cli = run(["check", "--preset", "indexers-only", "--baseline", old]);
+    expect(await cli.code).toBe(0);
+    expect(cli.out()).toContain("no per-case rows");
+  });
+});
