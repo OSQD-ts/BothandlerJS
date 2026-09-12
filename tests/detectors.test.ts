@@ -830,6 +830,44 @@ describe("reading the transport under a browser's claim", () => {
     const detector = transportCoherenceDetector({ legacyHttp: false });
     expect(detector.id).toBe("transport-coherence");
   });
+
+  it("stops reading the version by itself once a proxy is trusted", async () => {
+    // The version this process sees is the version of the connection *it* accepted. Behind
+    // a proxy that is the proxy's connection — nginx still defaults to HTTP/1.0 upstream —
+    // so the signal would describe every visitor at once. `proxy.trustProxy` is the
+    // deployment saying a proxy terminated the connection, so it settles this too.
+    const behind = new BotHandler({ preset: "protect-content", proxy: { trustProxy: true, hops: 1 } });
+    let last: Awaited<ReturnType<BotHandler["handle"]>> | undefined;
+    for (let i = 0; i < 30; i++) {
+      last = await behind.handle(
+        createFacts({
+          method: "GET",
+          url: `/article/${i}`,
+          headers: { ...headers, "x-forwarded-for": "203.0.113.94" },
+          ip: "10.0.0.1",
+          timestamp: 1_700_000_000_000 + i * 900,
+          httpVersion: "1.0",
+        }),
+      );
+    }
+    expect(said((last as Awaited<ReturnType<BotHandler["handle"]>>).assessment)).toBe(false);
+    // The rest of the detector is untouched: a visit made entirely of HEAD still reports.
+    const heads = new BotHandler({ preset: "protect-content", proxy: { trustProxy: true, hops: 1 } });
+    let head: Awaited<ReturnType<BotHandler["handle"]>> | undefined;
+    for (let i = 0; i < 30; i++) {
+      head = await heads.handle(
+        createFacts({
+          method: "HEAD",
+          url: `/article/${i}`,
+          headers: { ...headers, "x-forwarded-for": "203.0.113.96" },
+          ip: "10.0.0.1",
+          timestamp: 1_700_000_000_000 + i * 900,
+          httpVersion: "1.1",
+        }),
+      );
+    }
+    expect(said((head as Awaited<ReturnType<BotHandler["handle"]>>).assessment)).toBe(true);
+  });
 });
 
 /**

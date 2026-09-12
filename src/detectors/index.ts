@@ -103,7 +103,7 @@ export type { BotSignature, BotCategory, Verification } from "./known-bots.js";
  * issued, so they would be three permanently silent entries in every deployment that
  * does not use one, and the engine adds them once `probe` is.
  */
-export function defaultDetectors(options: { crawlerVerification?: CrawlerVerificationOptions } = {}): Detector[] {
+export function defaultDetectors(options: { crawlerVerification?: CrawlerVerificationOptions; behindProxy?: boolean } = {}): Detector[] {
   return [
     // Identity first: a self-declaration or a verified crawler settles the question
     // outright, and the engine can then skip everything that would only add nuance.
@@ -119,7 +119,16 @@ export function defaultDetectors(options: { crawlerVerification?: CrawlerVerific
     clientHintsDetector(),
     fetchMetadataDetector(),
     acceptSignatureDetector(),
-    transportCoherenceDetector(),
+    // The transport version is the *connection this process accepted*. Behind a proxy that
+    // is the proxy's connection, not the client's — nginx still defaults to HTTP/1.0
+    // upstream — so "a browser claiming Chrome over HTTP/1.0" then describes every visitor
+    // and is a standing penalty for something none of them did. An integration measured it:
+    // a full real-Chrome header set, 0 over HTTP/1.1 and 24 over HTTP/1.0, sitting under
+    // the threshold and waiting for one more mild signal to tip people into a challenge.
+    // `proxy.trustProxy` already says a proxy terminated the connection, so this stops
+    // reading the version when it does. `legacyHttp: true` puts it back for a deployment
+    // whose proxy passes the client's version through.
+    transportCoherenceDetector(options.behindProxy === true ? { legacyHttp: false } : {}),
     headerOrderDetector(),
     // Behaviour across requests.
     rateAnomalyDetector(),

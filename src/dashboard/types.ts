@@ -200,6 +200,27 @@ export interface DashboardRedaction {
   /** Keep only the first 48 characters of each User-Agent. Default false. */
   truncateUserAgent?: boolean;
   /**
+   * Header names this deployment holds a secret in, hidden wherever a header is shown.
+   *
+   * The built-in list covers the headers this library has heard of, and a deployment's own
+   * bypass secret is by definition one it has not. Name yours here and it is `[redacted]`
+   * in the feed, the row detail and an export, the way `authorization` already is.
+   *
+   * ```ts
+   * redact: { secretHeaders: ["x-acme-automation"] }
+   * ```
+   */
+  secretHeaders?: readonly string[];
+  /**
+   * Also hide a header whose *name* says it holds a secret — `token`, `api-key`,
+   * `secret`, `password`, `credential`. Default true.
+   *
+   * On by default because the failure it prevents runs one way: a value shown to somebody
+   * who did not need it is noticed and corrected, and a live credential pasted into a chat
+   * is not. Turn it off to say exactly which headers are secret and show the rest.
+   */
+  guessSecretHeaders?: boolean;
+  /**
    * Replace query-string *values* with a placeholder, keeping the names. Default true.
    *
    * A query string is where password-reset tokens, invitation links and email

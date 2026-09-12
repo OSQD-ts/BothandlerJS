@@ -1673,6 +1673,16 @@ defineBotDashboard();
 </script></body></html>`);
         return;
       }
+      if (path === "/opens-on") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_bots"></bot-dashboard>
+<script type="module">
+import { defineBotDashboard } from "/element.js";
+document.getElementById("d").config = { view: { tab: "stats", filter: "deny", query: "path:/checkout" } };
+defineBotDashboard();
+</script></body></html>`);
+        return;
+      }
       if (path === "/theming") {
         response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         response.end(`<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_bots"></bot-dashboard>
@@ -2602,6 +2612,36 @@ defineBotDashboard();
   });
 
   /**
+   * An embedded dashboard has no URL of its own, so `view` is how it is told where to
+   * open — the thing `#live?f=deny&q=...` does for the served page. Asserted in a browser
+   * because the unit test can only check the object the element builds, and the failure
+   * this guards against is that object never being read.
+   */
+  it("opens an embedded dashboard on the view it was configured with", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(`${embedUrl}opens-on`);
+    await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector('[role="tab"]') != null, undefined, { timeout: 15_000 });
+
+    const opened = await page.evaluate(() => {
+      const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+      const selected = shadow.querySelector('[role="tab"][aria-selected="true"]');
+      return {
+        tab: selected?.id.replace("tab-", "") ?? "",
+        search: (shadow.getElementById("search") as HTMLInputElement | null)?.value ?? "",
+        chip: (shadow.getElementById("filters")?.querySelector('[aria-pressed="true"]') as HTMLElement | null)?.dataset["filter"] ?? "",
+        // The host page's address is not ours to write, and a view must not change that.
+        hash: location.hash,
+      };
+    });
+    await page.close();
+
+    expect(opened.tab).toBe("stats");
+    expect(opened.search).toBe("path:/checkout");
+    expect(opened.chip).toBe("deny");
+    expect(opened.hash).toBe("");
+  });
+
+  /**
    * Windows High Contrast and the rest. The browser repaints text, backgrounds and borders
    * from the user's palette and leaves SVG fill and stroke alone — which is what keeps the
    * two series tellable apart rather than collapsing them into one system colour — but it
@@ -3457,6 +3497,70 @@ describe("the Actors screen", () => {
 
     await page.click("#actors-scope-tracked");
     await expect.poll(() => page.locator("#actors-count").textContent()).toContain("tracked");
+    await page.close();
+  });
+
+  /**
+   * The filter, in the language the feed uses.
+   *
+   * The tracked list is paged on the server, so the filter goes with the request: what it
+   * narrows is the registry, not the fifty rows that happen to be on screen. That is the
+   * case worth proving, so the actor looked for is one the first page does not hold.
+   */
+  it("filters the tracked list against the whole registry, not the page", async () => {
+    const page = await open();
+    // Quiet enough to rank below the busy actors every other test has made.
+    const quiet = "203.0.115.77";
+    await handler.handle(createFacts({ method: "GET", url: "/quiet", headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: quiet }));
+    await page.click("#tab-actors");
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+    const rows = async (): Promise<string> => (await page.locator("#actor-rows").textContent()) ?? "";
+    await page.locator("#actors-search").fill(`actor:${quiet}`);
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBe(1);
+    expect(await rows()).toContain(quiet);
+    await expect.poll(() => page.locator("#actors-count").textContent()).toContain("1 matching");
+
+    // The query travels, like every other narrowing on this page.
+    expect(new URL(page.url()).hash).toContain("aq=");
+    await page.reload();
+    await page.waitForSelector("#view-actors:not([hidden])");
+    await expect.poll(() => page.locator("#actors-search").inputValue(), { timeout: 15_000 }).toBe(`actor:${quiet}`);
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBe(1);
+
+    // A number reads as a number, and an unmatched filter says so rather than showing all.
+    await page.locator("#actors-search").fill("requests:>1000000");
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBe(0);
+    expect(await page.locator("#actors-empty").isVisible()).toBe(true);
+    await page.close();
+  });
+
+  /**
+   * The feed-derived list had no pager at all: it showed every actor in the window in one
+   * run, however many that was. It is built on the page, so it is filtered and paged there.
+   */
+  it("pages and filters the actors drawn from the feed", async () => {
+    const page = await open();
+    // More actors than the smallest page the screen offers, so there is a second page to
+    // reach. Below that the pager stays hidden, which is correct and nothing to test.
+    for (let i = 0; i < 30; i++) {
+      await handler.handle(createFacts({ method: "GET", url: `/paged-actor/${i}`, headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: `203.0.116.${i + 1}` }));
+    }
+    await page.click("#tab-actors");
+    await page.click("#actors-scope-feed");
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 15_000 }).toBeGreaterThan(0);
+
+    await expect.poll(() => page.locator("#actors-pager-top").isVisible(), { timeout: 15_000 }).toBe(true);
+    expect(await page.locator("#actor-rows tr").count(), "a page of them, not the whole window").toBe(25);
+    const firstPage = await page.locator("#actor-rows").textContent();
+    await page.locator('#actors-pager-top button[aria-label="Next page"]').click();
+    await expect.poll(() => page.locator("#actor-rows").textContent(), { timeout: 10_000 }).not.toBe(firstPage);
+    expect(await page.locator("#actor-rows tr").count(), "and the rest of them").toBeGreaterThan(0);
+
+    // And the same filter language over the same list.
+    await page.locator("#actors-search").fill("actor:203.0.116.3");
+    await expect.poll(() => page.locator("#actor-rows tr").count(), { timeout: 10_000 }).toBe(1);
+    expect(await page.locator("#actor-rows").textContent()).toContain("203.0.116.3");
     await page.close();
   });
 

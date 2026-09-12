@@ -2204,3 +2204,43 @@ describe("the actors endpoint", () => {
  * chat. The built-in list only covers headers this library has heard of, and the one
  * holding a deployment's own credential is by definition one it has not.
  */
+describe("headers that hold a secret", () => {
+  const withHeaders = async (base: string, handler: BotHandler, headers: Record<string, string>): Promise<string> => {
+    handler.decide(
+      await handler.assess(
+        createFacts({ method: "GET", url: "/x", headers: { host: "shop.example", "user-agent": "curl/8.4.0", ...headers }, ip: "203.0.113.7", protocol: "https", httpVersion: "1.1" }),
+      ),
+    );
+    await settle();
+    return (await fetch(base + "/api/feed")).text();
+  };
+
+  it("hides a header this deployment named", async () => {
+    const { handler, base } = await serve({ redact: { secretHeaders: ["x-acme-automation"] } });
+    const body = await withHeaders(base, handler, { "x-acme-automation": "deadbeef".repeat(8), authorization: "Bearer nope" });
+    expect(body).not.toContain("deadbeef");
+    expect(body).toContain("[redacted]");
+    // The header is still listed — knowing it was sent is the forensics; the value is not.
+    expect(body).toContain("x-acme-automation");
+  });
+
+  /** A name that says what it holds is treated as holding it. */
+  it("hides a header whose name says it is a secret, without being told", async () => {
+    const { handler, base } = await serve();
+    const body = await withHeaders(base, handler, {
+      "x-acme-token": "tokenvalue1",
+      "x-some-secret": "secretvalue1",
+      "x-vendor-api-key": "apikeyvalue1",
+      "x-request-id": "keepthisone",
+    });
+    for (const hidden of ["tokenvalue1", "secretvalue1", "apikeyvalue1"]) expect(body, hidden).not.toContain(hidden);
+    expect(body, "an ordinary header is still shown").toContain("keepthisone");
+  });
+
+  it("can be told to hide only what it was given", async () => {
+    const { handler, base } = await serve({ redact: { guessSecretHeaders: false, secretHeaders: ["x-acme-automation"] } });
+    const body = await withHeaders(base, handler, { "x-acme-token": "guessedvalue", "x-acme-automation": "namedvalue" });
+    expect(body).toContain("guessedvalue");
+    expect(body).not.toContain("namedvalue");
+  });
+});

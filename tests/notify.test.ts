@@ -326,3 +326,29 @@ describe("the console sink", () => {
     expect(sink.warn[0]).toContain("bot share up 6x");
   });
 });
+
+/** The same rule as the dashboard's, on the path that leaves the process entirely. */
+describe("headers that hold a secret, on the way out", () => {
+  it("drops one named by the deployment and one that names itself", () => {
+    const event: BotEvent = {
+      type: "detection",
+      at: new Date().toISOString(),
+      assessment: {
+        ...assessment(),
+        facts: createFacts({
+          method: "GET",
+          url: "/x",
+          headers: { host: "s", "user-agent": "curl/8.4.0", "x-acme-automation": "namedvalue", "x-acme-token": "guessedvalue", "x-request-id": "keepthisone" },
+          ip: "203.0.113.7",
+        }),
+      },
+    };
+    const sent = JSON.stringify(redactEvent(event, { neverSend: ["x-acme-automation"] }));
+    expect(sent).not.toContain("namedvalue");
+    expect(sent).not.toContain("guessedvalue");
+    expect(sent).toContain("keepthisone");
+
+    const guessless = JSON.stringify(redactEvent(event, { guessSecretHeaders: false }));
+    expect(guessless).toContain("guessedvalue");
+  });
+});

@@ -23,6 +23,23 @@ interface BotSignature {
 }
 ```
 
+## `id` is what rules match; `name` is what you read
+
+These are two different strings and it is easy to use the wrong one, because the one you
+*see* is never the one you write. The dashboard, the logs and the tables below show `name`
+— "Facebook external hit", "DuckDuckBot", "Cisco Secure Email". A rule matches `id`:
+
+```ts
+{ id: "unfurl", match: { identity: "facebook-external" }, action: "allow" }   // ✅
+{ id: "unfurl", match: { identity: "Facebook external hit" }, action: "allow" } // ❌ never matches
+```
+
+The second is the natural thing to write after reading a verdict off the screen, and it
+fails in the worst available way: it is valid, it costs nothing, it never matches anything,
+and the policy looks like it covers the case. The handler warns at construction when a rule
+names an identity no signature has, and tells you the id it thinks you meant — but the
+habit worth forming is to match on `category` unless you really mean one operator.
+
 ## Categories
 
 `category` is what most policies actually match on, because it carries intent in a way an

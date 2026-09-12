@@ -156,16 +156,45 @@ new BotHandler({ preset: "indexers-only" });
 
 Against the corpus that means five crawlers served — Googlebot, Googlebot Smartphone,
 Bingbot, DuckDuckBot and `facebookexternalhit`, the last two only because the run supplies
-their published ranges — and 194 requests refused by `proven-automation-block` alone.
+their published ranges — four mail gateways served, and 178 requests refused by
+`proven-automation-block` alone.
 
 **Most indexers cannot be verified at all.** Twelve of the shipped search and social
 signatures publish forward-confirmable DNS; two more are checkable only if you configure
 `crawlerRanges`. The remaining twenty-three — Twitterbot, LinkedInBot, Slackbot, Discord,
 Telegram, WhatsApp, Reddit, Mastodon, Bluesky, and the smaller search engines — publish
-nothing a claim can be checked against, so they can never reach `verified-bot` and
-`unverifiable-indexer-block` refuses them. Your pages stop getting link previews when
-somebody shares them. That rule is separate and named so you can change its action to
-`rate-limit`, which serves them at a ceiling instead.
+nothing a claim can be checked against, so they can never reach `verified-bot` and they
+are refused. Your pages stop getting link previews when somebody shares them.
+
+That is two rules rather than one — `unverifiable-search-block` and
+`unverifiable-social-block` — because almost nobody wants the same answer to both. An
+unconfirmable *search* claim is usually something wearing a search engine's name; an
+unconfirmable *social* one is usually Slack fetching a title card for a link a colleague
+pasted. Change the social half to `rate-limit` and link previews work again at a ceiling,
+without touching the search half:
+
+```ts
+rules: indexersOnly().map((rule) =>
+  rule.id === "unverifiable-social-block" ? { ...rule, action: "rate-limit", params: { limit: { max: 60, windowMs: 60_000 } } } : rule,
+);
+```
+
+**Two more are refused only because you did not configure them.** DuckDuckBot and
+`facebookexternalhit` publish IP ranges rather than reverse DNS, so without a
+`crawlerRanges` entry they can never be verified and the two rules above refuse them — for
+a missing line of configuration rather than for anything they did, in logs that read
+exactly as they would if the request had been an impostor. The handler says so at
+construction, naming both crawlers and the rule that refuses them, so it is visible while
+you are still looking.
+
+**A mail gateway checking a link is served**, by `email-security-allow`, above every
+refusal in the preset. Proofpoint, Mimecast, Barracuda and Cisco Secure Email publish
+nothing to check a claim against, so without that rule they land in
+`proven-automation-block`. What refusing costs is not a missing preview: it is a real
+person told, in their inbox, that the link they were sent could not be verified — moments
+after they asked to reset a password, and they were never the one crawling. The claim is
+forgeable and this is the one forgeable claim the preset serves; what it hands an
+impostor is a single datacentre fetch of a URL it already had.
 
 **It refuses your own infrastructure.** Fifteen of the corpus's thirty-three
 infrastructure cases are blocked by it: Kubernetes and ALB health checks, the Prometheus

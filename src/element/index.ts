@@ -29,8 +29,9 @@
  */
 
 import { cssEscape } from "../dashboard/client/css.js";
-import { cellText, explainStatus, parseMount, resolveSections, shapeOf } from "./config.js";
+import { cellText, explainStatus, parseMount, resolveSections, resolveView, shapeOf } from "./config.js";
 import type { BotDashboardConfig, BotDashboardPanel, BotDashboardRows, BotDashboardTab, BotDashboardTabId, BotDashboardTheme } from "./config.js";
+import { VERSION } from "../version.generated.js";
 import { DASHBOARD_CSS, DASHBOARD_MARKUP } from "../dashboard/page.js";
 
 /** One screen of the dashboard. */
@@ -400,11 +401,35 @@ export class BotDashboardElement extends ElementBase {
     // The mount path the element was given wins over whatever the server thinks it is:
     // the element is the thing that knows where it is pointing.
     boot["base"] = base;
+
+    // Two bundles, one dashboard. This element is compiled into the host page's build and
+    // the handler lives in the server's, so nothing makes them the same release — and a
+    // lockfile that pins one says nothing about the other. What skew looks like is not an
+    // error: it is a panel that stays empty because the field it reads was renamed, or a
+    // control that posts a body the handler no longer understands and reports "Refused".
+    // Both send somebody looking at the dashboard for a bug that is in its packaging.
+    const served = typeof boot["version"] === "string" ? boot["version"] : undefined;
+    if (served !== undefined && served !== VERSION) {
+      this.warnOnce(
+        `bot-dashboard: this element is @osqd/bothandlerjs ${VERSION} and the handler at ${base === "" ? "/" : base} is ${served}. They are separate bundles, so an empty panel or a refused action here may be that difference rather than a fault. Install the same version in both.`,
+      );
+    }
+    // A handler old enough to send no version at all says so once, rather than every
+    // frame: the element can work against it, and this is the one thing it cannot check.
+    else if (served === undefined) this.warnOnce(`bot-dashboard: the handler at ${base === "" ? "/" : base} did not say which version it is, so this element (${VERSION}) cannot check them against each other. It predates the check; upgrade it to get one.`);
     // Which screens survive the server's answer, `hide` and `tabs` — worked out in
     // `config.ts`, which has no document in it and can therefore be tested directly.
     const { sections, warnings } = resolveSections(boot["sections"] as Record<string, boolean>, this.config);
     for (const warning of warnings) this.warnOnce(`bot-dashboard: ${warning}`);
     boot["sections"] = sections;
+
+    // Where the dashboard opens. The client reads this only when embedded, and only on
+    // the first frame — it stands in for the URL a served page has and this one does not.
+    // Checked against `sections` rather than against the tab list, so `view.tab` naming a
+    // screen this element just removed is a warning instead of a blank panel.
+    const view = resolveView(this.config.view, sections);
+    for (const warning of view.warnings) this.warnOnce(warning);
+    if (view.view !== undefined) boot["view"] = view.view;
 
     adoptStyles(shadow);
 

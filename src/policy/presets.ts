@@ -245,7 +245,7 @@ export function protectApi(): Rule[] {
  * only when the job it does is bringing people to the site. Every other proven bot is
  * refused, and suspicion escalates as far as the guard allows.
  *
- * Three things to be clear about before choosing it.
+ * Four things to be clear about before choosing it.
  *
  * **Most indexers cannot be verified at all.** Of the search and social signatures the
  * library ships, twelve publish forward-confirmable DNS — Google, Bing, Yandex, Baidu,
@@ -253,10 +253,28 @@ export function protectApi(): Rule[] {
  * (DuckDuckBot, Facebook) are checkable only if you supply `crawlerRanges`. The other
  * twenty-three, Twitterbot, LinkedInBot, Slackbot, Discord, Telegram, WhatsApp,
  * Reddit, Mastodon and Bluesky among them, publish nothing to check a claim against.
- * They can never reach `verified-bot`, so `unverifiable-indexer-block` refuses them and
- * your pages stop getting link previews when somebody shares them. That rule is
- * deliberately separate and deliberately named: change its action to `rate-limit` and
- * you serve them at a ceiling instead, which is the trade every site makes differently.
+ * They can never reach `verified-bot`, so they are refused and your pages stop getting
+ * link previews when somebody shares them.
+ *
+ * That is two rules rather than one — `unverifiable-search-block` and
+ * `unverifiable-social-block` — because the two halves are not the same trade and
+ * almost nobody wants the same answer to both. An unconfirmable *search* claim is
+ * usually something pretending to be a search engine; an unconfirmable *social* claim
+ * is usually Slack fetching a title card for a link a colleague pasted. Splitting them
+ * means serving link unfurlers at a ceiling is one edit, not a rewritten `match`:
+ *
+ * ```ts
+ * rules: indexersOnly().map((rule) => (rule.id === "unverifiable-social-block" ? { ...rule, action: "rate-limit", params: { limit: { max: 60, windowMs: 60_000 } } } : rule))
+ * ```
+ *
+ * **A mail gateway checking a link is served**, by `email-security-allow`, above every
+ * refusal here. These are unconfirmable by construction — none of the four signatures
+ * publishes anything to check — so without that rule they land in
+ * `proven-automation-block` and are refused. What that costs is not a missing preview:
+ * it is a real person told, in their inbox, that the link they were sent could not be
+ * verified, moments after somebody asked to reset their password. They were never the
+ * one crawling. Delete the rule if your site has no mailed links, but know which way
+ * that error falls.
  *
  * **A confirmed crawler outside `search` and `social` is refused too** — the AI
  * crawlers, the SEO tools, the archivers, the uptime monitors, and **your own webhooks,
@@ -294,6 +312,21 @@ export function indexersOnly(): Rule[] {
       action: "allow",
       reason: "Identity confirmed against the operator's DNS or published ranges, doing the one job this site serves bots for: making it findable.",
     },
+    {
+      id: "email-security-allow",
+      // Above every refusal below, and deliberately not conditioned on verification:
+      // not one mail gateway publishes anything a claim could be checked against, so a
+      // rule that waited for `verified-bot` would never fire and this would read as
+      // protection while refusing every one of them.
+      //
+      // The claim is therefore forgeable, and this is the one place in this preset that
+      // serves a forgeable claim. It is a considered trade: what it hands an impersonator
+      // is one datacentre fetch of a URL it already knew, and what refusing costs is a
+      // person told their password-reset mail contained a link that could not be verified.
+      match: { category: ["email-security"] },
+      action: "allow",
+      reason: "A mail gateway checking a link on somebody's behalf, moments before they click it. Refusing this is not a missing preview — it is telling a real person their mail was unsafe.",
+    },
     { id: "impersonator-block", match: { botClass: "impersonator", certain: true }, action: "block", params: { status: 403 }, reason: "Forged a verifiable third-party crawler identity. Proven by DNS, not inferred." },
     { id: "scanner-block", match: { botClass: "scanner", certain: true }, action: "block", params: { status: 403 }, reason: "Self-identified security scanner." },
     { id: "trap-block", match: { detector: "trap", certain: true }, action: "block", params: { status: 403 }, reason: "Followed a link no person can reach." },
@@ -305,14 +338,27 @@ export function indexersOnly(): Rule[] {
       reason: "A confirmed crawler doing something other than indexing. Declined by policy rather than by suspicion — and said plainly, so its operator can act on it.",
     },
     {
-      id: "unverifiable-indexer-block",
-      // The rule to reach for first when this preset costs you something you wanted.
-      // `rate-limit` here serves the link unfurlers at a ceiling; the reason a forged
-      // Slackbot is cheap to send is exactly the reason a ceiling is the right answer.
-      match: { verdict: "confirmed-bot", category: ["search", "social"] },
+      id: "unverifiable-search-block",
+      // Split from the social half below, which used to share this rule. They are not the
+      // same trade: an unconfirmable *search* claim is usually something wearing a search
+      // engine's name, because the real ones — all twelve that matter — publish DNS you
+      // can check. Little of value is lost by refusing this one.
+      match: { verdict: "confirmed-bot", category: ["search"] },
       action: "block",
       params: { status: 403, body: DECLINED },
       reason: "Says it indexes, and publishes nothing anyone could check that against. This policy serves crawlers it can confirm, and this claim cannot be confirmed.",
+    },
+    {
+      id: "unverifiable-social-block",
+      // The rule to reach for first when this preset costs you something you wanted.
+      // Twitter, LinkedIn, Slack, Discord, Telegram, WhatsApp, Reddit, Mastodon and
+      // Bluesky publish nothing to check against, so this refuses all of them and your
+      // links stop unfurling. `rate-limit` serves them at a ceiling instead; the reason a
+      // forged Slackbot is cheap to send is exactly the reason a ceiling is the answer.
+      match: { verdict: "confirmed-bot", category: ["social"] },
+      action: "block",
+      params: { status: 403, body: DECLINED },
+      reason: "Says it previews links for a social platform, and publishes nothing anyone could check that against. This policy serves crawlers it can confirm.",
     },
     {
       id: "proven-automation-block",

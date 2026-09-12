@@ -19,6 +19,17 @@ export interface RedactionOptions {
   /** Headers never included in an outbound event, whatever else is configured. */
   neverSend?: readonly string[];
   /**
+   * Also drop a header whose *name* says it holds a secret — `token`, `api-key`,
+   * `secret`, `password`, `credential`. Default true.
+   *
+   * The built-in list covers the headers this library has heard of, and a deployment's own
+   * bypass secret is by definition one it has not. A notification goes further than a
+   * dashboard does, so the guess is on here for the same reason it is there: a value
+   * withheld from somebody who wanted it gets noticed, and a credential in a webhook
+   * payload does not.
+   */
+  guessSecretHeaders?: boolean;
+  /**
    * Replace query-string *values* with a placeholder, keeping the parameter names.
    * Default true.
    *
@@ -45,6 +56,30 @@ const REDACTED = "[redacted]";
  */
 export const CREDENTIAL_HEADERS: readonly string[] = ["cookie", "authorization", "proxy-authorization", "x-api-key", "x-auth-token", "set-cookie"];
 
+/**
+ * Header names that read as a credential whether or not anybody said so.
+ *
+ * A fixed list only covers the headers this library has heard of, and a deployment's own
+ * secret is by definition one it has not: an integration reported its bypass secret
+ * arriving as `x-<company>-automation` and being printed in full — next to `authorization`
+ * and `cookie` showing as `[redacted]` — into a feed export that was then pasted into a
+ * chat. The only lever was switching every header off, which costs the forensics that make
+ * a row worth opening.
+ *
+ * So a name that says what it holds is treated as holding it. This errs towards hiding,
+ * deliberately: showing a value nobody needed is an inconvenience somebody notices, and
+ * hiding one that mattered is not. {@link DashboardRedaction.secretHeaders} names any
+ * others, and `guessSecretHeaders: false` turns this off for a deployment that would
+ * rather say exactly which headers are secret.
+ */
+export const SECRET_HEADER_SHAPE = /secret|token|api[-_]?key|passw|credential/i;
+
+/** Whether a header should be hidden, given the names a deployment added and the guess. */
+export function isSecretHeader(name: string, extra: ReadonlySet<string>, guess = true): boolean {
+  const lower = name.toLowerCase();
+  return CREDENTIAL_HEADERS.includes(lower) || extra.has(lower) || (guess && SECRET_HEADER_SHAPE.test(lower));
+}
+
 const ALWAYS_STRIP = CREDENTIAL_HEADERS;
 
 /**
@@ -57,8 +92,9 @@ const ALWAYS_STRIP = CREDENTIAL_HEADERS;
 export function redactEvent(event: BotEvent, options: RedactionOptions = {}): BotEvent {
   const maskIp = options.maskIp ?? true;
   const strip = new Set([...ALWAYS_STRIP, ...(options.neverSend ?? []).map((name) => name.toLowerCase())]);
+  const guessSecrets = options.guessSecretHeaders !== false;
 
-  const settings = { maskIp, strip, dropUserAgent: options.dropUserAgent ?? false, maskQuery: options.maskQuery ?? true };
+  const settings = { maskIp, strip, dropUserAgent: options.dropUserAgent ?? false, maskQuery: options.maskQuery ?? true, guessSecrets };
   // An `anomaly` describes a stretch of time rather than a request, so there is
   // nothing here to reduce: it carries counts and ratios and no client data at all.
   if (event.assessment === undefined) return event;
@@ -78,7 +114,7 @@ export function redactEvent(event: BotEvent, options: RedactionOptions = {}): Bo
 
 function redactAssessment(
   assessment: Assessment,
-  options: { maskIp: boolean; strip: Set<string>; dropUserAgent: boolean; maskQuery: boolean },
+  options: { maskIp: boolean; strip: Set<string>; dropUserAgent: boolean; maskQuery: boolean; guessSecrets: boolean },
 ): { assessment: Assessment; removed: string[] } {
   const headers: Record<string, string | undefined> = {};
   /**
@@ -92,7 +128,10 @@ function redactAssessment(
    */
   const removed: string[] = [];
   for (const [name, value] of Object.entries(assessment.facts.headers)) {
-    if (options.strip.has(name) || (options.dropUserAgent && name === "user-agent")) {
+    // `strip` is what this deployment named plus the built-in list; the shape check catches
+    // the secret it holds in a header nobody here has heard of. A notification travels
+    // further than a dashboard does.
+    if (isSecretHeader(name, options.strip, options.guessSecrets) || (options.dropUserAgent && name === "user-agent")) {
       if (value !== undefined && value.length > 0) removed.push(value);
       continue;
     }

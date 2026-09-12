@@ -38,6 +38,12 @@ Two checks short-circuit everything:
 Either produces an assessment with `bypass` set and no evidence. It is counted (so the
 dashboard can say how much traffic detection actually ran on) and nothing else happens.
 
+That includes the dashboard's live feed: **a bypassed request has no verdict, so it gets no
+row**. This surprises people who add a path to `ignorePaths` to quieten the feed and then
+go looking for it. If you want to watch the requests go past, they do not belong here — see
+[`ignorePaths`](../reference/configuration.md#identity-and-scope), which also explains why
+`"/assets"` and `"/assets/"` mean different things.
+
 ## The three stages
 
 **Cheap detectors** are synchronous by contract and run *without* an `await`. That is not

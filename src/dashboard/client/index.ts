@@ -175,19 +175,26 @@ function syncUrl(replace = true): void {
 function readUrl(): { tab: TabName; filter: FilterName; search: string; actorScope: "tracked" | "feed"; actorsQuery: string } {
   // And it is not ours to read either: a host page using hash routing would otherwise
   // decide which tab this opens on.
-  const raw = isEmbedded() ? "" : location.hash.slice(1);
+  const embedded = isEmbedded();
+  const raw = embedded ? "" : location.hash.slice(1);
   const split = raw.indexOf("?");
   const name = split === -1 ? raw : raw.slice(0, split);
   const params = new URLSearchParams(split === -1 ? "" : raw.slice(split + 1));
-  const filter = params.get("f") ?? "all";
+  // Embedded, the element's `view` stands in for the URL this page does not have. It is
+  // read here rather than applied afterwards so that the first frame is already the view
+  // that was asked for — applied later, the page would draw everything and then narrow,
+  // which on a busy feed is a visible flash of somebody else's traffic.
+  const view = embedded ? (BOOT.view ?? {}) : {};
+  const filter = params.get("f") ?? view.filter ?? "all";
+  const tab = split === -1 && raw === "" ? (view.tab ?? "") : name;
   return {
-    tab: isTab(name) ? name : FIRST,
+    tab: isTab(tab) ? tab : FIRST,
     filter: filter as FilterName,
-    search: params.get("q") ?? "",
+    search: params.get("q") ?? view.search ?? "",
     // Anything but the one alternative reads as the default rather than as an error:
     // a hand-edited URL should land somewhere, and this is the somewhere it lands.
-    actorScope: params.get("a") === "feed" ? "feed" : "tracked",
-    actorsQuery: params.get("aq") ?? "",
+    actorScope: (params.get("a") ?? view.actorScope) === "feed" ? "feed" : "tracked",
+    actorsQuery: params.get("aq") ?? view.actorsQuery ?? "",
   };
 }
 

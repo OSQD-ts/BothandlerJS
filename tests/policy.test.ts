@@ -401,7 +401,42 @@ describe("what each preset is for", () => {
     };
     const declined = decide(indexersOnly(), slackbot);
     expect(declined.action).toBe("block");
-    expect(declined.rule, "the rule to lift when link previews matter more").toBe("unverifiable-indexer-block");
+    expect(declined.rule, "the rule to lift when link previews matter more").toBe("unverifiable-social-block");
+  });
+
+  // Split from the social half on purpose, so that lifting one does not lift the other.
+  it("indexers-only refuses an unconfirmable search claim under its own rule", () => {
+    const claimed = {
+      verdict: "confirmed-bot" as const,
+      botClass: "declared-bot" as const,
+      certain: true,
+      identity: "mojeekbot",
+      evidence: [{ detector: "self-identified", summary: "MojeekBot", direction: "bot" as const, certainty: "certain" as const, identity: "mojeekbot", metadata: { category: "search" }, deterministicBasis: "declared" }],
+    };
+    expect(decide(indexersOnly(), claimed).rule).toBe("unverifiable-search-block");
+  });
+
+  /**
+   * The one forgeable claim this preset serves, and the reason it does.
+   *
+   * No mail gateway publishes anything a claim could be checked against, so without an
+   * explicit rule every one of them lands in `proven-automation-block`. What that costs
+   * is not a missing link preview: it is a person told, in their inbox, that the link
+   * they were sent could not be verified — moments after asking to reset a password.
+   */
+  it("indexers-only serves a mail gateway checking a link for somebody", () => {
+    const gateway = {
+      verdict: "confirmed-bot" as const,
+      botClass: "declared-bot" as const,
+      certain: true,
+      identity: "proofpoint",
+      evidence: [
+        { detector: "self-identified", summary: "Proofpoint URL Defense", direction: "bot" as const, certainty: "certain" as const, identity: "proofpoint", metadata: { category: "email-security" }, deterministicBasis: "declared" },
+      ],
+    };
+    const served = decide(indexersOnly(), gateway);
+    expect(served.action).toBe("allow");
+    expect(served.rule).toBe("email-security-allow");
   });
 
   it("indexers-only refuses a confirmed crawler that is not indexing", () => {

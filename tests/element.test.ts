@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { DASHBOARD_CSS, DASHBOARD_MARKUP, bootFor } from "../src/dashboard/page.js";
-import { cellText, explainStatus, parseMount, resolveSections, shapeOf } from "../src/element/config.js";
+import { cellText, explainStatus, parseMount, resolveSections, resolveView, shapeOf } from "../src/element/config.js";
+import { VERSION } from "../src/version.generated.js";
 
 /**
  * The pieces the embeddable element is built from.
@@ -50,6 +51,24 @@ describe("the shared stylesheet and markup", () => {
     expect(boot["title"]).toBe("shop");
     expect((boot["sections"] as Record<string, boolean>)["policy"]).toBe(false);
     expect(boot["links"]).toEqual([{ label: "Site", href: "/" }]);
+  });
+
+  /**
+   * The element and the handler are separate bundles — one in the host page's build, one
+   * in the server's — so nothing makes them the same release, and the symptom of skew is
+   * a panel that stays empty rather than an error. The element can only say so if the
+   * handler tells it what it is.
+   */
+  it("tells the page which version of the library is serving it", () => {
+    const boot = bootFor({
+      title: "x", basePath: "/_bots", links: [], allowReset: false, allowEdit: false, allowGuardEdit: false, allowActing: false,
+      sections: { feed: true, evidence: true, actors: true, registry: true, tester: true, statistics: true, audit: true, notices: true, changes: true, policy: true, guard: true, robots: true, ranges: true },
+      peers: [],
+    });
+    expect(boot["version"]).toBe(VERSION);
+    // And it is the version actually published, not a constant somebody typed twice.
+    const published = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+    expect(VERSION).toBe(published);
   });
 
   it("reports a root-mounted dashboard as an empty base, not as a slash", () => {
@@ -247,6 +266,56 @@ describe("resolving which screens exist", () => {
     const server = { ...all };
     resolveSections(server, { hide: { feed: true }, tabs: [{ id: "live" }] });
     expect(server).toEqual(all);
+  });
+});
+
+/**
+ * Where an embedded dashboard opens.
+ *
+ * The served page keeps this in its URL. Embedded there is no URL to keep it in — the
+ * address bar belongs to the host page and the client will not write to it — so without
+ * `view` the element could only ever open on the first tab showing everything, and an
+ * embedder putting it on one customer's page had to tell people to type the filter in.
+ */
+describe("resolving where the dashboard opens", () => {
+  const all = { feed: true, registry: true, statistics: true, policy: true, evidence: true };
+
+  it("passes through a view the client can act on", () => {
+    const { view, warnings } = resolveView({ tab: "live", filter: "deny", query: 'actor:$notin("our-ssr")' }, all);
+    expect(view).toEqual({ tab: "live", filter: "deny", search: 'actor:$notin("our-ssr")' });
+    expect(warnings).toEqual([]);
+  });
+
+  it("says nothing at all when nothing was asked for", () => {
+    expect(resolveView(undefined, all).view).toBeUndefined();
+    // An object with only empty strings in it is not a view either, and sending one would
+    // make the client take the `view` path for no reason.
+    expect(resolveView({ query: "", actorsQuery: "" }, all).view).toBeUndefined();
+  });
+
+  it("refuses to open on a screen this element removed", () => {
+    // The failure this replaces is a blank panel: the client is told to open on `policy`,
+    // finds no such screen, and shows nothing.
+    const { view, warnings } = resolveView({ tab: "policy" }, { ...all, policy: false });
+    expect(view).toBeUndefined();
+    expect(warnings.join(" ")).toContain('"policy"');
+    expect(warnings.join(" ")).toContain("live, actors, stats");
+  });
+
+  it("names a chip that is not one", () => {
+    const { view, warnings } = resolveView({ filter: "denied" as never, tab: "live" }, all);
+    // The rest of the view survives — one wrong field should not cost the others.
+    expect(view).toEqual({ tab: "live" });
+    expect(warnings.join(" ")).toContain('"denied"');
+  });
+
+  it("names a scope that is neither of the two", () => {
+    const { warnings } = resolveView({ actorScope: "everything" as never }, all);
+    expect(warnings.join(" ")).toContain("tracked");
+  });
+
+  it("takes the actors query as written", () => {
+    expect(resolveView({ actorsQuery: "requests:>100" }, all).view).toEqual({ actorsQuery: "requests:>100" });
   });
 });
 

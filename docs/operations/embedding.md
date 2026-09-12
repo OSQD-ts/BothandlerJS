@@ -142,6 +142,39 @@ process, and it is the one to use when the point is that somebody should not hav
 
 ---
 
+## Where it opens
+
+The standalone page keeps the current view in its own URL — `#live?f=deny&q=actor:1.2.3.4`
+— which is what makes a view somebody reached into a link they can send. Embedded there is
+no URL to keep it in: the address bar belongs to your page, and the client deliberately
+never writes to it. So say it in the config instead:
+
+```js
+config = {
+  src: "/_bots",
+  view: { tab: "live", filter: "deny", query: 'actor:$notin("our-ssr")' },
+};
+```
+
+| Field | What it sets |
+| --- | --- |
+| `tab` | `live`, `actors`, `stats` or `policy` — must be a screen that survives `tabs` and `hide` |
+| `filter` | the Live screen's chip: `all`, `proven`, `suspected`, `human`, `guard`, `deny`, `mitigate`, `allow` |
+| `query` | the Live screen's query box, in the [feed's query language](dashboard.md) |
+| `actorScope` | `tracked` (every actor) or `feed` (only those in the current feed) |
+| `actorsQuery` | the Actors screen's query box |
+
+Read once, on the first frame, and then it is out of the way — everything here is something
+somebody could have typed, so everything here can be typed over. A field naming a chip or a
+screen that does not exist is reported to the console rather than ignored, and the rest of
+the view still applies.
+
+**It is not a security boundary.** A `query` that hides an actor hides it from the screen,
+not from the wire, and anyone looking at the page can clear the box. It narrows a view for
+whoever is reading; `sections` on the handler is what withholds data.
+
+---
+
 ## Theming
 
 ```js
@@ -320,6 +353,22 @@ the console says which of these it was:
 | "scheme `x` is not `light` or `dark`" | Likewise `density`, which takes `comfortable` or `compact`. |
 | "src `…` has a query string on it" | The element asks for `<src>/api/bootstrap`, so only the path can mean anything. It used the path. |
 | "this page is framed by another origin" | Clickjacking risk your page must close itself — see [above](#what-running-it-in-your-page-costs-you). |
+| "this element is … and the handler at … is …" | Version skew. See below. |
+| "`view.tab` is `x`, which is not one of the screens this dashboard shows" | Likewise `view.filter` and `view.actorScope`. The rest of the view still applies. |
+
+### Version skew
+
+The element is compiled into *your* build and the handler runs in your server's, so nothing
+makes them the same release — a lockfile that pins one says nothing about the other. When
+they differ the element says so once, at boot, naming both versions.
+
+It matters because skew does not announce itself: a panel that stays empty because the
+field it reads was renamed, or a control that posts a body the handler no longer
+understands and reports "Refused". Both look like a bug in the dashboard, and both send
+people looking in the wrong place. Install the same version in both.
+
+A handler too old to send its version gets a different line saying only that the check
+could not be made. The element still works against it.
 
 ## What it does not do
 

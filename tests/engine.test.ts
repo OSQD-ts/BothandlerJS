@@ -254,6 +254,67 @@ describe("configuration", () => {
     expect(warnings.join(" ")).toMatch(/clients can choose the address/);
   });
 
+  /**
+   * The quietest way this library can be wrong: a crawler refused for a missing config
+   * entry, under a rule that fires and names a perfectly good reason for doing it.
+   */
+  it("names the crawlers a policy will refuse only because their ranges were never supplied", () => {
+    const warnings: string[] = [];
+    engine({ preset: "indexers-only", onWarning: (message) => warnings.push(message) });
+    const said = warnings.join(" ");
+    expect(said).toMatch(/DuckDuckBot/);
+    expect(said).toMatch(/Facebook external hit/);
+    // And it says which rule does it, since that is what you would have to change.
+    expect(said).toMatch(/unverifiable-search-block/);
+    expect(said).toMatch(/unverifiable-social-block/);
+
+    // Supplying the ranges is the fix, so supplying them ends the warning.
+    const fixed: string[] = [];
+    engine({
+      preset: "indexers-only",
+      crawlerRanges: { duckduckbot: ["20.191.45.0/24"], "facebook-external": ["31.13.24.0/21"] },
+      onWarning: (message) => fixed.push(message),
+    });
+    expect(fixed.join(" ")).not.toMatch(/DuckDuckBot|Facebook external hit/);
+  });
+
+  /**
+   * The dashboard says "Facebook external hit"; the rule has to say "facebook-external".
+   * Somebody reading a verdict off the screen writes the first, gets a rule that never
+   * matches, and has a policy that looks like protection and is not.
+   */
+  it("catches a rule that names a signature's display name instead of its id", () => {
+    const warnings: string[] = [];
+    engine({ rules: [{ id: "unfurl", match: { identity: "Facebook external hit" }, action: "allow" }], onWarning: (message) => warnings.push(message) });
+    const said = warnings.join(" ");
+    expect(said).toMatch(/never match/);
+    // And it says which id was meant, which is the whole value of noticing.
+    expect(said).toMatch(/"facebook-external"/);
+  });
+
+  it("says a rule's identity is unknown without guessing when it cannot", () => {
+    const warnings: string[] = [];
+    engine({ rules: [{ id: "ours", match: { identity: "our-ssr" }, action: "allow" }], onWarning: (message) => warnings.push(message) });
+    expect(warnings.join(" ")).toMatch(/not the id of any signature/);
+
+    // A signature the deployment supplied is known, so naming it is silent.
+    const quiet: string[] = [];
+    engine({
+      extraSignatures: [{ id: "our-ssr", name: "Our renderer", tokens: ["our-ssr"], category: "other", benign: true, verification: { kind: "none" } }],
+      rules: [{ id: "ours", match: { identity: "our-ssr" }, action: "allow" }],
+      onWarning: (message) => quiet.push(message),
+    });
+    expect(quiet.join(" ")).not.toMatch(/identity/);
+  });
+
+  it("says nothing about verification a policy never asks for", () => {
+    // `protect-content` serves an unconfirmable indexer rather than refusing it, so
+    // nothing is stranded and there is nothing to say.
+    const warnings: string[] = [];
+    engine({ preset: "protect-content", onWarning: (message) => warnings.push(message) });
+    expect(warnings.join(" ")).not.toMatch(/crawlerRanges/);
+  });
+
   it("warns loudly about aggressive mode", () => {
     const warnings: string[] = [];
     engine({ falsePositivePolicy: "aggressive", onWarning: (message) => warnings.push(message) });

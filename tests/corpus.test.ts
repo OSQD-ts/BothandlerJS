@@ -215,14 +215,46 @@ describe("policy shape", () => {
     expect(denied, "the guard applies during an incident too").toEqual([]);
   });
 
-  it("indexers-only serves no bot it has not confirmed", async () => {
+  /**
+   * The preset serves crawlers it checked, with exactly one deliberate exception.
+   *
+   * The exception is `email-security-allow`, and it is written as a named rule rather
+   * than relaxed into the test's condition so that a *second* exception appearing here
+   * is a failure. A mail gateway is unconfirmable by construction — none of the four
+   * publishes anything to check — and refusing one does not cost a link preview, it
+   * tells a real person their password-reset mail contained an unverifiable link.
+   */
+  it("indexers-only serves no bot it has not confirmed, bar the mail gateways", async () => {
     const scorecard = await runner("indexers-only", { assertActions: false });
     const served = scorecard.results
       .filter((result) => result.skipped === undefined && result.case.audience !== "human")
       .filter((result) => result.final.decision.action === "allow")
       .filter((result) => result.final.assessment.verdict !== "verified-bot")
       .map((result) => `${result.case.id} -> ${result.final.decision.rule}`);
-    expect(served, "this preset serves crawlers it checked, never crawlers that claimed").toEqual([]);
+    expect(
+      served.filter((entry) => !entry.endsWith("-> email-security-allow")),
+      "this preset serves crawlers it checked, never crawlers that claimed",
+    ).toEqual([]);
+    // And the exception is real rather than vacuous: the gateways are in the corpus,
+    // and they are served.
+    expect(served.length, "the mail gateways the exception exists for").toBeGreaterThan(0);
+  });
+
+  /**
+   * The figures `docs/policy/presets.md` quotes for this preset.
+   *
+   * Pinned because they had already drifted once, silently, by twelve requests. A count
+   * in prose is a claim like any other, and this is the only place it can be checked. If
+   * this fails, the corpus changed and the documentation needs the new numbers — that is
+   * the point of the failure, not a reason to relax the assertion.
+   */
+  it("matches the numbers its documentation quotes", async () => {
+    const scorecard = await runner("indexers-only", { assertActions: false });
+    const decided = scorecard.results.filter((result) => result.skipped === undefined);
+    const by = (rule: string): number => decided.filter((result) => result.final.decision.rule === rule).length;
+    expect(by("proven-automation-block"), "docs/policy/presets.md: refused by proven-automation-block").toBe(178);
+    expect(by("verified-indexer-allow"), "docs/policy/presets.md: crawlers served").toBe(5);
+    expect(by("email-security-allow"), "docs/policy/presets.md: mail gateways served").toBe(4);
   });
 
   // A finding from the corpus, kept as a regression test so the warning in the

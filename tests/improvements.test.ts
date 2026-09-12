@@ -845,6 +845,26 @@ describe("configuration that would fail silently", () => {
     expect(handler.isIgnoredPath("/assets/logo.svg")).toBe(false);
   });
 
+  /**
+   * The trailing slash is the whole difference between "this path" and "this subtree",
+   * and it is the thing `docs/reference/configuration.md` now spells out. Pinned here
+   * because `ignorePaths: ["/assets"]` reads like a subtree to almost everybody who
+   * writes it, and what it actually ignores is one file called `/assets`.
+   */
+  it("reads a trailing slash in ignorePaths as the difference between a path and a subtree", () => {
+    const exact = new BotHandler({ ignorePaths: ["/healthz"] });
+    expect(exact.isIgnoredPath("/healthz")).toBe(true);
+    expect(exact.isIgnoredPath("/healthz/live"), "an exact entry is not a prefix").toBe(false);
+    expect(exact.isIgnoredPath("/healthzzz")).toBe(false);
+
+    const subtree = new BotHandler({ ignorePaths: ["/assets/"] });
+    expect(subtree.isIgnoredPath("/assets/app.js")).toBe(true);
+    expect(subtree.isIgnoredPath("/assets/img/logo.png")).toBe(true);
+    // And the directory itself without the slash is outside it, which is the one edge
+    // the documentation would otherwise leave somebody to discover.
+    expect(subtree.isIgnoredPath("/assets")).toBe(false);
+  });
+
   it("leaves a sticky regex's meaning intact apart from the flag", () => {
     const handler = new BotHandler({ ignorePaths: [/^\/health$/y] });
     expect(handler.isIgnoredPath("/health")).toBe(true);

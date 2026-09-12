@@ -1,4 +1,5 @@
 import { CLIENT_SCRIPT } from "./client.generated.js";
+import { VERSION } from "../version.generated.js";
 import type { DashboardSections } from "./types.js";
 
 /**
@@ -65,6 +66,11 @@ export function bootFor(options: DashboardPageOptions): Record<string, unknown> 
     peers: options.peers.map((peer) => ({ label: String(peer.label), href: String(peer.href) })),
     sections: options.sections,
     links: options.links.map((link) => ({ label: String(link.label), href: String(link.href) })),
+    // What the served page never needs and an embedded one cannot work out: the version
+    // of the library this dashboard is *mounted in*. `<bot-dashboard>` is a separate
+    // bundle in somebody else's build, so the two can be different releases, and the
+    // symptom is a screen that is quietly wrong rather than an error. See the element.
+    version: VERSION,
   };
 }
 
@@ -827,6 +833,8 @@ input::placeholder { color: color-mix(in srgb, var(--muted) 80%, transparent); }
 /* The tracked/shown toggle above the actors table. A segmented pair rather than a
    dropdown: there are two answers and both are worth reading at a glance. */
 .scope { display: flex; gap: 6px; padding: 0 14px 10px; }
+/* The same box as the feed's, in the screen that needed the same language. */
+.actors-search { padding: 0 14px 10px; }
 .scope button { font-size: 11.5px; padding: 4px 10px; }
 .scope button.on { background: var(--accent); color: var(--on-accent, #fff); border-color: var(--accent); }
 
@@ -1054,6 +1062,10 @@ export const DASHBOARD_MARKUP = String.raw`
           title="Every client the engine is remembering, busiest first">Tracked</button>
         <button id="actors-scope-feed" aria-pressed="false"
           title="Only the clients that appear in the feed you are looking at, after its filter">Shown in the feed</button>
+      </div>
+      <div class="search actors-search">
+        <input type="search" id="actors-search" placeholder="actor:203.0.113.4  label:office  requests:&gt;100  -cleared:yes" spellcheck="false" autocomplete="off"
+          aria-label="Filter the actors">
       </div>
       <div class="pager pager-top" id="actors-pager-top" hidden></div>
       <div class="feed-scroll">

@@ -14,6 +14,20 @@ export interface Boot {
   peers: ReadonlyArray<{ label: string; href: string }>;
   sections: Required<DashboardSections>;
   links: ReadonlyArray<{ label: string; href: string }>;
+  /**
+   * Which screen to open on, and with what already filtered.
+   *
+   * Only ever set by the embedded element. A served page takes this from its own URL, so
+   * that a view somebody arrived at is a link they can send; an embedded one has no URL
+   * of its own — the address bar belongs to the host page and the client deliberately
+   * will not write to it — and so had no way to be opened anywhere but the first tab
+   * showing everything. An embedder that mounts the dashboard next to one customer's
+   * account had to tell people to type the filter in themselves.
+   *
+   * The starting point only. Everything here is what somebody would have typed, so
+   * everything here can be typed over, and nothing re-applies it on a later frame.
+   */
+  view?: { tab?: string; filter?: string; search?: string; actorScope?: string; actorsQuery?: string };
 }
 
 /**

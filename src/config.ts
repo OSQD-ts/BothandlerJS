@@ -10,8 +10,8 @@ import type { Clock } from "./internal/clock.js";
 import type { DnsResolver } from "./internal/dns.js";
 import type { Detector } from "./detectors/types.js";
 import type { CrawlerVerificationOptions } from "./detectors/crawler-verification.js";
-import type { BotSignature } from "./detectors/known-bots.js";
-import type { ActionParams, FalsePositivePolicy, Rule } from "./policy/types.js";
+import type { BotCategory, BotSignature } from "./detectors/known-bots.js";
+import type { ActionParams, FalsePositivePolicy, MatchSpec, Rule } from "./policy/types.js";
 import type { CustomHandler } from "./actions/types.js";
 import type { BotHandlerStore } from "./stores/types.js";
 import type { AuditOptions, TrafficAnomaly } from "./audit.js";
@@ -379,6 +379,96 @@ export function validateRules(rules: readonly Rule[]): string[] {
 
 const VALID_ACTIONS: ReadonlySet<string> = new Set<string>(ACTION_NAMES);
 
+/** The actions that end a request. A crawler refused by one of these is simply gone. */
+const TERMINAL_ACTIONS: ReadonlySet<string> = new Set(["block", "tarpit", "challenge"]);
+
+/**
+ * Rules naming an identity no signature has.
+ *
+ * `match: { identity }` takes a signature's `id` — `"facebook-external"` — and what is on
+ * the dashboard, in a log line and in this library's own documentation is its `name`:
+ * "Facebook external hit". Somebody reading a verdict off the screen and writing the rule
+ * it suggests therefore writes the display name, and gets a rule that matches nothing,
+ * ever, in silence. It sits in the policy looking like protection.
+ *
+ * Guessed against the names as well as the ids, so the message can say which id was meant
+ * rather than only that the rule is dead. An identity this does not recognise is reported
+ * too, but softly: `actorKey`, `isHuman` and a custom signature set can all put identities
+ * in play that this function cannot see, so it says what it checked against.
+ */
+function unknownIdentities(rules: readonly Rule[], signatures: readonly BotSignature[]): string[] {
+  const ids = new Set(signatures.map((signature) => signature.id));
+  const byName = new Map(signatures.map((signature) => [signature.name.toLowerCase(), signature.id]));
+  const warnings: string[] = [];
+  const said = new Set<string>();
+
+  for (const rule of rules) {
+    if (typeof rule.match !== "object") continue;
+    const named = (rule.match as MatchSpec).identity;
+    if (named === undefined) continue;
+    for (const identity of Array.isArray(named) ? named : [named]) {
+      if (typeof identity !== "string" || ids.has(identity) || said.has(identity)) continue;
+      said.add(identity);
+      const meant = byName.get(identity.toLowerCase());
+      warnings.push(
+        meant === undefined
+          ? `Rule "${rule.id}" matches identity "${identity}", which is not the id of any signature this handler knows. It will never match. Identities are ids such as "googlebot", not display names.`
+          : `Rule "${rule.id}" matches identity "${identity}", which is a signature's display name rather than its id, so it will never match. Use "${meant}".`,
+      );
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Crawlers a policy will refuse for being unverifiable, which the deployment could have
+ * verified and has not.
+ *
+ * A handful of operators — DuckDuckGo and Facebook among the indexers, most of the AI
+ * crawlers — publish IP ranges instead of usable reverse DNS. This library will not fetch
+ * those ranges for you, because a detector that makes an outbound request on a schedule
+ * is a dependency you should take on knowingly. The consequence is that without
+ * `crawlerRanges` they can never reach `verified-bot`, and a policy that refuses
+ * unverified crawlers of their category therefore refuses them — for a missing config
+ * entry rather than for anything they did.
+ *
+ * That failure is invisible from the inside. The rule fires, names a real reason, and the
+ * logs read exactly as they would if DuckDuckBot had been an impostor. So it is said once,
+ * at construction, while somebody is still looking: these specific crawlers, that specific
+ * rule, and the one line of configuration that changes the answer.
+ */
+function unreachableVerification(rules: readonly Rule[], signatures: readonly BotSignature[], ranges: ReadonlyMap<string, IpRangeSet>): string[] {
+  const refused = new Map<BotCategory, string>();
+  for (const rule of rules) {
+    // A predicate can refuse anything and says nothing about what; only a spec is readable.
+    if (typeof rule.match !== "object" || !TERMINAL_ACTIONS.has(rule.action)) continue;
+    const spec = rule.match as MatchSpec;
+    if (spec.category === undefined) continue;
+    // The rules this is about refuse a *claim* — a bot proven to be what it says while
+    // unable to prove whose it is. One that refuses `verified-bot` is refusing crawlers it
+    // did confirm, which is a policy choice and not a gap in configuration.
+    const verdicts = spec.verdict === undefined ? [] : Array.isArray(spec.verdict) ? spec.verdict : [spec.verdict];
+    if (!verdicts.includes("confirmed-bot")) continue;
+    for (const category of Array.isArray(spec.category) ? spec.category : [spec.category]) {
+      if (!refused.has(category as BotCategory)) refused.set(category as BotCategory, rule.id);
+    }
+  }
+  if (refused.size === 0) return [];
+
+  const stranded = new Map<string, string[]>();
+  for (const signature of signatures) {
+    if (signature.verification?.kind !== "ip-ranges") continue;
+    const rule = refused.get(signature.category);
+    if (rule === undefined || ranges.has(`crawler:${signature.id}`)) continue;
+    stranded.set(rule, [...(stranded.get(rule) ?? []), signature.name]);
+  }
+
+  return [...stranded].map(
+    ([rule, names]) =>
+      `${names.join(", ")} ${names.length === 1 ? "publishes" : "publish"} IP ranges rather than reverse DNS, so ${names.length === 1 ? "it" : "they"} can never be verified without a \`crawlerRanges\` entry — and rule "${rule}" refuses unverified crawlers of ${names.length === 1 ? "that" : "their"} kind. Supply the ranges, or change that rule, or ${names.length === 1 ? "it stays" : "they stay"} refused for a missing config entry.`,
+  );
+}
+
 export class ConfigError extends Error {
   override readonly name = "ConfigError";
 }
@@ -394,7 +484,16 @@ export class ConfigError extends Error {
 export function resolveConfig(config: BotHandlerConfig = {}): ResolvedConfig {
   const warnings: string[] = [];
 
-  const detectors = config.detectors ? [...config.detectors] : [...defaultDetectors(config.crawlerVerification === undefined ? {} : { crawlerVerification: config.crawlerVerification }), ...(config.extraDetectors ?? [])];
+  const behindProxy = config.proxy?.trustProxy === true;
+  const detectors = config.detectors
+    ? [...config.detectors]
+    : [
+        ...defaultDetectors({
+          ...(config.crawlerVerification === undefined ? {} : { crawlerVerification: config.crawlerVerification }),
+          ...(behindProxy ? { behindProxy: true } : {}),
+        }),
+        ...(config.extraDetectors ?? []),
+      ];
   const seen = new Set<string>();
   for (const detector of detectors) {
     if (seen.has(detector.id)) {
@@ -426,6 +525,8 @@ export function resolveConfig(config: BotHandlerConfig = {}): ResolvedConfig {
   }
 
   const signatures = config.signatures ?? [...BOT_SIGNATURES, ...(config.extraSignatures ?? [])];
+  warnings.push(...unreachableVerification(rules, signatures, ranges));
+  warnings.push(...unknownIdentities(rules, signatures));
 
   const proxyConfig = config.proxy ?? {};
   const trustedProxies = proxyConfig.trustedProxies ? new IpRangeSet(proxyConfig.trustedProxies) : undefined;

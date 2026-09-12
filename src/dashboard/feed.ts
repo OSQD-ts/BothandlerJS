@@ -1,4 +1,4 @@
-import { CREDENTIAL_HEADERS } from "../notify/redact.js";
+import { isSecretHeader } from "../notify/redact.js";
 import { maskAddresses, networkKey } from "../internal/ip.js";
 import type { BotHandler } from "../core.js";
 import type { DashboardChange, DashboardEntry, DashboardNotice, DashboardRedaction } from "./types.js";
@@ -11,7 +11,7 @@ const MAX_FEED_LIMIT = 5000;
 const MAX_HEADERS = 40;
 const MAX_HEADER_VALUE = 300;
 const REDACTED = "[redacted]";
-const STRIPPED = new Set(CREDENTIAL_HEADERS);
+
 
 /**
  * The live feed: a bounded ring of recent assessments, and whoever is watching.
@@ -89,12 +89,17 @@ export class DashboardFeed {
   private windowStart = 0;
   private publishedThisSecond = 0;
   private skippedTotal = 0;
+  /** Header names this deployment called secret, and whether to judge the rest by name. */
+  private readonly extraSecrets: ReadonlySet<string>;
+  private readonly guessSecrets: boolean;
 
   constructor(handler: BotHandler, limit: number, redact: DashboardRedaction = {}, limits: FeedLimits = { maxEventsPerSecond: 0, ttlMs: 0 }) {
     this.limit = Math.max(1, Math.min(MAX_FEED_LIMIT, Math.floor(limit)));
     this.maxPerSecond = Math.max(0, Math.floor(limits.maxEventsPerSecond));
     this.ttlMs = Math.max(0, Math.floor(limits.ttlMs));
     this.maskIp = redact.maskIp === true;
+    this.extraSecrets = new Set((redact.secretHeaders ?? []).map((name) => name.toLowerCase()));
+    this.guessSecrets = redact.guessSecretHeaders !== false;
     this.truncateUserAgent = redact.truncateUserAgent === true;
     this.maskQuery = redact.maskQuery !== false;
     this.showHeaders = redact.headers !== false;
@@ -345,6 +350,11 @@ export class DashboardFeed {
    * replaced rather than omitted, so the reader can see that a cookie was sent
    * without seeing the cookie.
    */
+  /** Whether this header holds something nobody reading the feed needs to see. */
+  private secret(name: string): boolean {
+    return isSecretHeader(name, this.extraSecrets, this.guessSecrets);
+  }
+
   private headers(facts: RequestFacts): Array<[string, string]> {
     const rows: Array<[string, string]> = [];
     const seen = new Set<string>();
@@ -353,7 +363,7 @@ export class DashboardFeed {
       seen.add(name);
       const value = facts.headers[name];
       if (value === undefined) return;
-      rows.push([name, STRIPPED.has(name) ? REDACTED : value.slice(0, MAX_HEADER_VALUE)]);
+      rows.push([name, this.secret(name) ? REDACTED : value.slice(0, MAX_HEADER_VALUE)]);
     };
     for (const name of facts.headerOrder) push(name);
     // Anything the transport did not give an order for still belongs on the list.

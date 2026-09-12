@@ -92,6 +92,23 @@ judged at all. Do not put loopback on it — see [the client IP](../integration/
 | `ignorePaths` | — | health checks, your own polling endpoints, static assets |
 | `isHuman` | — | your application declaring a request human |
 
+`ignorePaths` matches three ways, and the difference between the first two is a single
+trailing slash:
+
+| Entry | Matches |
+| --- | --- |
+| `"/healthz"` | that path exactly, and nothing else — not `/healthz/live`, not `/healthz?x=1` |
+| `"/assets/"` | any path starting with `/assets/`, so the whole subtree |
+| `/^\/static\/.*\.js$/` | whatever the expression tests true against |
+
+So `ignorePaths: ["/assets"]` ignores exactly one path called `/assets` and nothing beneath
+it, which is almost never what was meant. Write `"/assets/"` for the subtree.
+
+An ignored request is not assessed, **and it does not appear in the dashboard's live
+feed** — there is no verdict for a row to show. It is still counted, so the Statistics
+screen can tell you how much of your traffic detection actually ran on. If you want to see
+these requests go past, they do not belong in `ignorePaths`.
+
 `isHuman` produces `certain` human evidence — the only conclusive human signal available,
 because it comes from you and not from the client. An authenticated session, a completed
 payment, whatever bar you set:

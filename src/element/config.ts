@@ -81,6 +81,82 @@ export interface BotDashboardConfig {
    * that somebody should not have it.
    */
   hide?: DashboardSections;
+  /**
+   * Which screen the dashboard opens on, and with what already filtered.
+   *
+   * The served page keeps this in its own URL — `#live?f=deny&q=actor:1.2.3.4` — which is
+   * how a view somebody reached becomes a link they can send. Embedded, there is no URL
+   * to keep it in: the address bar belongs to the host page, and the client deliberately
+   * will not write to it, so without this the element could only ever open on the first
+   * tab showing everything. An embedder putting the dashboard on one customer's account
+   * page had to tell people to type the filter in themselves.
+   *
+   * It is a starting point, not a constraint. Everything here is something somebody could
+   * have typed, so everything here can be typed over, and it is **not** a security
+   * boundary — a `query` that hides an actor hides it from the screen and not from the
+   * wire. Use the handler's `sections`, or its own filtering, for anything that matters.
+   *
+   * ```ts
+   * el.config = { src: "/_bots", view: { tab: "live", filter: "deny", query: 'actor:$notin("our-ssr")' } };
+   * ```
+   */
+  view?: BotDashboardView;
+}
+
+/** Where the dashboard starts. See {@link BotDashboardConfig.view}. */
+export interface BotDashboardView {
+  /** The screen to open on. Must be one that survives `tabs` and `hide`. */
+  tab?: BotDashboardTabId;
+  /** The Live screen's chip. */
+  filter?: BotDashboardFilter;
+  /** The Live screen's query box, in the feed's query language. */
+  query?: string;
+  /** The Actors screen: every actor being tracked, or only those in the current feed. */
+  actorScope?: "tracked" | "feed";
+  /** The Actors screen's query box. */
+  actorsQuery?: string;
+}
+
+/** The chips along the top of the Live screen. */
+export type BotDashboardFilter = "all" | "proven" | "suspected" | "human" | "guard" | "deny" | "mitigate" | "allow";
+
+const VIEW_FILTERS: ReadonlySet<string> = new Set<BotDashboardFilter>(["all", "proven", "suspected", "human", "guard", "deny", "mitigate", "allow"]);
+
+/**
+ * The view as the client will read it, with anything unusable dropped and said out loud.
+ *
+ * Silently ignoring a misspelled chip is the failure mode this whole file exists to
+ * avoid: the dashboard comes up looking almost right, and the one thing that was
+ * configured is the one thing missing. `tab` is checked against the screens that actually
+ * survived `tabs` and `hide`, because opening on a screen this element removed is a blank
+ * page rather than a wrong one.
+ */
+export function resolveView(view: BotDashboardView | undefined, sections: Readonly<Record<string, boolean>>): { view: Record<string, string> | undefined; warnings: string[] } {
+  if (view === undefined) return { view: undefined, warnings: [] };
+  const warnings: string[] = [];
+  const out: Record<string, string> = {};
+
+  if (view.tab !== undefined) {
+    const section = TAB_SECTION[view.tab];
+    const shown = Object.keys(TAB_SECTION).filter((tab) => sections[TAB_SECTION[tab as BotDashboardTabId]] !== false);
+    if (section === undefined || sections[section] === false) {
+      warnings.push(`bot-dashboard: \`view.tab\` is "${view.tab}", which is not one of the screens this dashboard shows (${shown.join(", ") || "none"}). Opening on the first one instead.`);
+    } else out["tab"] = view.tab;
+  }
+  if (view.filter !== undefined) {
+    if (!VIEW_FILTERS.has(view.filter)) warnings.push(`bot-dashboard: \`view.filter\` is "${view.filter}", which is not one of the Live screen's chips (${[...VIEW_FILTERS].join(", ")}). Showing everything instead.`);
+    else out["filter"] = view.filter;
+  }
+  if (view.actorScope !== undefined) {
+    if (view.actorScope !== "tracked" && view.actorScope !== "feed") warnings.push(`bot-dashboard: \`view.actorScope\` is "${String(view.actorScope)}", which is neither "tracked" nor "feed". Showing every tracked actor instead.`);
+    else out["actorScope"] = view.actorScope;
+  }
+  // The two query boxes are free text by definition — the page cannot know whether a
+  // query matches anything, and an unreadable one already means "match everything" there.
+  if (typeof view.query === "string" && view.query !== "") out["search"] = view.query;
+  if (typeof view.actorsQuery === "string" && view.actorsQuery !== "") out["actorsQuery"] = view.actorsQuery;
+
+  return { view: Object.keys(out).length === 0 ? undefined : out, warnings };
 }
 
 /**

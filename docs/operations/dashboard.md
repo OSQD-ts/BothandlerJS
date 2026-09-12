@@ -558,6 +558,36 @@ dashboard)` in Express and a bare `if (url.startsWith("/_bots"))` both do the ri
 thing. The `Host` check is enforced only if you pass `allowedHosts`, since the server
 that owns the socket is the thing that knows which names reach it.
 
+**A proxy that rewrites the prefix has to be told.** `basePath` is what the page uses to
+build every URL it fetches, so it must be the path *the browser* uses — not the one your
+proxy forwards. This is the configuration that looks right and serves a dashboard whose
+every request 404s:
+
+```nginx
+# ✗ The browser asks for /ops/, the page is told it lives at /_bots,
+#   and every fetch it makes goes to /_bots/api/... which the edge does not route.
+location /ops/ { proxy_pass http://127.0.0.1:9090/_bots/; }
+```
+
+Two ways out, and the first is better:
+
+```nginx
+# ✓ Same path on both sides. basePath: "/ops"
+location /ops/ { proxy_pass http://127.0.0.1:9090/ops/; }
+```
+
+```nginx
+# ✓ Or keep the rewrite and mount it under the public path anyway.
+#   basePath is a statement about the browser's URL, not about your routing.
+location /ops/ { proxy_pass http://127.0.0.1:9090/; }   # with basePath: "/ops"
+```
+
+The symptom is specific and worth recognising: the page itself loads, the header and the
+tab strip render, and then nothing ever fills in — the counters stay blank and the feed
+stays empty, because every request behind them is being answered by your site's 404 rather
+than by the dashboard. Embedded, the `src` attribute is the same statement and the same
+rule applies to it.
+
 What this does *not* change is the reason the dashboard is separate from the application
 it reports on: **mount it on a server that does not run your bot handler.** Serving it
 from inside the application means reading the dashboard shows up in the dashboard, and a
