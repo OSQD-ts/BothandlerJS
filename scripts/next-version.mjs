@@ -15,8 +15,7 @@
 //
 // ## The rules, in full
 //
-//   feat:                  → minor
-//   fix: / perf:           → patch
+//   feat: / fix: / perf:   → patch
 //   anything with a `!`    → major, or minor while the major is 0
 //   BREAKING CHANGE: body  → the same
 //   docs/ci/test/chore/…   → nothing at all
@@ -24,6 +23,26 @@
 // The last line is the one that matters most: a push that only touches documentation
 // publishes nothing. Without it, "every push to main deploys" means a registry full of
 // versions whose only difference is a typo fix in a comment.
+//
+// ## Why a feature is a patch here
+//
+// Conventional Commits reads `feat` as a minor, and for a repository that releases on a
+// human's say-so that is right. This one releases on *every push*, which makes the same
+// rule mean something different: a fortnight of ordinary work is a fortnight of `feat`
+// commits, and each one lands on the minor the moment it merges. The number then measures
+// how often somebody pushed rather than anything about the library, and it climbs fast
+// enough that a real minor — the release where the shape of the thing actually changed —
+// has nothing left to say.
+//
+// So the default is the smallest bump that still publishes, and a larger one is said out
+// loud. `Release-As: minor` on the commit that earns it is one line, it sits in the
+// history next to the work it describes, and it means the minor is a claim somebody made
+// rather than a side effect of the calendar.
+//
+// A `!` or a `BREAKING CHANGE:` footer is untouched by this and still bumps the major,
+// because neither is a default: you have to type it, and typing it is exactly the
+// deliberate act the paragraph above is asking for. Silently shipping a breaking change
+// as a patch is the one outcome worth more than a tidy version number.
 //
 // While the major version is 0 a breaking change bumps the minor, which is what SemVer
 // says 0.x is for: anything may change, and the way to say "this is now stable" is to
@@ -133,10 +152,12 @@ export function isForwards(from, to) {
 
 /**
  * What one commit does to the version. Exported, and tested in
- * `tests/next-version.test.ts`, because this is the function that decides what the
- * world gets: a rule that quietly reads `feat` as a patch would publish a feature
- * release as a bug fix, and nothing downstream would notice until somebody pinned a
- * caret range and did not get it.
+ * `tests/next-version.test.ts`, because this is the function that decides what the world
+ * gets. The asymmetry that matters is at the top of the scale rather than the middle: an
+ * ordinary feature going out as a patch is a number that undersells itself, while a
+ * breaking change going out as one is an upgrade that breaks somebody on a caret range
+ * with no warning at all. So `feat` is deliberately a patch here and `!` is deliberately
+ * not.
  */
 export function classify(message) {
   const [header, ...rest] = message.split("\n");
@@ -147,8 +168,8 @@ export function classify(message) {
   if (/^BREAKING[ -]CHANGE:/m.test(body)) return "major";
   if (match === null) return "none";
   if (match.groups.breaking === "!") return "major";
-  if (match.groups.type === "feat") return "minor";
-  if (match.groups.type === "fix" || match.groups.type === "perf") return "patch";
+  // `feat` lands on the patch, not the minor. See the note on the default bump above.
+  if (match.groups.type === "feat" || match.groups.type === "fix" || match.groups.type === "perf") return "patch";
   return "none";
 }
 

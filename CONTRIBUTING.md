@@ -131,16 +131,34 @@ The only thing you have to get right is the commit message:
 
 | Commit | Effect |
 | ------ | ------ |
-| `feat: …` | minor |
-| `fix: …` / `perf: …` | patch |
+| `feat: …` / `fix: …` / `perf: …` | patch |
 | `feat!: …`, or a `BREAKING CHANGE:` footer | major — or minor, while the major is 0 |
 | `docs:`, `ci:`, `test:`, `chore:`, `build:`, `refactor:`, `style:` | **nothing is published** |
 
 That last row is what makes publishing on every push tolerable. A documentation fix
 releases nothing, so the registry does not collect versions whose only difference is a
 reworded comment. `node scripts/next-version.mjs --explain` prints the reasoning for the
-current history, and `tests/next-version.test.ts` pins the rules — a `feat` read as a
-patch would ship a feature as a bug fix, and nobody on a caret range would find out.
+current history, and `tests/next-version.test.ts` pins the rules.
+
+**A feature is a patch here**, which is not what Conventional Commits says. That rule
+assumes a human decides when to release; this repository releases on every push, and under
+the usual reading a fortnight of ordinary work is a fortnight of minor bumps. The version
+then measures how often somebody pushed rather than anything about the library, and it
+climbs fast enough that a real minor — the release where the shape of the thing actually
+changed — has nothing left to say. So the default is the smallest bump that still
+publishes, and anything larger is claimed out loud:
+
+```
+feat: rework how policies are composed
+
+Release-As: minor
+```
+
+**A breaking change is exempt from that**, and still bumps the major. It is not a default:
+you have to type the `!` or the footer, and typing it is exactly the deliberate act the
+paragraph above asks for. An ordinary feature going out as a patch is a number that
+undersells itself; a breaking change going out as one breaks whoever is on a caret range,
+with no warning and nothing to withdraw.
 
 While the major version is 0, a breaking change bumps the **minor**. Reaching 1.0.0 is a
 claim that the API is stable and should be made deliberately, not by a stray `!` in a

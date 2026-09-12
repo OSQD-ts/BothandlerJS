@@ -6,17 +6,36 @@ import { bumpVersion, classify, declaredRelease, isForwards } from "../scripts/n
  * The rules that decide what the world gets.
  *
  * Every push to `main` runs this and publishes whatever it says, so a mistake here is
- * not a broken build — it is a wrong version on a registry that cannot take it back. The
- * expensive direction is under-reporting: a `feat` read as a patch ships a feature as a
- * bug fix, and nobody on a caret range finds out.
+ * not a broken build — it is a wrong version on a registry that cannot take it back.
+ *
+ * The expensive direction is at the top of the scale. A feature going out as a patch is a
+ * number that undersells itself and costs nobody anything; a *breaking change* going out
+ * as one breaks whoever is on a caret range, with no warning and no way to withdraw it.
+ * That is why `feat` is deliberately a patch here and `!` is deliberately not.
  */
 describe("what a commit does to the version", () => {
-  it("reads the conventional types", () => {
-    expect(classify("feat: add a detector")).toBe("minor");
-    expect(classify("feat(engine): add a detector")).toBe("minor");
+  /**
+   * A feature is a patch, which is not what Conventional Commits says and is deliberate.
+   *
+   * This repository publishes on every push. Under the usual rule a fortnight of ordinary
+   * work is a fortnight of minor bumps, and the version ends up measuring how often
+   * somebody pushed rather than anything about the library. The smallest bump that still
+   * publishes is the default; a minor is claimed out loud with `Release-As: minor` on the
+   * commit that earns it.
+   */
+  it("reads the conventional types, with a feature landing on the patch", () => {
+    expect(classify("feat: add a detector")).toBe("patch");
+    expect(classify("feat(engine): add a detector")).toBe("patch");
     expect(classify("fix: stop clipping the feed")).toBe("patch");
     expect(classify("fix(dashboard): stop clipping the feed")).toBe("patch");
     expect(classify("perf: stop hashing on every request")).toBe("patch");
+  });
+
+  it("still lets a minor be asked for outright", () => {
+    // The escape hatch that makes the default safe to lower: nothing about a real minor
+    // release became impossible, it just has to be said rather than inferred.
+    expect(declaredRelease("feat: the shape of the thing changed\n\nRelease-As: minor")).toEqual({ kind: "bump", value: "minor" });
+    expect(bumpVersion("0.11.0", "minor")).toBe("0.12.0");
   });
 
   it("releases nothing for work that changes nothing for a consumer", () => {
