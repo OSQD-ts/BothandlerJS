@@ -1,4 +1,5 @@
 import { ActorRegistry, ActorState, cleanLabel } from "./state.js";
+import { LabelResolver } from "./labels.js";
 import { ChallengeService } from "./challenge/index.js";
 import { Emitter } from "./internal/emitter.js";
 import { MemoryStore } from "./stores/memory.js";
@@ -244,6 +245,16 @@ export class BotHandler {
    * own documentation always said it was for.
    */
   private readonly labelStore = new Map<string, ActorLabel>();
+  /**
+   * Names worked out from configuration rather than typed by anybody.
+   *
+   * A separate map from {@link labelStore} because the two have different value. A name
+   * somebody typed is kept until they remove it and the cap on them is worth a warning;
+   * a name derived from an address range or an account lookup can be derived again, so
+   * its store evicts silently and an operator's label always wins over it.
+   */
+  private readonly derivedLabels = new Map<string, ActorLabel>();
+  private labelResolver: LabelResolver | undefined;
   readonly store: BotHandlerStore;
   readonly policy: Policy;
   readonly challenge: ChallengeService | undefined;
@@ -306,8 +317,43 @@ export class BotHandler {
       options.probe !== undefined ? new MarkerProbe({ ...options.probe, clock: this.config.clock }) : undefined;
     this.site = options.site !== undefined ? new SiteProfile({ ...options.site, clock: this.config.clock }) : undefined;
 
+    // Names for traffic the deployment already recognises. Kept apart from `labelStore`
+    // on purpose: that one holds names somebody typed, which are precious and bounded
+    // loudly, and this one holds names that were derived and can be derived again.
+    if (options.labels !== undefined) {
+      const resolver = new LabelResolver(
+        options.labels,
+        this.config.clock,
+        (key, name, hideFromFeed) => {
+          this.derivedLabels.set(key, hideFromFeed ? { name, hideFromFeed: true } : { name });
+          this.registry.peek(key)?.setLabel(name);
+          // Announced like any other label, so every open dashboard learns the name
+          // rather than only the one that happened to be watching.
+          this.events.emit("actor-change", { key, action: "label", label: name });
+        },
+        (error) => this.fail(error, "labels"),
+      );
+      for (const bad of resolver.invalid) {
+        this.warn(`labels.sources has an entry with addresses that are not valid CIDRs — ${bad}. It will never match anything.`);
+      }
+      this.labelResolver = resolver.active ? resolver : undefined;
+    }
+
     this.notifications = new NotificationHub({
       ...options.notifications,
+      // The service-token header is a credential, and a notification is the one path that
+      // carries a request *out of this process* — to Slack, to a webhook, to whatever a
+      // sink forwards to. It is stripped by construction here for the same reason the
+      // dashboard redacts it: a deployment that configured `serviceTokens` has already
+      // said this header holds a secret, and should not have to say it twice.
+      ...(this.config.serviceTokens === undefined || options.notifications?.redaction === false
+        ? {}
+        : {
+            redaction: {
+              ...(options.notifications?.redaction ?? {}),
+              neverSend: [...(options.notifications?.redaction?.neverSend ?? []), this.config.serviceTokens.header],
+            },
+          }),
       clock: this.config.clock,
       onError: (error, sinkId) => this.fail(error, `notify:${sinkId}`),
     });
@@ -643,8 +689,25 @@ export class BotHandler {
   }
 
   /** Every actor that has a name, keyed by actor key. */
+  /**
+   * The label for one actor, whoever gave it.
+   *
+   * An operator's label wins over a derived one. Somebody who renamed an actor by hand has
+   * said something the configuration did not know, and a range match should not overwrite
+   * it on the actor's next request.
+   */
+  private labelFor(key: string): ActorLabel | undefined {
+    if (this.labelStore.size > 0) {
+      const typed = this.labelStore.get(key);
+      if (typed !== undefined) return typed;
+    }
+    return this.derivedLabels.size === 0 ? undefined : this.derivedLabels.get(key);
+  }
+
   actorLabels(): Map<string, string> {
     const out = new Map<string, string>();
+    // Derived first, so a name somebody typed overwrites one worked out from a range.
+    for (const [key, entry] of this.derivedLabels) out.set(key, entry.name);
     for (const [key, entry] of this.labelStore) out.set(key, entry.name);
     return out;
   }
@@ -652,6 +715,7 @@ export class BotHandler {
   /** Every label with its switches, keyed by actor key. Copies; changing them changes nothing. */
   actorLabelEntries(): Map<string, ActorLabel> {
     const out = new Map<string, ActorLabel>();
+    for (const [key, entry] of this.derivedLabels) out.set(key, { ...entry });
     for (const [key, entry] of this.labelStore) out.set(key, { ...entry });
     return out;
   }
@@ -823,7 +887,8 @@ export class BotHandler {
 
   /** Whether this request's actor carries a label that switches analysis off. */
   private skipsAnalysis(facts: RequestFacts): boolean {
-    return this.labelStore.size > 0 && this.labelStore.get(this.actorKeyFor(facts))?.skipAnalysis === true;
+    if (this.labelStore.size === 0) return false;
+    return this.labelStore.get(this.actorKeyFor(facts))?.skipAnalysis === true;
   }
 
   isIgnoredPath(path: string): boolean {
@@ -850,11 +915,19 @@ export class BotHandler {
     if (this.isIgnoredPath(facts.path)) return this.bypassed(facts, requestId, started, "ignored-path", record);
     if (this.isAllowlisted(facts.ip)) return this.bypassed(facts, requestId, started, "allowlist", record);
 
+    // Checked before anything else reads the request, so a rule matching a token sees it
+    // whatever else detection concludes. A valid token never changes a verdict — it is
+    // recorded, and only a rule decides what it is worth.
+    const serviceToken = this.config.serviceTokens?.identify(facts.headers);
+
     const actorKey = this.actorKeyFor(facts);
     // After the address checks, because those are cheaper and they are configuration; a
     // label is something an operator did at runtime. The size check keeps a deployment
     // that labels nothing — nearly all of them — off the map entirely.
-    const labelled = this.labelStore.size === 0 ? undefined : this.labelStore.get(actorKey);
+    // Returns immediately: an address range is a lookup, and anything needing the
+    // configured resolver is started and left to finish. No request waits for a name.
+    if (record) this.labelResolver?.see(actorKey, facts);
+    const labelled = this.labelFor(actorKey);
     if (labelled?.skipAnalysis === true) return this.bypassed(facts, requestId, started, "label", record);
     // A dry run gets an actor of its own, created and discarded here. Anything else
     // would make asking the question change the answer to the next one: `observe`
@@ -1017,6 +1090,7 @@ export class BotHandler {
       actor,
       durationMs: this.config.clock.now() - started,
       failures,
+      ...(serviceToken === undefined ? {} : { serviceToken }),
       facts,
       ...(marker === undefined ? {} : { marker }),
     };

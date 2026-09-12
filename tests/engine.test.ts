@@ -307,6 +307,30 @@ describe("configuration", () => {
     expect(quiet.join(" ")).not.toMatch(/identity/);
   });
 
+  /**
+   * The production symptom this exists for: a real Googlebot getting 403 on one route and
+   * 200 on the next, seconds apart. A reverse-DNS lookup that misses its budget yields no
+   * evidence — correctly, since a slow resolver must not read as an accusation — and a
+   * rule that refuses the unverified reads "no evidence" as "not verified".
+   */
+  it("says when verification rests on DNS alone", () => {
+    const warnings: string[] = [];
+    engine({ preset: "indexers-only", onWarning: (message) => warnings.push(message) });
+    const said = warnings.join(" ");
+    expect(said).toMatch(/rests entirely on a reverse-DNS lookup/);
+    // And points at the thing that fixes it, which is the half that was missing.
+    expect(said).toMatch(/startCrawlerRangeRefresh/);
+
+    // Any published range loaded means verification no longer depends on the lookup.
+    const loaded: string[] = [];
+    engine({
+      preset: "indexers-only",
+      crawlerRanges: { duckduckbot: ["20.191.45.0/24"], "facebook-external": ["31.13.24.0/21"] },
+      onWarning: (message) => loaded.push(message),
+    });
+    expect(loaded.join(" ")).not.toMatch(/reverse-DNS/);
+  });
+
   it("says nothing about verification a policy never asks for", () => {
     // `protect-content` serves an unconfirmable indexer rather than refusing it, so
     // nothing is stranded and there is nothing to say.

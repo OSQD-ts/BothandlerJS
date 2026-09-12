@@ -3,6 +3,9 @@ import { statelessPattern } from "./internal/pattern.js";
 import { systemClock } from "./internal/clock.js";
 import { defaultDetectors } from "./detectors/index.js";
 import { BOT_SIGNATURES } from "./detectors/known-bots.js";
+import { MIN_TOKEN_LENGTH, ServiceTokens } from "./service-tokens.js";
+import type { ServiceTokenOptions } from "./service-tokens.js";
+import type { LabelOptions } from "./labels.js";
 import { ACTION_NAMES } from "./policy/types.js";
 import { PRESETS } from "./policy/presets.js";
 import type { PresetName } from "./policy/presets.js";
@@ -151,6 +154,38 @@ export interface BotHandlerConfig {
   actorKey?: (facts: RequestFacts) => string;
   /** Paths detection skips entirely: health checks, your own polling endpoints, static assets. */
   ignorePaths?: readonly (string | RegExp)[];
+  /**
+   * Shared secrets that let a service caller prove itself, so a rule can name one.
+   *
+   * A challenge is unanswerable from `fetch`, so an uptime monitor under a strict policy
+   * is challenged at best and reports the site down while the site is fine. The rule that
+   * fixes it handles a credential, and written by hand it is almost always compared with
+   * `===` — variable-time — and carried in a header this library has never heard of, which
+   * is therefore printed in full on the dashboard and into every export.
+   *
+   * ```ts
+   * serviceTokens: { tokens: { "uptime monitor": process.env.MONITOR_SECRET! } }
+   * // then: { id: "monitor", match: { serviceToken: "uptime monitor" }, action: "allow" }
+   * ```
+   *
+   * The comparison is constant-time, the header is redacted wherever headers are shown,
+   * and what reaches a rule is the name rather than the secret. See `ServiceTokenOptions`.
+   */
+  serviceTokens?: ServiceTokenOptions;
+  /**
+   * Names for traffic you already recognise: known address ranges, and a lookup for the
+   * actors only your application can name.
+   *
+   * ```ts
+   * labels: {
+   *   sources: [{ label: "CI runner", cidrs: ["198.51.100.0/24"] }],
+   *   resolve: async (key) => lookupAccountName(key),
+   * }
+   * ```
+   *
+   * A name never changes a verdict. See `LabelOptions`.
+   */
+  labels?: LabelOptions;
 
   /**
    * Lets your application declare a request human — an authenticated session, a
@@ -331,6 +366,8 @@ export interface ResolvedConfig {
   proxy: Required<Omit<ProxyConfig, "trustedProxies">> & { trustedProxies: IpRangeSet | undefined };
   actorKey: (facts: RequestFacts) => string;
   ignorePaths: readonly (string | RegExp)[];
+  /** Compiled once. `undefined` when none are configured, which is nearly every deployment. */
+  serviceTokens: ServiceTokens | undefined;
   suspectThreshold: number;
   strictEvidence: boolean;
   detectorTimeoutMs: number;
@@ -463,10 +500,36 @@ function unreachableVerification(rules: readonly Rule[], signatures: readonly Bo
     stranded.set(rule, [...(stranded.get(rule) ?? []), signature.name]);
   }
 
-  return [...stranded].map(
+  const warnings = [...stranded].map(
     ([rule, names]) =>
       `${names.join(", ")} ${names.length === 1 ? "publishes" : "publish"} IP ranges rather than reverse DNS, so ${names.length === 1 ? "it" : "they"} can never be verified without a \`crawlerRanges\` entry — and rule "${rule}" refuses unverified crawlers of ${names.length === 1 ? "that" : "their"} kind. Supply the ranges, or change that rule, or ${names.length === 1 ? "it stays" : "they stay"} refused for a missing config entry.`,
   );
+
+  // And the larger half, which is about the crawlers that *can* be confirmed.
+  //
+  // A rule like this refuses anything it could not verify, and with no ranges loaded the
+  // only way to verify anything is a reverse-DNS lookup on the request path, inside a
+  // timeout. A resolver having a bad afternoon therefore produces no evidence — correctly,
+  // because a slow lookup must never read as an accusation — and "no evidence" is exactly
+  // what this rule refuses on. The result is a real Googlebot getting 403 on one route and
+  // 200 on the next, seconds apart, which an integration reported from production.
+  //
+  // Published ranges are the fix because they are answered from memory: they turn
+  // verification from a per-request network call into a lookup, and the DNS path becomes
+  // the fallback rather than the whole basis.
+  if (!hasCrawlerRanges(ranges)) {
+    const [category, rule] = [...refused][0] as [BotCategory, string];
+    warnings.push(
+      `Rule "${rule}" refuses a ${category} crawler it could not verify, and no crawler ranges are loaded — so verification rests entirely on a reverse-DNS lookup inside a timeout. A slow resolver yields no evidence, which this rule reads as unverified, so a genuine crawler is refused intermittently and for no reason visible in the logs. Load published ranges with startCrawlerRangeRefresh(), or set \`crawlerRanges\`.`,
+    );
+  }
+  return warnings;
+}
+
+/** Whether any published crawler range is loaded at all. */
+function hasCrawlerRanges(ranges: ReadonlyMap<string, IpRangeSet>): boolean {
+  for (const name of ranges.keys()) if (name.startsWith("crawler:")) return true;
+  return false;
 }
 
 export class ConfigError extends Error {
@@ -527,6 +590,40 @@ export function resolveConfig(config: BotHandlerConfig = {}): ResolvedConfig {
   const signatures = config.signatures ?? [...BOT_SIGNATURES, ...(config.extraSignatures ?? [])];
   warnings.push(...unreachableVerification(rules, signatures, ranges));
   warnings.push(...unknownIdentities(rules, signatures));
+
+  const serviceTokens = config.serviceTokens === undefined ? undefined : new ServiceTokens(config.serviceTokens);
+  if (serviceTokens !== undefined) {
+    // An empty set is almost always an environment variable that did not arrive. Silence
+    // here means the monitor's rule never matches and the monitor starts reporting the
+    // site down — with the configuration on screen looking exactly right.
+    if (serviceTokens.size === 0) {
+      warnings.push("serviceTokens is configured but no token has a value, so no rule matching one can ever fire. An unset environment variable is the usual cause.");
+    }
+    if (serviceTokens.weak.length > 0) {
+      warnings.push(
+        `Service token(s) ${serviceTokens.weak.map((name) => `"${name}"`).join(", ")} are shorter than ${MIN_TOKEN_LENGTH} characters. This is a bearer secret that never expires and is replayable by anyone who sees it once; give it the length of one.`,
+      );
+    }
+    // A rule naming a token that does not exist never matches, in silence — the same
+    // failure as an identity typo, and worth the same warning.
+    const known = new Set(serviceTokens.names);
+    for (const rule of rules) {
+      if (typeof rule.match !== "object") continue;
+      const named = (rule.match as MatchSpec).serviceToken;
+      if (named === undefined || named === true) continue;
+      for (const name of Array.isArray(named) ? named : [named]) {
+        if (typeof name === "string" && !known.has(name)) {
+          warnings.push(`Rule "${rule.id}" matches service token "${name}", which is not one of the configured tokens (${[...known].join(", ") || "none"}). It will never match.`);
+        }
+      }
+    }
+  } else {
+    for (const rule of rules) {
+      if (typeof rule.match === "object" && (rule.match as MatchSpec).serviceToken !== undefined) {
+        warnings.push(`Rule "${rule.id}" matches a service token, but no \`serviceTokens\` are configured, so it can never match.`);
+      }
+    }
+  }
 
   const proxyConfig = config.proxy ?? {};
   const trustedProxies = proxyConfig.trustedProxies ? new IpRangeSet(proxyConfig.trustedProxies) : undefined;
@@ -618,6 +715,7 @@ export function resolveConfig(config: BotHandlerConfig = {}): ResolvedConfig {
     },
     actorKey,
     ignorePaths: (config.ignorePaths ?? []).map(statelessPattern),
+    serviceTokens,
     suspectThreshold: clamp(config.suspectThreshold ?? 60, 1, 100),
     strictEvidence,
     detectorTimeoutMs: Math.max(1, config.detectorTimeoutMs ?? 300),

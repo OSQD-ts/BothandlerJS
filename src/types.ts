@@ -338,6 +338,14 @@ export interface Assessment {
   durationMs: number;
   /** Detectors that threw or timed out. Detection continues without them. */
   failures: DetectorFailure[];
+  /**
+   * The name of the service token this request presented, if it presented a valid one.
+   *
+   * The name only — "uptime monitor" — never the secret. It is safe to show, log and
+   * filter on, which is the point of carrying it: the secret was compared once, in
+   * constant time, and nothing downstream ever needs to see it again.
+   */
+  serviceToken?: string | undefined;
   facts: RequestFacts;
   /**
    * What the marker cookie on this request turned out to be, when the probe is on.

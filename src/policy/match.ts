@@ -32,7 +32,14 @@ export function compileMatch(spec: MatchSpec): (assessment: Assessment) => boole
       ? undefined
       : ((Array.isArray(spec.path) ? spec.path : [spec.path]) as readonly (string | RegExp)[]).map(statelessPattern);
 
+  const tokens = spec.serviceToken === true || spec.serviceToken === undefined ? undefined : toSet(spec.serviceToken);
+  const anyToken = spec.serviceToken === true;
+
   return (assessment: Assessment): boolean => {
+    // First, because it is the cheapest and because a request that proved itself is
+    // usually being matched in order to be let through without further argument.
+    if (anyToken && assessment.serviceToken === undefined) return false;
+    if (tokens && (assessment.serviceToken === undefined || !tokens.has(assessment.serviceToken))) return false;
     if (verdicts && !verdicts.has(assessment.verdict)) return false;
     if (classes && !classes.has(assessment.botClass)) return false;
     if (spec.certain !== undefined && assessment.certain !== spec.certain) return false;

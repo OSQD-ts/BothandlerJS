@@ -98,7 +98,12 @@ export class DashboardFeed {
     this.maxPerSecond = Math.max(0, Math.floor(limits.maxEventsPerSecond));
     this.ttlMs = Math.max(0, Math.floor(limits.ttlMs));
     this.maskIp = redact.maskIp === true;
-    this.extraSecrets = new Set((redact.secretHeaders ?? []).map((name) => name.toLowerCase()));
+    // The configured names, plus the service-token header — which is a secret by
+    // construction rather than by being remembered. A deployment that sets `serviceTokens`
+    // has told the library that header carries a credential; making them also list it
+    // under `redact.secretHeaders` would be asking the same question twice and printing a
+    // live secret on every dashboard that answered it once.
+    this.extraSecrets = new Set([...(redact.secretHeaders ?? []), ...(handler.config.serviceTokens === undefined ? [] : [handler.config.serviceTokens.header])].map((name) => name.toLowerCase()));
     this.guessSecrets = redact.guessSecretHeaders !== false;
     this.truncateUserAgent = redact.truncateUserAgent === true;
     this.maskQuery = redact.maskQuery !== false;

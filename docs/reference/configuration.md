@@ -109,6 +109,50 @@ feed** — there is no verdict for a row to show. It is still counted, so the St
 screen can tell you how much of your traffic detection actually ran on. If you want to see
 these requests go past, they do not belong in `ignorePaths`.
 
+### Service tokens
+
+A challenge is unanswerable from `fetch`. An uptime monitor is a bare HTTP client with no
+browser and nothing browser-shaped about it, so a strict policy challenges it — and then
+it reports the site down every fifteen minutes while the site is fine.
+
+The fix is a rule that lets it through, and written by hand that rule handles a credential
+with no help at all. It almost always compares the secret with `===`, which is
+variable-time, and carries it in a header this library has never heard of, which is
+therefore printed in full on the dashboard and into every export.
+
+```ts
+new BotHandler({
+  serviceTokens: { tokens: { "uptime monitor": process.env.MONITOR_SECRET! } },
+  rules: [{ id: "monitor-allow", match: { serviceToken: "uptime monitor" }, action: "allow" }],
+});
+```
+
+| | |
+| --- | --- |
+| `header` | Where the token arrives. Default `x-bothandler-token`. |
+| `tokens` | Name → secret. The name is matched and displayed; the secret is neither. |
+
+What this buys over the rule you would have written:
+
+- **Constant-time comparison.** Both values are hashed and the digests compared, so a
+  length mismatch is not an oracle for the length of the real secret either.
+- **Redacted by construction.** Configuring a token tells the library that header holds a
+  credential, so it is `[redacted]` wherever headers are shown and stripped from any event
+  leaving through a notification sink — without also listing it under `secretHeaders`.
+- **Only the name travels.** `match: { serviceToken: "uptime monitor" }` compares a name.
+  `serviceToken: true` matches any configured token.
+- **It is checked at boot.** A rule naming a token that does not exist, a token whose
+  value is empty (an unset environment variable), and a secret short enough to guess each
+  produce a warning rather than a rule that silently never fires.
+
+Presenting a valid token **changes no verdict**. It is recorded, and only a rule decides
+what it is worth — the same guarantee labels have, and for the same reason.
+
+**Know what it is.** A shared secret in a header is the weakest credential there is: it
+does not expire, anyone who sees it once can replay it, and it says nothing about *which*
+caller sent it. It is right for a monitor you operate calling an endpoint you operate, and
+wrong for anything a third party holds.
+
 `isHuman` produces `certain` human evidence — the only conclusive human signal available,
 because it comes from you and not from the client. An authenticated session, a completed
 payment, whatever bar you set:

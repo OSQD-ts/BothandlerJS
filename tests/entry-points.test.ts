@@ -42,6 +42,11 @@ const PROMISED: Record<string, { module: Record<string, unknown>; names: readonl
       "startDashboard", "createDashboardHandler", "renderDashboardPage",
       "ActorRegistry", "ActorState",
       "startCrawlerRangeRefresh", "refreshCrawlerRanges", "PUBLISHED_CRAWLER_RANGES",
+      // A shared secret a service caller presents, compared in constant time and redacted
+      // wherever a header is shown. Documented in the configuration reference.
+      "ServiceTokens", "DEFAULT_TOKEN_HEADER", "MIN_TOKEN_LENGTH",
+      // Names for traffic you already recognise, with the caching and timeout owned here.
+      "LabelResolver",
       "ManualClock", "systemClock", "IpRangeSet", "parseIp", "parseCidr", "cidrContains", "normalizeIp",
       "parseUserAgent", "parseCookies", "TtlLru", "Emitter",
       // The optional correlation sources and the detectors that arrive with them. Each is
@@ -108,10 +113,11 @@ const SURFACE: Record<string, { module: Record<string, unknown>; names: readonly
       "ACTION_NAMES", "ActorRegistry", "ActorState", "BENIGN_CATEGORIES", "BOT_CLASSES", "BOT_SIGNATURES",
       "BotHandler", "CAPABILITY_WEIGHTS", "CERTAINTY_WEIGHT", "CREDENTIAL_HEADERS", "ChallengeService",
       "ConfigError", "DEFAULT_CHECKS", "DEFAULT_DIFFICULTY", "DEFAULT_INTERACTION_SETTINGS",
-      "DEFAULT_TRAP_PATHS", "DURATION_BUCKETS_MS", "Emitter", "IpRangeSet", "MAX_DIFFICULTY",
+      "DEFAULT_TOKEN_HEADER", "DEFAULT_TRAP_PATHS", "DURATION_BUCKETS_MS", "Emitter", "IpRangeSet",
+      "LabelResolver", "MAX_DIFFICULTY", "MIN_TOKEN_LENGTH",
       "MAX_USER_AGENT_LENGTH", "ManualClock", "MarkerProbe", "MemoryStore", "Metrics",
       "MultiPatternMatcher", "NotificationHub", "PRESETS", "PUBLISHED_CRAWLER_RANGES", "Policy",
-      "RedisStore", "SCORE_BUCKETS", "SPECIAL_USE_RANGES", "SiteProfile", "TERMINAL_ACTIONS",
+      "RedisStore", "SCORE_BUCKETS", "SPECIAL_USE_RANGES", "ServiceTokens", "SiteProfile", "TERMINAL_ACTIONS",
       "TRAP_FIELD_SOURCE", "TrafficAudit", "TtlLru", "VERDICTS", "absenceIsMeaningful",
       "acceptSignatureDetector", "agentFor", "allowCrawlers", "analyseMovement",
       "blendedIdentityDetector", "browsingCoherenceDetector", "cachingResolver", "cadenceDetector",

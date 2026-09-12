@@ -39,6 +39,10 @@ export type { SiteProfileOptions, WalkSpread, PathSurge } from "./site/index.js"
 export { MarkerProbe } from "./probe/index.js";
 export type { MarkerProbeOptions, MarkerObservation } from "./probe/index.js";
 export { PUBLISHED_CRAWLER_RANGES, fetchAddressList, fetchCrawlerRanges, refreshCrawlerRanges, startCrawlerRangeRefresh } from "./crawler-ranges.js";
+export { ServiceTokens, DEFAULT_TOKEN_HEADER, MIN_TOKEN_LENGTH } from "./service-tokens.js";
+export { LabelResolver } from "./labels.js";
+export type { LabelOptions, LabelSource } from "./labels.js";
+export type { ServiceTokenOptions } from "./service-tokens.js";
 export type { AddressListOptions, AddressListSource, PublishedRangeSource, RefreshOptions, RefreshResult, ScheduleOptions } from "./crawler-ranges.js";
 export type { RobotsOptions, RobotsFromRulesResult } from "./robots.js";
 

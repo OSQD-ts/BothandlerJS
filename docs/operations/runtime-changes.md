@@ -111,6 +111,74 @@ happens to a request:
 | `hideFromFeed` | Kept out of the live feed. Still analysed, decided, acted on and counted. The feed says how many it is hiding and can show them again — hidden traffic is still traffic. |
 | `skipAnalysis` | Not analysed at all, exactly like an allowlisted address: no detector runs, no rule sees it, and it does not enter the feed. Counted as `bypassed.label`. Keyed by actor, so it works for an actor key that is not an IP. |
 
+### Naming what you already recognise
+
+`labelActor` names one actor. For traffic you can describe in advance — your CI runners,
+the office, a partner's feed — and for actors only your application can name, configure it
+once instead:
+
+```ts
+new BotHandler({
+  labels: {
+    sources: [
+      { label: "CI runner", cidrs: ["198.51.100.0/24"] },
+      { label: "Health check", cidrs: ["10.0.4.0/28"], hideFromFeed: true },
+    ],
+    resolve: async (key) => lookupAccountName(key),
+    resolveTimeoutMs: 500,
+  },
+});
+```
+
+| | |
+| --- | --- |
+| `sources` | Address ranges and what to call them. Matched in order, so a narrower range may precede a broader one. Each may also set `hideFromFeed`. |
+| `resolve` | Names an actor the library cannot name by address — an account, a tenant, an API key's owner. |
+| `resolveTimeoutMs` | How long to wait for one attempt. Default 500ms. |
+| `ttlMs` | How long a resolved name is kept. Default one hour. |
+| `retryAfterMs` | How long before an actor that resolved to no name is asked about again. Default one minute. |
+| `max` | Most derived names held at once. Default 10,000. |
+
+**No request waits for a name.** An address range is a lookup and is answered immediately;
+`resolve` is started and the request goes on without it, so the name is there for that
+actor's next request. A name is for whoever reads the dashboard, and nothing in detection
+reads it — so there is nothing worth delaying a response for.
+
+**A name somebody typed wins.** `labelActor` overrides anything derived here, because an
+operator renaming an actor has said something the configuration did not know. Derived names
+are held separately and the oldest is dropped silently when `max` is reached; they can
+always be derived again, whereas a typed one cannot.
+
+**What `resolve` is allowed to do.** Be slow, and throw. Both are handled: an attempt that
+exceeds `resolveTimeoutMs` or throws is reported through `onError` and the actor is asked
+about again after `retryAfterMs`, rather than being hammered on every request.
+
+What it must not do is hang *silently*, and that is the failure this owns rather than
+leaves to you. The obvious hand-rolled version marks a key in flight and clears the flag
+when the lookup finishes — which is correct for a lookup that fails and wrong for one that
+never returns at all: the flag is never cleared, the actor is never named, and nothing is
+logged. The symptom is account ids in the feed where names should be, with no error
+anywhere to explain it.
+
+#### Naming an actor after the crawler it turned out to be
+
+`assessment.identity` is a signature's id — `"googlebot"`. The name you would want to put
+on screen is in the signature table, which is exported:
+
+```ts
+import { indexSignatures, BOT_SIGNATURES } from "@osqd/bothandlerjs";
+
+const byId = indexSignatures(BOT_SIGNATURES);
+const display = (identity: string): string => byId.get(identity)?.name ?? identity;
+
+display("googlebot");          // "Googlebot"
+display("facebook-external");  // "Facebook external hit"
+```
+
+Each entry carries `id`, `name`, `category`, `benign` and `verification`. Reach for this
+rather than parsing a name out of an evidence summary — an evidence summary is prose, it is
+written for a person to read, and it is free to change wording in any release.
+
 `skipAnalysis` is allowlisting by another name and deserves the same care; the dashboard
 puts it behind the same `controls.editRanges` as the allowlist, and says what it does in
 words the moment the box is ticked.

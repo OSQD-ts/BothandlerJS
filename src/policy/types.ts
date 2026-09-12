@@ -75,6 +75,21 @@ export interface MatchSpec {
   /** Category of the matched signature, e.g. `"ai"`, `"seo"`. */
   category?: BotCategory | readonly BotCategory[];
   /**
+   * A service token this request presented and proved — by name, never by value.
+   *
+   * `true` matches any configured token. This is the one place a *claim* in a header is
+   * allowed to decide a rule, and it is allowed because the claim carries a shared secret
+   * that was checked in constant time before this ran. Nothing else about a header is
+   * matchable, deliberately: a header is something the client wrote.
+   *
+   * ```ts
+   * { id: "monitor", match: { serviceToken: "uptime monitor" }, action: "allow" }
+   * ```
+   *
+   * See `serviceTokens` in the handler configuration.
+   */
+  serviceToken?: string | readonly string[] | true;
+  /**
    * Require (or forbid) proven evidence.
    *
    * Note what this does *not* mean: `certain` is about the strength of the evidence,
