@@ -1,5 +1,5 @@
 import { $, byId, clear, cssEscape, el, rootNode } from "./dom.js";
-import { feedPage, goToFeedPage, hiddenCount, ingest, labelOf, matchingCount, matchingRows, resetPaging, setSearch, setTimeframe, sortRows, state } from "./store.js";
+import { feedPage, goToFeedPage, hiddenCount, ingest, labelOf, matchingCount, matchingRows, refreshFrozenPage, resetPaging, setSearch, setTimeframe, sortRows, state } from "./store.js";
 import { deleteFilter, refreshSavedFilters, saveFilter, savedFilters } from "./saved.js";
 import { suggestFor } from "./query.js";
 import { getJson } from "./api.js";
@@ -478,10 +478,14 @@ async function ensureFeedPage(page: number, size: number): Promise<void> {
   // about a query it has never seen.
   const held = state.feedFrozen?.length ?? state.rows.length;
   if ((page + 1) * size <= held) return;
+  // A filtered view pages over rows this browser already holds, and the server has never
+  // seen the query — so there is nothing coherent to ask it for.
+  if (matchingCount() !== state.rows.length) return;
   try {
     const entries = await fetchFeedPage(page, size);
     for (const entry of entries) ingest(entry);
     sortRows();
+    refreshFrozenPage();
   } catch {
     // The count stays true and the table stays as it was. A failed fetch here is worth
     // less noise than a toast on every click of a pager somebody is holding down.

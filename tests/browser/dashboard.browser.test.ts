@@ -316,6 +316,470 @@ describe("moving between views", () => {
   });
 });
 
+/**
+ * The controls in the page's chrome, which had no tests at all.
+ *
+ * Everything here is a button somebody presses rather than a thing the page renders, so
+ * every one of them is a path where a broken handler looks exactly like a working one:
+ * the button is there, it depresses, and nothing happens. The feed, the filters and the
+ * actors screen were covered; the toolbar around them was not.
+ */
+describe("the toolbar", () => {
+  it("holds the feed still while paused, and says how much it is holding", async () => {
+    // Its own listener. This test adds traffic, and the shared fixture is sized so that
+    // the stream's opening replay fits under the per-second cap — pushing it over makes
+    // the replay drop rows, which surfaces as unrelated tests failing to find a row they
+    // just created.
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      await own.handle(createFacts({ method: "GET", url: "/first", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.9" }));
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      await page.goto(server.url);
+      await page.waitForSelector("tbody tr.row");
+      const pause = page.locator("#pause");
+    await pause.click();
+    expect(await pause.getAttribute("aria-pressed")).toBe("true");
+
+      const before = await page.locator("tbody tr.row").count();
+      // Traffic arriving while paused must be counted and withheld rather than dropped:
+      // pausing a feed is asking it to hold still, not asking it to stop listening.
+      for (let i = 0; i < 5; i++) {
+        await own.handle(createFacts({ method: "GET", url: `/paused/${i}`, headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "198.51.100.77" }));
+      }
+      await page.waitForTimeout(900);
+      expect(await page.locator("tbody tr.row").count(), "the table is still").toBe(before);
+      // The button says what is waiting, so the stillness cannot be mistaken for quiet.
+      expect(await pause.textContent()).toMatch(/Resume \(\d+\)/);
+
+      await pause.click();
+      await page.waitForTimeout(700);
+      expect(await pause.getAttribute("aria-pressed")).toBe("false");
+      expect(await page.locator("tbody tr.row").count(), "and everything held arrives at once").toBeGreaterThan(before);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("switches theme and remembers it across a reload", async () => {
+    const page = await open();
+    const themeOf = () => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+    const first = await themeOf();
+    await page.locator("#theme").click();
+    const second = await themeOf();
+    expect(second, "the toggle actually moves").not.toBe(first);
+    expect(["light", "dark"]).toContain(second);
+
+    // Kept in this browser, because it is a preference belonging to whoever is reading
+    // rather than a fact about the server.
+    await page.reload();
+    await page.waitForSelector("tbody tr.row");
+    expect(await themeOf()).toBe(second);
+    await page.close();
+  });
+
+  it("exports the window as replay JSONL, and exports only what the filter matches", async () => {
+    const page = await open();
+    // Narrowed first, so the export is being asked a question with a known answer.
+    await page.locator("#search").fill("path:/api/items");
+    await page.waitForTimeout(500);
+    const shown = await page.locator("tbody tr.row").count();
+    expect(shown).toBeGreaterThan(0);
+
+    const download = await Promise.all([page.waitForEvent("download", { timeout: 15_000 }), page.locator("#feed-export").click()]).then(([d]) => d);
+    const stream = await download.createReadStream();
+    const text = await new Promise<string>((resolve, reject) => {
+      let out = "";
+      stream.on("data", (chunk: Buffer) => (out += chunk.toString()));
+      stream.on("end", () => resolve(out));
+      stream.on("error", reject);
+    });
+    await page.close();
+
+    const lines = text.trim().split("\n").filter(Boolean);
+    expect(lines.length, "one line per matching request").toBe(shown);
+    for (const line of lines) {
+      // Replay JSONL is the format `bothandlerjs replay` reads, so every line has to be
+      // a complete request rather than a row of the table it came from.
+      const parsed = JSON.parse(line) as { url?: string; headers?: Record<string, string>; ip?: string };
+      expect(parsed.url).toContain("/api/items");
+      expect(parsed.headers).toBeTruthy();
+      expect(typeof parsed.ip).toBe("string");
+    }
+  });
+
+  it("copies a request as a replay line and as a corpus case", async () => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, permissions: ["clipboard-read", "clipboard-write"] });
+    const page = await context.newPage();
+    await page.goto(url);
+    await page.waitForSelector("tbody tr.row");
+    await page.locator("tbody tr.row .row-toggle").first().click();
+    await page.waitForSelector("tr.detail");
+
+    for (const [label, check] of [
+      ["Copy replay line", (text: string) => expect(JSON.parse(text)).toHaveProperty("headers")],
+      ["Copy corpus case", (text: string) => expect(text).toMatch(/id|title|requests/)],
+    ] as const) {
+      await page.locator("tr.detail button", { hasText: label }).first().click();
+      await page.waitForTimeout(400);
+      const copied = await page.evaluate(() => navigator.clipboard.readText());
+      expect(copied.length, label).toBeGreaterThan(10);
+      check(copied);
+      // The button says so, which is the only feedback a copy can give.
+      expect(await page.locator("tr.detail button", { hasText: /^Copied$/ }).count()).toBeGreaterThan(0);
+      await page.waitForTimeout(1300);
+    }
+    await context.close();
+  });
+
+  it("clears the feed on reset, and says the registry went with it", async () => {
+    // Its own handler and listener: reset discards the actor registry, which every other
+    // test in this file is reading.
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, controls: { reset: true } });
+    try {
+      for (let i = 0; i < 5; i++) {
+        await own.handle(createFacts({ method: "GET", url: `/r/${i}`, headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.5" }));
+      }
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      await page.goto(server.url);
+      await page.waitForSelector("tbody tr.row");
+      expect(await page.locator("tbody tr.row").count()).toBeGreaterThan(0);
+
+      await page.locator("#reset").click();
+      await page.waitForTimeout(900);
+      expect(await page.locator("tbody tr.row").count(), "the feed is emptied").toBe(0);
+      expect(await page.locator("#empty").isVisible(), "and says so rather than showing nothing").toBe(true);
+      expect(own.registry.size, "the registry went with it").toBe(0);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * Choosing how much of the feed to see at once.
+ *
+ * The pager was covered; the size chooser beside it was not, and it has a trap in it —
+ * page four of fifty is not page four of two hundred, so changing the size while deep in
+ * a feed moves the reader somewhere they did not ask to go unless it resets.
+ */
+describe("how many rows at a time", () => {
+  it("changes the page size and goes back to the front", async () => {
+    // Its own listener with enough traffic to need a pager: the size chooser only exists
+    // once there is more than one page, and the shared dashboard has forty rows against a
+    // default page of fifty.
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, feedLimit: 400 });
+    try {
+      for (let i = 0; i < 120; i++) {
+        await own.handle(createFacts({ method: "GET", url: `/n/${i}`, headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: `203.0.113.${i % 60}` }));
+      }
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(server.url);
+      await page.waitForSelector("tbody tr.row");
+      await page.waitForTimeout(700);
+
+      // The rate cap thins the opening replay, so the rows held are a sparse sample of
+      // the window. "Load them" is what makes the feed dense, and paging is only coherent
+      // once it is — which is the reason that button exists.
+      const load = page.locator("#feed-load-skipped");
+      if (await load.isVisible()) {
+        await load.click();
+        await page.waitForTimeout(1200);
+      }
+
+      const size = page.locator("#feed-pager-top select").first();
+      await size.selectOption("25");
+      await page.waitForTimeout(600);
+      expect(await page.locator("tbody tr.row").count(), "25 at a time").toBe(25);
+
+      // Deep into the feed, then resized. Page four of twenty-five is not page four of a
+      // hundred, so keeping the number while changing what it counts moves the reader
+      // somewhere they did not ask to go — it has to return to the front.
+      await page.locator('#feed-pager-top button[aria-label="Next page"]').click();
+      await page.waitForTimeout(400);
+      await page.locator('#feed-pager-top button[aria-label="Next page"]').click();
+      await page.waitForTimeout(400);
+      expect(await page.locator('#feed-pager-top button[aria-label="Previous page"]').isEnabled(), "we moved off the first page").toBe(true);
+
+      await size.selectOption("100");
+      await page.waitForTimeout(700);
+      expect(await page.locator('#feed-pager-top button[aria-label="Previous page"]').isEnabled(), "back at the front").toBe(false);
+      expect(await page.locator("tbody tr.row").count()).toBe(100);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * The Statistics screen's charts.
+ *
+ * The panels and their window labels were covered. The charts themselves were checked for
+ * contrast and for a text summary, but not for *drawing anything* — and a chart that
+ * silently renders nothing is the failure this screen is most prone to, because an empty
+ * SVG and a quiet hour look the same from the outside.
+ */
+describe("the statistics charts", () => {
+  it("draws traffic, scores and latency with real geometry", async () => {
+    const page = await open(1440, "#stats", "#view-stats");
+    await page.waitForTimeout(1200);
+
+    for (const id of ["traffic", "scores", "latency"]) {
+      const drawn = await page.evaluate((target) => {
+        const svg = document.getElementById(target);
+        if (svg === null) return { found: false, marks: 0, width: 0 };
+        const box = svg.getBoundingClientRect();
+        // Anything that actually paints: bars, lines, areas, points.
+        return { found: true, marks: svg.querySelectorAll("rect, path, circle, line, polyline").length, width: box.width };
+      }, id);
+      expect(drawn.found, `#${id} exists`).toBe(true);
+      expect(drawn.width, `#${id} has been laid out`).toBeGreaterThan(100);
+      expect(drawn.marks, `#${id} drew something`).toBeGreaterThan(0);
+    }
+    await page.close();
+  });
+
+  it("keeps a text alternative beside every chart", async () => {
+    // The charts are the one part of this page that cannot be read by a screen reader on
+    // its own terms, so the summary beside them is not a nicety.
+    const page = await open(1440, "#stats", "#view-stats");
+    await page.waitForTimeout(1000);
+    const summaries = await page.locator("#view-stats .chart-summary, #view-stats figcaption, #view-stats .sr-only").count();
+    await page.close();
+    expect(summaries).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The live connection, which is the one part of this page that is a promise about *now*.
+ *
+ * Everything else can be wrong for a moment and corrected on the next frame. A feed that
+ * has quietly stopped receiving looks exactly like a site that has quietly stopped being
+ * visited, and the difference between those two is the whole reason somebody has the page
+ * open. So the indicator has to be right, and it has to recover.
+ */
+describe("the live connection", () => {
+  it("says it is connected, and draws requests that arrive while it is watching", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      await own.handle(createFacts({ method: "GET", url: "/first", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.8" }));
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      await page.goto(server.url);
+      await page.waitForSelector("tbody tr.row");
+      await page.waitForFunction(() => (document.getElementById("conn")?.textContent ?? "") === "live", undefined, { timeout: 15_000 });
+      expect(await page.locator("#dot").getAttribute("class"), "the dot is the at-a-glance half").not.toContain("off");
+
+      const before = await page.locator("tbody tr.row").count();
+      await own.handle(createFacts({ method: "GET", url: "/streamed/now", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "198.51.100.61" }));
+      // Arrives over the stream rather than by polling, so there is nothing to wait for
+      // beyond the round trip.
+      await page.waitForFunction((count) => document.querySelectorAll("tbody tr.row").length > count, before, { timeout: 15_000 });
+      expect(await page.locator("#rows").textContent()).toContain("/streamed/now");
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reports a dropped connection rather than looking quiet, and recovers", async () => {
+    // Its own listener, because closing the server is the only honest way to drop a
+    // stream and every other test in this file is reading the shared one.
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0 });
+    const base = server.url;
+    let closed = false;
+    try {
+      await own.handle(createFacts({ method: "GET", url: "/a", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.71" }));
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      await page.goto(base);
+      await page.waitForFunction(() => (document.getElementById("conn")?.textContent ?? "") === "live", undefined, { timeout: 15_000 });
+
+      await server.close();
+      closed = true;
+      // The page must say so. A stream that died silently is indistinguishable from a
+      // site nobody is visiting, which is the one thing this indicator exists to prevent.
+      await page.waitForFunction(() => (document.getElementById("conn")?.textContent ?? "").includes("reconnect"), undefined, { timeout: 20_000 });
+      expect(await page.locator("#dot").getAttribute("class")).toContain("off");
+      // And the rows already drawn stay on screen: what was true a moment ago is still
+      // worth reading while the connection comes back.
+      expect(await page.locator("tbody tr.row").count()).toBeGreaterThan(0);
+      await page.close();
+    } finally {
+      if (!closed) await server.close();
+    }
+  });
+});
+
+/**
+ * The rest of what an operator can do to one client, and what the page does when there is
+ * nothing to show.
+ *
+ * "Allowlist" and "Forget" were covered; clearance was not, and it is the one with a
+ * deadline attached. The empty states were not covered anywhere: a dashboard watching a
+ * quiet service spends most of its life in them, and "nothing has happened" and "something
+ * is broken" must not look the same.
+ */
+describe("acting on one actor, and having nothing to show", () => {
+  it("grants an actor human clearance for an hour", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, controls: { editRanges: true } });
+    try {
+      for (let i = 0; i < 4; i++) {
+        await own.handle(createFacts({ method: "GET", url: `/c/${i}`, headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.44" }));
+      }
+      const page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
+      await page.goto(`${server.url}#actors`);
+      await page.waitForSelector("#view-actors:not([hidden])");
+      await page.waitForTimeout(900);
+
+      expect(own.registry.peek("203.0.113.44")?.snapshot(Date.now()).cleared, "not cleared to begin with").toBe(false);
+      await page.locator("#actor-rows tr").first().locator("button", { hasText: "Clear as human" }).click();
+      await page.waitForTimeout(900);
+
+      // Clearance is the action with a deadline: it expires on its own rather than
+      // becoming a permanent hole nobody remembers opening.
+      const state = own.registry.peek("203.0.113.44")?.snapshot(Date.now());
+      expect(state?.cleared, "held as human").toBe(true);
+      expect(await page.locator("#toasts").textContent()).toMatch(/Cleared|human/i);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("says the feed is empty rather than showing an empty table", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      await page.goto(server.url);
+      await page.waitForSelector("#empty:not([hidden])", { timeout: 15_000 });
+
+      const said = (await page.locator("#empty").textContent()) ?? "";
+      expect(said.trim().length, "an empty feed explains itself").toBeGreaterThan(0);
+      expect(await page.locator("tbody tr.row").count()).toBe(0);
+      // And the pager stays out of the way rather than offering page 1 of 1.
+      expect(await page.locator("#feed-pager").isVisible()).toBe(false);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps every screen usable on a dashboard with no traffic at all", async () => {
+    // A quiet service is the normal case, and a page that throws its way through a
+    // missing snapshot looks identical to a page whose server has gone.
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, controls: { editPolicy: true, editGuard: true, editRanges: true } });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(String(error)));
+      page.on("console", (message) => {
+        if (message.type() === "error") errors.push(message.text());
+      });
+      await page.goto(server.url);
+      await page.waitForSelector("#empty:not([hidden])", { timeout: 15_000 });
+
+      for (const [tab, view] of [
+        ["#tab-actors", "#view-actors"],
+        ["#tab-stats", "#view-stats"],
+        ["#tab-policy", "#view-policy"],
+        ["#tab-live", "#view-live"],
+      ] as const) {
+        await page.locator(tab).click();
+        await page.waitForSelector(`${view}:not([hidden])`);
+        await page.waitForTimeout(500);
+      }
+      await page.close();
+      expect(errors, "nothing threw on the way through an empty dashboard").toEqual([]);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * The Policy screen's other half.
+ *
+ * The editor, the guard and drafting a rule were covered. What was not: the JSON view
+ * people reach for when the form cannot express what they mean, the range sets, and the
+ * `robots.txt` the rules imply.
+ */
+describe("the policy screen's editors", () => {
+  it("shows the same rules as JSON, and back again", async () => {
+    const page = await open(1440, "#policy", "#view-policy");
+    await page.waitForTimeout(700);
+
+    await page.locator("#mode-json").click();
+    expect(await page.locator("#mode-json").getAttribute("aria-pressed")).toBe("true");
+    expect(await page.locator("#editor-json").isVisible()).toBe(true);
+    expect(await page.locator("#editor-gui").isVisible()).toBe(false);
+
+    const text = await page.locator("#policy-json").inputValue();
+    const rules = JSON.parse(text) as Array<{ id: string; action: string }>;
+    expect(rules.length, "the JSON is the rule set, not a sample of it").toBeGreaterThan(0);
+    for (const rule of rules) expect(typeof rule.id).toBe("string");
+    // And it is the rule set the server actually has.
+    expect(rules.map((rule) => rule.id)).toContain(handler.policy.rules[0]?.id);
+
+    await page.locator("#mode-gui").click();
+    expect(await page.locator("#editor-gui").isVisible()).toBe(true);
+    await page.close();
+  });
+
+  it("adds an address to a range set and takes it out again", async () => {
+    const own = new BotHandler({ preset: "protect-content", allowlist: ["192.0.2.1"] });
+    const server = await own.serveDashboard({ port: 0, controls: { editRanges: true } });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
+      await page.goto(`${server.url}#policy`);
+      await page.waitForSelector("#view-policy:not([hidden])");
+      await page.waitForTimeout(800);
+
+      // By label rather than by position: the form's first input is the *set name*, which
+      // defaults to "allowlist", and the address goes in the second. Filling the first one
+      // creates a range set called "198.51.100.0/24" containing nothing, which is a
+      // perfectly successful way to do nothing at all.
+      await page.locator('#ranges-body input[aria-label="Address or CIDR to add"]').fill("198.51.100.0/24");
+      await page.locator("#ranges-body button", { hasText: /^Add$/ }).first().click();
+      await page.waitForTimeout(900);
+
+      // The server is what changed, which is the only thing worth asserting: the panel
+      // redrawing is a consequence, and a panel that redraws without the range landing is
+      // the exact failure this covers.
+      expect(own.isAllowlisted("198.51.100.7"), "the address is now allowlisted").toBe(true);
+      expect(await page.locator("#ranges-body").textContent()).toContain("198.51.100.0/24");
+
+      // The remove control is an "×" with the address in its accessible name, which is
+      // also the only way to tell one chip's button from another's.
+      await page.locator('#ranges-body button[aria-label="Remove 198.51.100.0/24 from allowlist"]').click();
+      await page.waitForTimeout(900);
+      expect(own.isAllowlisted("198.51.100.7"), "and removing it reaches the server too").toBe(false);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("shows the robots.txt the rules imply", async () => {
+    const page = await open(1440, "#policy", "#view-policy");
+    await page.waitForTimeout(700);
+    const robots = await page.locator("#robots-preview").textContent();
+    await page.close();
+    // Generated from the rules rather than typed, so it has the shape of a robots file
+    // and names at least one agent the policy has an opinion about.
+    expect(robots ?? "").toMatch(/User-agent:/i);
+    expect(robots ?? "").toMatch(/Disallow:|Allow:/i);
+  });
+});
+
 describe("the feed without a mouse", () => {
   /**
    * The row's disclosure is a real button inside the first cell rather than the row

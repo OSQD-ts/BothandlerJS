@@ -284,12 +284,39 @@ export function visibleRows(limit = FEED_LIMIT): Row[] {
  */
 export function feedPage(size: number): { rows: Row[]; page: number; pages: number; total: number } {
   const all = state.feedPage === 0 || state.feedFrozen === undefined ? matchingRows() : state.feedFrozen;
+  // Sized by the rows this browser is holding, deliberately.
+  //
+  // The header above says how many requests fell in the window, which is a larger number
+  // and a true one. It is tempting to size the pager by it, and that does not work: the
+  // rows here are a *sparse* sample of the window — the stream's rate cap thins a burst,
+  // so what is held is scattered through the window rather than being its newest N — and
+  // the server pages a dense list by offset. Slicing a sparse local list at a dense remote
+  // offset lands somewhere neither side meant, which shows up as pages that are numbered
+  // correctly and half empty.
+  //
+  // Reaching the rest is what the "N not streamed · Load them" button beside the count is
+  // for: it fetches the ring whole and the rows stop being sparse. Making this pager
+  // server-authoritative — drawing the server's page rather than a slice of local rows —
+  // is the change that would remove the button, and it is a bigger one than it looks.
   const pages = Math.max(1, Math.ceil(all.length / size));
   // A filter that narrows while somebody is on the last page must not leave them past the
   // end looking at nothing.
   const page = Math.min(Math.max(0, state.feedPage), pages - 1);
   if (page !== state.feedPage) state.feedPage = page;
   return { rows: all.slice(page * size, page * size + size), page, pages, total: all.length };
+}
+
+/**
+ * Takes the frozen page list in again, after rows were fetched *for* it.
+ *
+ * The freeze exists so that a request arriving over the stream does not move every row
+ * under somebody reading page three. It is not meant to exclude rows this reader asked
+ * for: a page fetched from the server because they paged onto it has to become part of
+ * the list they are paging through, or they land on a page that is provably there and
+ * see nothing in it.
+ */
+export function refreshFrozenPage(): void {
+  if (state.feedFrozen !== undefined) state.feedFrozen = matchingRows();
 }
 
 /** Moves to a page, freezing the list on the way off page zero and thawing on the way back. */
