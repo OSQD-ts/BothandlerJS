@@ -87,6 +87,30 @@ describe("counting a window", () => {
     expect(counts.total).toBe(1);
   });
 
+  /**
+   * Bounded even when nothing is expiring them.
+   *
+   * Retention may be switched off — in the handler's configuration and from the dashboard,
+   * where zero is documented as "keep them until the capacity bound evicts them". That
+   * bound counts *entries* and says nothing about these, so with retention off the only
+   * thing stopping the counts growing by one object per minute, for the life of the
+   * process, is this ceiling.
+   */
+  it("stops growing even with retention switched off", () => {
+    const counts = new FeedCounts(0);
+    const minutes = 7 * 24 * 60;
+    // A fortnight of traffic, a minute at a time, against a seven-day ceiling.
+    for (let i = 0; i < minutes * 2; i++) counts.record(T0 + i * MINUTE);
+
+    expect(counts.series().length, "one week of minutes, not two").toBe(minutes);
+    // And it drops the *oldest*, so what it still holds is the recent end.
+    expect(counts.oldest).toBe(T0 + minutes * MINUTE);
+    expect(counts.count(undefined, undefined), "every minute it still has").toBe(minutes);
+    // The forgotten stretch answers zero rather than a stale number, and `oldest` is how
+    // a reader can tell those apart.
+    expect(counts.count(T0, T0)).toBe(0);
+  });
+
   it("prunes to a retention it is given later", () => {
     const counts = new FeedCounts(0);
     counts.record(T0);

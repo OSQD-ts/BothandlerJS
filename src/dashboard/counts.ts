@@ -22,6 +22,24 @@
 
 const MINUTE = 60_000;
 
+/**
+ * Most minutes kept, whatever the retention says.
+ *
+ * A second bound, and it exists because the first one is optional. Retention may be set
+ * to zero — in the handler's own configuration, and from the dashboard, where it is
+ * documented as "keep them until the capacity bound evicts them". That bound is a *count
+ * of entries*, and it says nothing about these: the entries ring stays bounded while the
+ * counts behind it grow by one object per minute of traffic, for as long as the process
+ * lives. Slowly, and without end, which is the shape of leak that is found in production
+ * a year later rather than in a test.
+ *
+ * Seven days of minutes, matching the longest retention the dashboard will ask for. Past
+ * that the oldest minutes go and {@link FeedCounts.oldest} moves forward, so the counts
+ * say what they can still speak for rather than quietly answering for a stretch they have
+ * forgotten.
+ */
+const MAX_BUCKETS = 7 * 24 * 60;
+
 /** A minute that saw traffic. Absent minutes are zero and cost nothing. */
 interface Bucket {
   /** Start of the minute, as epoch milliseconds. */
@@ -66,6 +84,10 @@ export class FeedCounts {
     }
     if (last === undefined || minute > last.at) {
       this.buckets.push({ at: minute, total: 1 });
+      // The ceiling is applied here and only here, because this is the only way a bucket
+      // is ever added — so the array cannot exceed it, and a second trim inside `prune`
+      // would be a branch nothing can reach.
+      this.trim();
       return;
     }
     for (let i = this.buckets.length - 1; i >= 0; i--) {
@@ -84,12 +106,19 @@ export class FeedCounts {
 
   /** Drops buckets older than the retention. Returns how many went. */
   prune(now: number): number {
-    if (this.retainMs === 0) return 0;
-    const cutoff = now - this.retainMs;
     let expired = 0;
-    while (expired < this.buckets.length && (this.buckets[expired] as Bucket).at + MINUTE <= cutoff) expired++;
-    if (expired > 0) this.buckets.splice(0, expired);
+    if (this.retainMs > 0) {
+      const cutoff = now - this.retainMs;
+      while (expired < this.buckets.length && (this.buckets[expired] as Bucket).at + MINUTE <= cutoff) expired++;
+      if (expired > 0) this.buckets.splice(0, expired);
+    }
     return expired;
+  }
+
+  /** Drops the oldest minutes past the ceiling. Returns how many went. */
+  private trim(): number {
+    if (this.buckets.length <= MAX_BUCKETS) return 0;
+    return this.buckets.splice(0, this.buckets.length - MAX_BUCKETS).length;
   }
 
   /**
