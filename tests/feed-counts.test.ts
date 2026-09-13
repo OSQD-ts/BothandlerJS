@@ -63,6 +63,23 @@ describe("counting a window", () => {
     expect(counts.oldest).toBe(T0 + 20 * MINUTE);
   });
 
+  it("keeps a minute that is only partly past the retention", () => {
+    // A bucket covers a whole minute, so it stops being allowed only once its *end* is
+    // past the cutoff. Dropping it as soon as its start is past would lose up to a
+    // minute of counts at the boundary on every prune — a small error that repeats,
+    // which is the kind that is never noticed and never right.
+    const counts = new FeedCounts(10 * MINUTE);
+    counts.record(T0);
+    // Now is ten minutes and thirty seconds after the bucket began, so the cutoff falls
+    // *inside* it: thirty seconds of that minute are still within the retention.
+    counts.prune(T0 + 10 * MINUTE + 30_000);
+    expect(counts.total, "the minute is not wholly past the retention yet").toBe(1);
+
+    // A little later the whole minute is behind the cutoff, and then it goes.
+    counts.prune(T0 + 11 * MINUTE + 1);
+    expect(counts.total).toBe(0);
+  });
+
   it("keeps everything when retention is off", () => {
     const counts = new FeedCounts(0);
     counts.record(T0);

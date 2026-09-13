@@ -331,6 +331,20 @@ describe("configuration", () => {
     expect(loaded.join(" ")).not.toMatch(/reverse-DNS/);
   });
 
+  it("says nothing about a rule that refuses crawlers it did confirm", () => {
+    // The warning is about rules that refuse a *claim* — a bot proven to be what it says
+    // while unable to prove whose it is. A rule refusing `verified-bot` is refusing
+    // crawlers whose identity was confirmed, which is a policy choice rather than a gap
+    // in configuration, and warning about it would be telling somebody their deliberate
+    // decision is a mistake.
+    const warnings: string[] = [];
+    engine({
+      rules: [{ id: "no-confirmed-crawlers", match: { verdict: "verified-bot", category: ["search"] }, action: "block" }],
+      onWarning: (message) => warnings.push(message),
+    });
+    expect(warnings.join(" ")).not.toMatch(/crawlerRanges|reverse-DNS/);
+  });
+
   it("says nothing about verification a policy never asks for", () => {
     // `protect-content` serves an unconfirmable indexer rather than refusing it, so
     // nothing is stranded and there is nothing to say.

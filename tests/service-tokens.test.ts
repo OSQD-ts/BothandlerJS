@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { BotHandler } from "../src/core.js";
 import { DEFAULT_TOKEN_HEADER, ServiceTokens } from "../src/service-tokens.js";
 import { ManualClock } from "../src/internal/clock.js";
@@ -190,5 +191,47 @@ describe("keeping the secret inside the process", () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(sent.length, "the sink should have been told about this request").toBeGreaterThan(0);
     expect(sent.join(" ")).not.toContain(SECRET);
+  });
+});
+
+/**
+ * Two properties of the comparison that no behavioural test can reach.
+ *
+ * Replacing `timingSafeEqual` with `===` changes nothing a caller can observe: the same
+ * tokens match, the same ones do not, and every assertion above still passes. What changes
+ * is how long the wrong answer takes to arrive, and that is the whole of the protection.
+ * The same goes for returning as soon as a token matches — identical results, and a
+ * response time that says which of the configured tokens was presented.
+ *
+ * So they are asserted against the source. That is a blunt instrument and it is the right
+ * one here: this file is small, these two lines are the reason it exists, and a mutation
+ * that silently removes the security property while keeping the behaviour is exactly what
+ * a test suite otherwise waves through. This project already guards code this way where
+ * behaviour cannot — see the forbidden-sink check in `scripts/build-client.mjs`.
+ */
+describe("the comparison, read rather than run", () => {
+  const source = readFileSync(new URL("../src/service-tokens.ts", import.meta.url), "utf8");
+
+  it("compares digests with a constant-time primitive, never with an operator", () => {
+    expect(source, "the comparison is timingSafeEqual").toContain("timingSafeEqual(a, b)");
+    // Hashed first, which is what makes it safe for values of different lengths:
+    // `timingSafeEqual` throws on a length mismatch, so the obvious implementation checks
+    // lengths first — and that check is itself an oracle for the real secret's length.
+    expect(source).toMatch(/createHash\("sha256"\)/);
+
+    const body = /function sameSecret[\s\S]*?\n}/.exec(source)?.[0] ?? "";
+    expect(body.length, "sameSecret was found").toBeGreaterThan(0);
+    expect(body, "no direct comparison of the secrets").not.toMatch(/presented\s*===|===\s*expected|presented\s*==[^=]/);
+  });
+
+  it("compares every configured token even after one has matched", () => {
+    const body = /identify\(headers[\s\S]*?\n  }/.exec(source)?.[0] ?? "";
+    expect(body.length, "identify was found").toBeGreaterThan(0);
+    // A `return` inside the loop would make the response time depend on the position of
+    // the matching entry, which over enough requests says which token was presented — and
+    // with it, which caller a given secret belongs to.
+    const loop = /for \(const \[name, secret\] of this\.entries\) \{[\s\S]*?\n    \}/.exec(body)?.[0] ?? "";
+    expect(loop.length, "the comparison loop was found").toBeGreaterThan(0);
+    expect(loop, "no early exit from the loop").not.toMatch(/\breturn\b|\bbreak\b/);
   });
 });
