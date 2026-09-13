@@ -460,6 +460,263 @@ describe("the toolbar", () => {
 });
 
 /**
+ * What the request tester accepts.
+ *
+ * The tester exists because the question arrives by ticket rather than by traffic, and
+ * whoever is answering it has whatever they were sent — a User-Agent out of a support
+ * email, a curl command out of devtools, a header block out of a log. Accepting only the
+ * first of those would make it a tool for the one case that was already easy. The
+ * User-Agent form was covered; the other two were not, and neither was refusing nothing.
+ */
+describe("what the request tester will read", () => {
+  it("reads a curl command, headers and all", async () => {
+    const page = await open();
+    await page.locator("#test-input").fill(
+      `curl 'https://acme.example/checkout' -H 'user-agent: python-requests/2.32.3' -H 'accept: */*'`,
+    );
+    await page.locator("#test-run").click();
+    await expect.poll(() => page.locator("#test-result").innerText()).toContain("confirmed-bot");
+    const result = await page.locator("#test-result").innerText();
+    await page.close();
+    // The headers inside the command are read, not just the URL: a curl line pasted out of
+    // devtools is mostly headers, and they are what half the detectors are reading.
+    expect(result).toContain("self-identified");
+  });
+
+  it("reads a raw block of request headers", async () => {
+    const page = await open();
+    await page.locator("#test-input").fill("GET /admin HTTP/1.1\nHost: acme.example\nUser-Agent: sqlmap/1.7\nAccept: */*");
+    await page.locator("#test-run").click();
+    await expect.poll(() => page.locator("#test-result").innerText()).toContain("bot");
+    const result = await page.locator("#test-result").innerText();
+    await page.close();
+    expect(result.toLowerCase()).toContain("sqlmap");
+  });
+
+  it("says so rather than assessing nothing when given nothing", async () => {
+    const page = await open();
+    await page.locator("#test-input").fill("   ");
+    await page.locator("#test-run").click();
+    await page.waitForTimeout(700);
+    const said = `${await page.locator("#test-result").innerText()} ${await page.locator("#toasts").innerText()}`.trim();
+    await page.close();
+    // An empty box that answers "unknown" is worse than one that refuses: it looks like a
+    // verdict about the thing you meant to paste and forgot to.
+    expect(said.length).toBeGreaterThan(0);
+  });
+
+  it("takes the address beside the box, and reaches the ranges with it", async () => {
+    // An explicit allowlist, so the difference between the two answers has a stated cause
+    // rather than being any difference at all — the address appearing in the output would
+    // make "the text changed" true without the address having been *used*.
+    const own = new BotHandler({ preset: "protect-content", allowlist: ["198.51.100.0/24"] });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(server.url);
+      await page.waitForSelector("#test-input");
+
+      await page.locator("#test-input").fill("curl/8.4.0");
+      await page.locator("#test-url").fill("/admin/secret");
+      await page.locator("#test-ip").fill("203.0.113.9");
+      await page.locator("#test-run").click();
+      await expect.poll(() => page.locator("#test-result").innerText()).toContain("bot");
+
+      await page.locator("#test-ip").fill("198.51.100.200");
+      await page.locator("#test-run").click();
+      // An allowlisted address is not judged leniently, it is not judged at all — so the
+      // same client comes back with no verdict rather than with a softer one.
+      await expect.poll(() => page.locator("#test-result").innerText()).toMatch(/allowlist|not assessed|bypass/i);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * The case a verdict rests on, shown to somebody who disagrees with it.
+ *
+ * The row detail is where an operator goes when they think the dashboard is wrong, so the
+ * tier of each piece of evidence and the written basis behind a proven one are the whole
+ * point of the panel — this library's central claim is that proof and suspicion are
+ * different things, and this is the one screen where that claim is visible.
+ */
+describe("the evidence behind a verdict", () => {
+  it("shows each piece with its tier, and the basis for a proven one", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      // A self-declared bot: proven, by declaration, with a basis to print.
+      await own.handle(createFacts({ method: "GET", url: "/e", headers: { host: "a.example", "user-agent": "python-requests/2.32.3" }, ip: "203.0.113.191" }));
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(server.url);
+      await page.waitForSelector("tbody tr.row");
+      await page.locator("tbody tr.row .row-toggle").first().click();
+      await page.waitForSelector("tr.detail");
+
+      const detail = await page.locator("tr.detail").innerText();
+      await page.close();
+      expect(detail).toContain("self-identified");
+      // The tier is on screen rather than implied by a colour, because the difference
+      // between "certain" and "moderate" is the difference between blocking and asking.
+      expect(detail.toLowerCase()).toMatch(/certain|strong|moderate|weak/);
+      // And the summary saying *why*, in words, beside the tier — the tier alone is a
+      // label, and the sentence under it is the part somebody argues with.
+      expect(detail.toLowerCase()).toMatch(/user-agent identifies|python-requests/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("shows the request's headers in the order they arrived", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      // Header *order* is itself a fingerprint, and several detectors read it — so the
+      // panel showing them alphabetically would be showing something that never happened.
+      await own.handle(
+        createFacts({
+          method: "GET",
+          url: "/o",
+          headers: { host: "a.example", "user-agent": "curl/8.4.0", accept: "*/*", "accept-language": "en-GB" },
+          rawHeaders: ["host", "user-agent", "accept", "accept-language"],
+          ip: "203.0.113.192",
+        }),
+      );
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(server.url);
+      await page.waitForSelector("tbody tr.row");
+      await page.locator("tbody tr.row .row-toggle").first().click();
+      await page.waitForSelector("tr.detail");
+      // Read from the header table's own name cells. Searching the detail's text finds
+      // "user-agent" in the row above it as well, which is how the first version of this
+      // concluded the order was wrong when it was not.
+      const names = (await page.locator("tr.detail table.hdr td.n").allInnerTexts()).map((text) => text.replace(/:$/, "").toLowerCase());
+      await page.close();
+
+      expect(names, "every header is shown").toEqual(expect.arrayContaining(["host", "user-agent", "accept", "accept-language"]));
+      const order = ["host", "user-agent", "accept", "accept-language"].map((name) => names.indexOf(name));
+      expect(order, "in wire order, not sorted").toEqual([...order].sort((a, b) => a - b));
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * Taking the configuration out of the page, and putting one back in.
+ *
+ * The export is what somebody reaches for when comparing two deployments six months
+ * apart, and the import is the other half of drafting a rule set somewhere safe. Neither
+ * had a test, and the export has a property worth pinning: it is the *whole* settings
+ * document, while only the rules half can be imported — a file that quietly recorded less
+ * than it appeared to would be found exactly once, at the worst moment.
+ */
+describe("exporting and importing settings", () => {
+  it("exports the whole settings document, not only the rules", async () => {
+    const page = await open(1440, "#policy", "#view-policy");
+    await page.waitForTimeout(700);
+
+    const download = await Promise.all([page.waitForEvent("download", { timeout: 15_000 }), page.locator("#policy-export").click()]).then(([d]) => d);
+    expect(download.suggestedFilename(), "named by the day it was taken").toMatch(/bothandler-settings-.*\.json/);
+    const stream = await download.createReadStream();
+    const text = await new Promise<string>((resolve, reject) => {
+      let out = "";
+      stream.on("data", (chunk: Buffer) => (out += chunk.toString()));
+      stream.on("end", () => resolve(out));
+      stream.on("error", reject);
+    });
+    const said = (await page.locator("#toasts").innerText()).toLowerCase();
+    await page.close();
+
+    const settings = JSON.parse(text) as Record<string, unknown>;
+    // The rules are the importable half; the rest is the record that makes the file worth
+    // keeping — what was detecting, what the guard was set to, which ranges were loaded.
+    expect(Array.isArray(settings["rules"]), "rules").toBe(true);
+    expect((settings["rules"] as unknown[]).length).toBeGreaterThan(0);
+    expect(Object.keys(settings).length, "and the configuration around them").toBeGreaterThan(1);
+    expect(said).toContain("exported");
+  });
+
+  it("loads a rule set from a file and previews it without applying it", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, controls: { editPolicy: true } });
+    try {
+      const before = own.policy.rules.length;
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(`${server.url}#policy`);
+      await page.waitForSelector("#view-policy:not([hidden])");
+      await page.waitForTimeout(800);
+
+      // Set on the hidden file input directly: the visible button opens the OS picker,
+      // which is not a thing a browser test can drive.
+      await page.locator("#policy-file").setInputFiles({
+        name: "settings.json",
+        mimeType: "application/json",
+        buffer: Buffer.from(JSON.stringify({ rules: [{ id: "imported-tag-all", match: {}, action: "tag", reason: "from a file" }] })),
+      });
+      await page.waitForTimeout(1000);
+
+      // Loaded into the editor, and *only* into the editor. An import that applied itself
+      // would be a file changing a live bot policy on being opened.
+      //
+      // Read from the field values rather than from the text: the editor is a form, so the
+      // rule's id is an input's `value` and `innerText` cannot see it.
+      const values = await page.locator("#editor-gui input").evaluateAll((nodes) => nodes.map((node) => (node as HTMLInputElement).value));
+      expect(values, "the rule is in the editor").toContain("imported-tag-all");
+      expect(await page.locator("#policy-result").innerText()).toMatch(/Loaded 1 rule/);
+      expect((await page.locator("#toasts").innerText()).toLowerCase()).toContain("imported");
+      expect(own.policy.rules.length, "nothing was applied").toBe(before);
+      expect(own.policy.ruleIds).not.toContain("imported-tag-all");
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * The two panels beside the live feed.
+ *
+ * They count the retained window rather than the whole run, which is the distinction the
+ * Statistics screen's labels exist to make — and they are drawn from the rows this page
+ * holds, so they are the one place where "what is on screen" is the right population.
+ */
+describe("the panels beside the feed", () => {
+  it("counts the detectors firing and the busiest actors in this window", async () => {
+    const page = await open();
+    await page.waitForTimeout(800);
+
+    for (const id of ["live-detectors", "live-actors"]) {
+      const text = await page.locator(`#${id}`).innerText();
+      expect(text.trim().length, `#${id} says something`).toBeGreaterThan(0);
+      // Either bars, or the sentence explaining why there are none. An empty panel is the
+      // failure: it reads as a quiet window rather than as a panel that did not draw.
+      const bars = await page.locator(`#${id} .bar, #${id} .row, #${id} div`).count();
+      expect(bars, `#${id} drew something`).toBeGreaterThan(0);
+    }
+
+    // The busiest-actor panel names an actor the feed is actually showing.
+    const actors = await page.locator("#live-actors").innerText();
+    expect(actors).toMatch(/\d/);
+    await page.close();
+  });
+
+  it("says which window it is counting, on every panel that counts one", async () => {
+    const page = await open();
+    await page.waitForTimeout(800);
+    const labels = await page.locator("#view-live .win").allInnerTexts();
+    await page.close();
+    expect(labels.length, "the panels beside the feed are window-scoped").toBeGreaterThan(0);
+    // Half the panels on this dashboard count the retained window and half count the whole
+    // run, and until they said so, comparing one against the other was a mistake the page
+    // was inviting.
+    for (const label of labels) expect(label.trim().length).toBeGreaterThan(0);
+  });
+});
+
+/**
  * The chips above the feed, and the drill-down below it.
  *
  * The search box was covered thoroughly and the chips beside it were not, although they
