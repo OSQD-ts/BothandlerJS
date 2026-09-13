@@ -460,6 +460,352 @@ describe("the toolbar", () => {
 });
 
 /**
+ * The chips above the feed, and the drill-down below it.
+ *
+ * The search box was covered thoroughly and the chips beside it were not, although they
+ * are what most people actually use — and they are the control most likely to be quietly
+ * wrong, because "Denied" and "Guard stops" are verdict-adjacent words that mean something
+ * precise here.
+ */
+describe("the filter chips and the drill-down", () => {
+  it("narrows to each chip, and every chip agrees with the rows it shows", async () => {
+    const page = await open();
+    const chips = page.locator("#filters button");
+    expect(await chips.count(), "one chip per filter").toBe(8);
+
+    // "All" is where it starts, and it is the only one that must never narrow.
+    const all = await page.locator("tbody tr.row").count();
+    expect(all).toBeGreaterThan(0);
+
+    for (const name of ["proven", "suspected", "human", "guard", "deny", "mitigate", "allow"]) {
+      const chip = page.locator(`#filters button[data-filter="${name}"]`);
+      await chip.click();
+      await page.waitForTimeout(350);
+      expect(await chip.getAttribute("aria-pressed"), `${name} is pressed`).toBe("true");
+      // Exactly one chip is ever pressed: two would be a filter nobody could reason about.
+      expect(await page.locator('#filters button[aria-pressed="true"]').count(), `only ${name}`).toBe(1);
+      const shown = await page.locator("tbody tr.row").count();
+      expect(shown, `${name} never shows more than everything`).toBeLessThanOrEqual(all);
+    }
+
+    await page.locator('#filters button[data-filter="all"]').click();
+    await page.waitForTimeout(350);
+    expect(await page.locator("tbody tr.row").count()).toBe(all);
+    await page.close();
+  });
+
+  it("opens the drill-down on an actor and says what the engine knows about it", async () => {
+    const page = await open();
+    await page.locator("tbody tr.row .row-toggle").first().click();
+    await page.waitForSelector("tr.detail");
+    await page.locator("tr.detail button", { hasText: "Show this actor" }).first().click();
+    await page.waitForSelector("#actor-panel:not([hidden])");
+
+    const panel = await page.locator("#actor-panel").innerText();
+    await page.close();
+    // The same picture `cadence` and `crawl-breadth` are reasoning about, which is the
+    // reason to open it rather than reading the rows one at a time.
+    expect(panel).toMatch(/request/i);
+    expect(panel).toMatch(/path/i);
+    expect(panel.length).toBeGreaterThan(40);
+  });
+
+  it("says so rather than showing an empty feed when a window runs backwards", async () => {
+    const page = await open();
+    // Half of typing a window passes through this state, so it is only said once the
+    // value settles — but said it must be, or a backwards range looks like a broken
+    // dashboard showing no traffic.
+    const now = Date.now();
+    const local = (at: number) => new Date(at - new Date(at).getTimezoneOffset() * 60_000).toISOString().slice(0, 19);
+    await page.evaluate(
+      ([from, to]) => {
+        for (const [id, value] of [["from-at", from], ["to-at", to]] as const) {
+          const input = document.getElementById(id) as HTMLInputElement;
+          input.value = value;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      },
+      [local(now), local(now - 60 * 60_000)] as const,
+    );
+    await page.waitForTimeout(900);
+    const toasts = await page.locator("#toasts").innerText();
+    await page.close();
+    expect(toasts).toMatch(/backwards/i);
+  });
+
+  it("clears a window and comes back to everything", async () => {
+    const page = await open();
+    const before = await page.locator("tbody tr.row").count();
+    const from = new Date(Date.now() + 60 * 60_000);
+    await page.evaluate((value) => {
+      const input = document.getElementById("from-at") as HTMLInputElement;
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }, new Date(from.getTime() - from.getTimezoneOffset() * 60_000).toISOString().slice(0, 19));
+    await page.waitForTimeout(700);
+    expect(await page.locator("tbody tr.row").count(), "a window in the future holds nothing").toBe(0);
+
+    // The Clear button appears only once a window is set, which is what makes it findable.
+    const clear = page.locator("#timeframe-clear");
+    expect(await clear.isVisible()).toBe(true);
+    await clear.click();
+    await page.waitForTimeout(700);
+    expect(await page.locator("tbody tr.row").count()).toBe(before);
+    expect(await clear.isVisible(), "and goes away again").toBe(false);
+    await page.close();
+  });
+});
+
+/**
+ * What the library wants to tell the operator, as opposed to what the traffic does.
+ *
+ * Notices are startup warnings and detector failures — the things somebody configured
+ * wrongly and has not found out about yet. They are the one panel whose whole value is
+ * being noticed, which is what the badge on the Policy tab is for, and neither had a test.
+ */
+describe("notices", () => {
+  it("shows what the handler warned about at startup, and counts it on the tab", async () => {
+    // `indexers-only` with no crawler ranges warns twice over: the crawlers that publish
+    // ranges cannot be verified without them, and verification otherwise rests on a DNS
+    // lookup inside a timeout.
+    const own = new BotHandler({ preset: "indexers-only" });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
+      await page.goto(`${server.url}#policy`);
+      await page.waitForSelector("#view-policy:not([hidden])");
+      await page.waitForTimeout(900);
+
+      const text = (await page.locator("#stat-notices").textContent()) ?? "";
+      expect(text, "the startup warnings are replayed into the panel").toMatch(/crawlerRanges|reverse-DNS/);
+      expect(await page.locator("#notice-count").textContent()).toMatch(/\d+ total/);
+
+      // And the badge says how many without having to open the screen, because a notice
+      // nobody looks at is a notice that did not happen.
+      const badge = page.locator("#notice-badge");
+      expect(await badge.isVisible()).toBe(true);
+      expect(Number(await badge.textContent())).toBeGreaterThan(0);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("says so plainly when there is nothing to report", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
+      await page.goto(`${server.url}#policy`);
+      await page.waitForSelector("#view-policy:not([hidden])");
+      await page.waitForTimeout(900);
+      expect((await page.locator("#stat-notices").textContent()) ?? "").toMatch(/Nothing to report/);
+      // An empty list must not wear a badge: a "0" on the tab reads as something to go and look at.
+      expect(await page.locator("#notice-badge").isVisible()).toBe(false);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reports a detector that failed, naming it", async () => {
+    const broken = { id: "explodes", description: "throws on purpose", inspect: () => { throw new Error("boom"); } };
+    const own = new BotHandler({ preset: "protect-content", extraDetectors: [broken] });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      await own.handle(createFacts({ method: "GET", url: "/x", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.31" }));
+      const page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
+      await page.goto(`${server.url}#policy`);
+      await page.waitForSelector("#view-policy:not([hidden])");
+      await page.waitForTimeout(1200);
+      const text = (await page.locator("#stat-notices").textContent()) ?? "";
+      await page.close();
+      // A detector that throws is isolated and the request is still assessed — which is
+      // exactly why it has to be said out loud somewhere, or it is never found.
+      expect(text).toMatch(/explodes/);
+      expect(text).toMatch(/boom/);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * What a listener was told to withhold, checked on the page rather than in the response.
+ *
+ * `redact` is the option an operator reaches for when the dashboard has an audience wider
+ * than the person who deployed it. Its server half is covered in `tests/dashboard.test.ts`;
+ * what needs a browser is that the page does not quietly put back what the server took
+ * out — by reading it off a snapshot, by reconstructing it from an evidence summary, or by
+ * showing it in a place nobody thought to redact.
+ */
+describe("a dashboard that withholds", () => {
+  it("masks addresses everywhere an address appears", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, redact: { maskIp: true } });
+    try {
+      for (let i = 0; i < 4; i++) {
+        await own.handle(createFacts({ method: "GET", url: `/m/${i}`, headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.181" }));
+      }
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(server.url);
+      await page.waitForSelector("tbody tr.row");
+      await page.waitForTimeout(700);
+
+      // The whole document, not one cell: the point of masking is that the address is not
+      // on the page, and a row detail or an actor panel is still the page.
+      await page.locator("tbody tr.row .row-toggle").first().click();
+      await page.waitForSelector("tr.detail");
+      const body = await page.locator("body").innerText();
+      expect(body, "the full address is not on the page").not.toContain("203.0.113.181");
+      expect(body, "and the network it belongs to still is, or the feed says nothing").toContain("203.0.113.");
+
+      await page.locator("#tab-actors").click();
+      await page.waitForSelector("#view-actors:not([hidden])");
+      await page.waitForTimeout(800);
+      expect(await page.locator("body").innerText()).not.toContain("203.0.113.181");
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps request headers off a page told not to show them", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, redact: { headers: false } });
+    try {
+      await own.handle(
+        createFacts({
+          method: "GET",
+          url: "/h",
+          headers: { host: "a.example", "user-agent": "curl/8.4.0", "x-private-note": "do-not-show-me" },
+          ip: "203.0.113.182",
+        }),
+      );
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(server.url);
+      await page.waitForSelector("tbody tr.row");
+      await page.locator("tbody tr.row .row-toggle").first().click();
+      await page.waitForSelector("tr.detail");
+      const detail = await page.locator("tr.detail").innerText();
+      await page.close();
+      expect(detail).not.toContain("do-not-show-me");
+      expect(detail).not.toContain("x-private-note");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("masks query values while keeping their names", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      await own.handle(
+        createFacts({ method: "GET", url: "/search?token=super-secret-value&page=2", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.183" }),
+      );
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(server.url);
+      await page.waitForSelector("tbody tr.row");
+      await page.locator("tbody tr.row .row-toggle").first().click();
+      await page.waitForSelector("tr.detail");
+      const detail = await page.locator("tr.detail").innerText();
+      await page.close();
+      // Masked by default: a query string is where sessions, tokens and email addresses
+      // end up. The *names* survive, because which parameters were sent is the half that
+      // helps somebody read a scan.
+      expect(detail, "the value is withheld").not.toContain("super-secret-value");
+      expect(detail, "the name is not").toContain("token");
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * One handler, two people watching it.
+ *
+ * Every runtime change — a label, a clearance, an allowlist entry — is announced to every
+ * open dashboard rather than only to the one that made it. Without that, naming an actor
+ * is a note to yourself: the person beside you goes on seeing an address somebody has
+ * already recognised, and reads the same feed differently.
+ */
+describe("two people watching the same handler", () => {
+  it("carries a name given in one dashboard to the other", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, controls: { editRanges: true } });
+    try {
+      for (let i = 0; i < 3; i++) {
+        await own.handle(createFacts({ method: "GET", url: `/s/${i}`, headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.201" }));
+      }
+      const watcher = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      await watcher.goto(server.url);
+      await watcher.waitForSelector("tbody tr.row");
+
+      const operator = await browser.newPage({ viewport: { width: 1280, height: 950 } });
+      await operator.goto(`${server.url}#actors`);
+      await operator.waitForSelector("#view-actors:not([hidden])");
+      await operator.waitForTimeout(800);
+
+      const row = operator.locator("#actor-rows tr").first();
+      await row.locator("button", { hasText: /^Label$/ }).click();
+      await row.locator("input.label-input").fill("Deploy runner");
+      await row.locator("button.label-save").click();
+      await operator.waitForTimeout(1200);
+
+      // The other dashboard learns the name without being touched, because the change
+      // rides on the same stream the traffic does.
+      await watcher.waitForFunction(() => (document.getElementById("rows")?.textContent ?? "").includes("Deploy runner"), undefined, { timeout: 15_000 });
+      expect(await watcher.locator("#rows").innerText()).toContain("Deploy runner");
+      await operator.close();
+      await watcher.close();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * The other dashboards this one knows about.
+ *
+ * One handler often has several listeners — one for operators, one for an analyst with
+ * addresses masked — and `peers` is how a reader gets from one to the other.
+ */
+describe("peer dashboards", () => {
+  it("links to its peers, and opens them safely", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({
+      port: 0,
+      peers: [{ label: "Analyst view", href: "http://127.0.0.1:9/analyst" }],
+    });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      await page.goto(server.url);
+      await page.waitForSelector("#peers:not([hidden])");
+      const link = page.locator("#peers a", { hasText: "Analyst view" });
+      expect(await link.count()).toBe(1);
+      expect(await link.getAttribute("href")).toBe("http://127.0.0.1:9/analyst");
+      // A dashboard lists addresses and verdicts; a peer link must not hand the page it
+      // opens a handle back to this one, nor leak this URL as a referrer.
+      expect(await link.getAttribute("rel")).toContain("noopener");
+      expect(await link.getAttribute("rel")).toContain("noreferrer");
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("shows nothing at all when there are none", async () => {
+    const page = await open();
+    // The shared dashboard has links but no peers, and an empty "also:" strip would be
+    // chrome that means nothing.
+    expect(await page.locator("#peers").isVisible()).toBe(false);
+    await page.close();
+  });
+});
+
+/**
  * Choosing how much of the feed to see at once.
  *
  * The pager was covered; the size chooser beside it was not, and it has a trap in it —
