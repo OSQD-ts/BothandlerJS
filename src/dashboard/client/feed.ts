@@ -487,6 +487,21 @@ async function ensureFeedPage(page: number, size: number): Promise<void> {
   const target = Math.min(needed, retained);
   if (target <= state.densifiedTo) return;
 
+  // Already holding everything the server has, so it is already dense: the newest N rows
+  // here *are* the server's newest N, given the two agree on the order — which is what the
+  // sequence tiebreak in `sortRows` is for.
+  //
+  // Worth the check rather than fetching and finding out. The fetch would return entries
+  // this page already has, and merging them recomputes the frozen page list *while
+  // somebody is reading it* — the one thing freezing a page exists to prevent. It showed
+  // up as an intermittent failure in the test that holds that guarantee, and on a
+  // dashboard whose stream was never thinned it was a round trip that could only ever
+  // return what was already on screen.
+  if (state.rows.length >= retained) {
+    state.densifiedTo = Math.max(state.densifiedTo, retained);
+    return;
+  }
+
   densifying = true;
   try {
     // In chunks, because the server caps a page and the range asked for may be larger.
