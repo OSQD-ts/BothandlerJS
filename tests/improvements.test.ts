@@ -929,6 +929,42 @@ describe("DNS verification under an unreliable resolver", () => {
     expect(lookups, "the cache must still spare the repeat lookups").toBe(1);
   });
 
+  /**
+   * A lookup that never answers must not poison the key for ever.
+   *
+   * Callers share an in-flight query so a burst from one crawler costs one lookup, and
+   * sharing a promise means sharing its fate. Nothing above notices a hang: the detector
+   * timeout resolves the *detector*, not the query underneath it. So a single lookup that
+   * never settled used to be handed to every later caller for the life of the process —
+   * and that crawler could never be verified again, which under a preset that refuses
+   * what it cannot verify means refusing a real Googlebot permanently.
+   */
+  it("stops sharing a lookup that never answers", async () => {
+    let started = 0;
+    const cached = cachingResolver(
+      {
+        reverse: async () => {
+          started++;
+          // Never settles. Not slow — never.
+          return new Promise<string[]>(() => {});
+        },
+        resolveAddresses: async () => [],
+      },
+      { inFlightTtlMs: 20 },
+    );
+
+    // Two callers during the window share one query, which is the optimisation working.
+    void cached.reverse("203.0.113.5").catch(() => undefined);
+    void cached.reverse("203.0.113.5").catch(() => undefined);
+    expect(started, "a burst costs one lookup").toBe(1);
+
+    // Past the bound, a new caller starts its own rather than joining a query that is
+    // never going to answer.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    void cached.reverse("203.0.113.5").catch(() => undefined);
+    expect(started, "the key is not poisoned").toBe(2);
+  });
+
   it("replays a cached timeout as indeterminate", async () => {
     const cached = cachingResolver({
       reverse: async () => unreachable(),

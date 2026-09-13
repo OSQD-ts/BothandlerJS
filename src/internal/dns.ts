@@ -220,6 +220,15 @@ export interface CachingResolverOptions {
   errorTtlMs?: number;
   /** Maximum names and addresses cached. Default 10000. */
   max?: number;
+  /**
+   * How long a lookup may be shared with later callers before they start their own.
+   * Default 30000.
+   *
+   * Not a timeout on the lookup — nothing here can cancel one. It bounds how long a
+   * query that has not answered keeps being handed to everybody who asks. See the note
+   * on `inFlight`.
+   */
+  inFlightTtlMs?: number;
 }
 
 /**
@@ -241,8 +250,22 @@ export function cachingResolver(inner: DnsResolver, options: CachingResolverOpti
    * query rather than N. Without this the cache helps only *after* the first answer
    * lands, which is the wrong half of the problem: a crawler's requests arrive in
    * bursts, so the miss that matters is the one a hundred requests take simultaneously.
+   *
+   * Entries are removed when the query settles **and** after a bound, because sharing a
+   * promise means sharing its fate. A lookup that never answers would otherwise be handed
+   * to every later caller for the life of the process — and nothing above notices, since
+   * the detector timeout resolves the *detector* rather than the query underneath it. The
+   * result was permanent: one hung lookup and that crawler could never be verified again,
+   * which under a preset that refuses what it cannot verify means refusing a real
+   * Googlebot for ever. A custom `resolver` is a documented extension point, so this is
+   * not a hypothetical about Node's own DNS timeouts.
+   *
+   * Dropping the entry does not cancel the query — nothing can — it stops new callers
+   * joining it. If it does eventually answer, the answer is still cached; it is simply
+   * no longer the only thing anybody is waiting on.
    */
   const inFlight = new Map<string, Promise<string[]>>();
+  const inFlightTtlMs = options.inFlightTtlMs ?? 30_000;
 
   const lookup = (key: string, work: () => Promise<string[]>): Promise<string[]> => {
     const now = Date.now();
@@ -270,6 +293,13 @@ export function cachingResolver(inner: DnsResolver, options: CachingResolverOpti
       },
     );
     inFlight.set(key, query);
+    // Released after a bound whether or not it settled. `unref` because a pending DNS
+    // query must never be the thing keeping a CLI or a serverless invocation alive.
+    const release = setTimeout(() => {
+      if (inFlight.get(key) === query) inFlight.delete(key);
+    }, inFlightTtlMs);
+    (release as { unref?: () => void }).unref?.();
+    void query.catch(() => undefined).finally(() => clearTimeout(release));
     return query;
   };
 
