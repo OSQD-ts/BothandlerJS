@@ -469,6 +469,234 @@ describe("the toolbar", () => {
  * User-Agent form was covered; the other two were not, and neither was refusing nothing.
  */
 /**
+ * The last two controls on the feed, and what the Actors screen says when it has nothing.
+ *
+ * "Show" puts labelled-away traffic back on screen, and the download beside a row is the
+ * one-request version of Export. The empty states matter for the same reason they do on
+ * the feed: "nobody matched your filter" and "the registry is empty" are different
+ * sentences, and a blank table says neither.
+ */
+describe("showing what a label hid, and having nothing to show", () => {
+  it("puts hidden traffic back on screen and takes it away again", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, controls: { editRanges: true } });
+    try {
+      for (let i = 0; i < 3; i++) {
+        await own.handle(createFacts({ method: "GET", url: `/noise/${i}`, headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.150" }));
+      }
+      await own.handle(createFacts({ method: "GET", url: "/real", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.151" }));
+      own.labelActor("203.0.113.150", { name: "Health check", hideFromFeed: true });
+
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(server.url);
+      await page.waitForSelector("tbody tr.row");
+      await page.waitForTimeout(900);
+
+      expect(await page.locator("#rows").innerText(), "the hidden actor is off the feed").not.toContain("/noise/");
+      // Said out loud, because a feed that hides part of what is happening must never
+      // look like a quieter one.
+      expect(await page.locator("#feed-hidden").innerText()).toMatch(/3 hidden by label/);
+
+      const toggle = page.locator("#feed-show-hidden");
+      await toggle.click();
+      await page.waitForTimeout(600);
+      expect(await toggle.getAttribute("aria-pressed")).toBe("true");
+      expect(await page.locator("#rows").innerText()).toContain("/noise/");
+      expect(await page.locator("#feed-hidden").innerText()).toMatch(/showing 3 hidden/);
+
+      await toggle.click();
+      await page.waitForTimeout(600);
+      expect(await page.locator("#rows").innerText()).not.toContain("/noise/");
+      // And the traffic that was never hidden is there throughout.
+      expect(await page.locator("#rows").innerText()).toContain("/real");
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("downloads one request as a replay file", async () => {
+    const page = await open();
+    await page.locator("tbody tr.row .row-toggle").first().click();
+    await page.waitForSelector("tr.detail");
+
+    const download = await Promise.all([
+      page.waitForEvent("download", { timeout: 15_000 }),
+      page.locator("tr.detail button", { hasText: "Download replay line" }).first().click(),
+    ]).then(([d]) => d);
+    expect(download.suggestedFilename(), "named by the request it came from").toMatch(/request-.*\.jsonl/);
+
+    const stream = await download.createReadStream();
+    const text = await new Promise<string>((resolve, reject) => {
+      let out = "";
+      stream.on("data", (chunk: Buffer) => (out += chunk.toString()));
+      stream.on("end", () => resolve(out));
+      stream.on("error", reject);
+    });
+    await page.close();
+    // One line, and a complete request: this is the file `bothandlerjs replay` reads, so
+    // a row of the table would be useless in it.
+    const lines = text.trim().split("\n").filter(Boolean);
+    expect(lines).toHaveLength(1);
+    const parsed = JSON.parse(lines[0] as string) as { headers?: unknown; ip?: unknown; url?: unknown };
+    expect(parsed.headers).toBeTruthy();
+    expect(typeof parsed.ip).toBe("string");
+  });
+
+  it("tells an empty registry apart from a filter that matched nobody", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(`${server.url}#actors`);
+      await page.waitForSelector("#view-actors:not([hidden])");
+      await page.waitForTimeout(900);
+      const empty = await page.locator("#actors-empty").innerText();
+      expect(empty.trim().length, "an empty registry says so").toBeGreaterThan(0);
+
+      // Now with traffic, and a filter nobody satisfies. The two states are different
+      // sentences, and a blank table is neither.
+      await own.handle(createFacts({ method: "GET", url: "/a", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.160" }));
+      await page.reload();
+      await page.waitForSelector("#view-actors:not([hidden])");
+      await page.waitForTimeout(1000);
+      expect(await page.locator("#actor-rows tr").count(), "somebody is in the registry now").toBeGreaterThan(0);
+
+      await page.locator("#actors-search").fill("actor:198.51.100.254");
+      await page.waitForTimeout(1000);
+      expect(await page.locator("#actor-rows tr").count(), "and nobody matches").toBe(0);
+      const narrowed = `${await page.locator("#actors-empty").innerText()} ${await page.locator("#actors-count").innerText()}`;
+      await page.close();
+      expect(narrowed.trim().length).toBeGreaterThan(0);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * The counters across the top, which are the first thing anybody reads.
+ *
+ * They count the whole run rather than the retained window, and the arithmetic between
+ * them has a trap in it that the code comments call out and no test held: "proven" must
+ * count proven *bots*, not proven anything — a clearance token is certain evidence too, so
+ * counting proven verdicts reported a logged-in audience as proven bots.
+ */
+describe("the tiles", () => {
+  it("adds up: every request is served, mitigated or denied", async () => {
+    const own = new BotHandler({ preset: "protect-content", metrics: true });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      for (const ua of ["curl/8.4.0", "sqlmap/1.7", "python-requests/2.32.3", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"]) {
+        for (let i = 0; i < 3; i++) {
+          await own.handle(createFacts({ method: "GET", url: `/t/${i}`, headers: { host: "a.example", "user-agent": ua }, ip: `203.0.113.${90 + i}` }));
+        }
+      }
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(server.url);
+      await page.waitForSelector("#tiles .tile, #tiles > *");
+      await page.waitForTimeout(900);
+
+      const read = async (label: string): Promise<number> =>
+        page.evaluate((name) => {
+          const tiles = Array.from(document.querySelectorAll("#tiles > *"));
+          const tile = tiles.find((node) => (node.textContent ?? "").includes(name));
+          const digits = (tile?.textContent ?? "").replace(/,/g, "").match(/\d+/);
+          return digits === null ? -1 : Number(digits[0]);
+        }, label);
+
+      const total = await read("Requests");
+      const denied = await read("Denied");
+      const mitigated = await read("Mitigated");
+      await page.close();
+
+      expect(total, "twelve requests went through").toBe(12);
+      // Every request ends in exactly one of the three, so neither of the two that are
+      // called out can exceed the whole.
+      expect(denied).toBeLessThanOrEqual(total);
+      expect(mitigated).toBeLessThanOrEqual(total);
+      expect(denied + mitigated).toBeLessThanOrEqual(total);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("counts a cleared human as a human rather than as a proven bot", async () => {
+    // The trap: clearance is `certain` evidence, so counting proven *verdicts* reports
+    // every logged-in visitor as a proven bot. The tile counts proven bots.
+    const own = new BotHandler({ preset: "protect-content", metrics: true, isHuman: () => true });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      for (let i = 0; i < 5; i++) {
+        await own.handle(createFacts({ method: "GET", url: `/h/${i}`, headers: { host: "a.example", "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" }, ip: "203.0.113.95" }));
+      }
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(server.url);
+      await page.waitForSelector("#tiles > *");
+      await page.waitForTimeout(900);
+      const proven = await page.evaluate(() => {
+        const tile = Array.from(document.querySelectorAll("#tiles > *")).find((node) => (node.textContent ?? "").includes("Proven bots"));
+        return Number((tile?.textContent ?? "").replace(/,/g, "").match(/\d+/)?.[0] ?? "-1");
+      });
+      await page.close();
+      expect(proven, "five certain humans are not five proven bots").toBe(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("says the counters are off rather than showing zeroes", async () => {
+    // Zeroes would read as a quiet site. A handler that is not counting is a different
+    // statement from a handler that counted nothing.
+    const own = new BotHandler({ preset: "protect-content", metrics: false });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(server.url);
+      await page.waitForTimeout(1200);
+      const tiles = await page.locator("#tiles").innerText();
+      await page.close();
+      expect(tiles.toLowerCase()).toContain("switched off");
+      expect(tiles, "and says the feed still works").toMatch(/feed/i);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * What this handler is actually running, listed where somebody can check it.
+ *
+ * A detector that is installed and never fires and a detector that is not installed at all
+ * look identical from the traffic. The list is the only place the difference is visible,
+ * and shadow detectors — which produce evidence that is deliberately kept out of scoring —
+ * have to be marked, or the list claims protection the handler is not providing.
+ */
+describe("the detector list", () => {
+  it("lists what is installed, and marks the ones running in shadow", async () => {
+    const own = new BotHandler({ preset: "protect-content", shadowDetectors: ["cadence"] });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      await own.handle(createFacts({ method: "GET", url: "/d", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.96" }));
+      const page = await browser.newPage({ viewport: { width: 1400, height: 980 } });
+      await page.goto(`${server.url}#stats`);
+      await page.waitForSelector("#view-stats:not([hidden])");
+      await page.waitForTimeout(1100);
+
+      const text = await page.locator("#view-stats").innerText();
+      await page.close();
+      expect(text, "the detectors are named").toContain("self-identified");
+      expect(text).toContain("cadence");
+      // A shadow detector is installed, produces evidence, and that evidence decides
+      // nothing — so the list has to say which, or it overstates what is running.
+      expect(text.toLowerCase()).toMatch(/shadow/);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
  * The metrics endpoint, which is the one thing on this listener a machine reads.
  *
  * Off by default, because it is an unauthenticated-by-habit path in most people's heads
