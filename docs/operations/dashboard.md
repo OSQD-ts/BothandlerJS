@@ -42,6 +42,18 @@ paging through it cannot be read — and says **held while you read** so the sti
 not mistaken for quiet. Requests keep arriving and keep being counted; they are at the
 front when you return to it.
 
+**The pager reaches further than the stream sent.** The header says how many requests fell
+in the window and how many of them this browser has — "1,284 requests · 47 loaded" — and
+the two are usually different, because the stream is rate-capped and thins a burst on its
+way to the page. Paging past what was loaded fetches the rest from the handler, so every
+request the window still holds is reachable rather than merely counted. It fetches what a
+page needs and no more: page four costs four pages, not the whole ring.
+
+The count itself is kept apart from the entries, in minute buckets, so it outlives them —
+which is why it can be larger than anything the pager can reach. Requests older than the
+retention are counted and gone, and the pager stops at what is still held rather than
+offering pages that cannot be filled.
+
 The search takes fields, and negation, because the two cases people actually reach for
 it are an address that also appears inside a User-Agent and a path that is a prefix of
 ten others:
