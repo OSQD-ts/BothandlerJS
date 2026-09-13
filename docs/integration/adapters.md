@@ -119,6 +119,63 @@ Two platform notes: on Workers, enable `nodejs_compat`, because the engine uses
 `node:crypto`. And Fetch runtimes normalise header order, so `header-order` returns nothing
 there — drop it.
 
+## When the application is not in Node
+
+This library is in-process middleware, which assumes the thing serving your pages is
+something it can sit inside. Plenty of sites are not shaped like that: the application is
+in another language, or the pages are static files served by nginx and only `/api` reaches
+Node. Those deployments are **half covered** — the guard judges the routes it is mounted
+on, and every page and asset is judged by `robots.txt`, which is an honour system.
+
+That gap is easy to miss, because an empty feed for static routes looks exactly like a
+quiet site. Nothing in the dashboard says "the paths you are most worried about never
+reach me".
+
+nginx's `auth_request` closes it: every request is sent to a guard endpoint as a
+subrequest first, and what that answers decides what happens to the real one.
+[`examples/edge-auth-request.ts`](../../examples/edge-auth-request.ts) is a working
+endpoint with the nginx configuration it expects.
+
+```nginx
+location = /_guard {
+  internal;
+  proxy_pass              http://127.0.0.1:9680/;
+  proxy_pass_request_body off;
+  proxy_set_header        Content-Length "";
+  proxy_set_header        X-Original-URI    $request_uri;
+  proxy_set_header        X-Original-Method $request_method;
+  proxy_set_header        X-Real-IP         $remote_addr;
+}
+
+location / {
+  auth_request     /_guard;
+  auth_request_set $verdict $upstream_http_x_bot_verdict;
+  proxy_set_header X-Bot-Verdict $verdict;
+  error_page 401 = @challenge;
+  proxy_pass http://your-application;
+}
+
+location @challenge { proxy_pass http://127.0.0.1:9680/; }
+```
+
+Three things this costs, worth knowing before building on it:
+
+**The subrequest has no body.** nginx sends a GET with the headers and no content, so
+anything reading a body cannot work — the [trap form field](../detection/detectors.md)
+most of all. Trap *links* still work, because those are a path.
+
+**It is a second round trip on every request**, including every image and font. Scope it
+with `location` blocks rather than putting it in front of the whole site out of habit.
+
+**The interstitial needs `error_page`.** `auth_request` can only allow or refuse; it has
+no way to return a page. A challenge is therefore a 401 that nginx turns into a real
+response by fetching it from the guard — that is the `error_page` line above, and without
+it a challenged visitor gets nginx's own error page and no way through.
+
+The method and the target are passed across explicitly because `auth_request` preserves
+neither: judging every request as a `GET /` would have half the detectors reading the same
+thing about everybody.
+
 ## Writing your own
 
 About thirty lines. `src/adapters/node.ts` is the model. The shape is:
