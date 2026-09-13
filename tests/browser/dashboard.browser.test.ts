@@ -618,6 +618,46 @@ describe("reaching requests the stream never sent", () => {
     expect(seen.length, "and every one of them is reachable").toBe(SEEDED);
   });
 
+  /**
+   * The page and the server agree on the order of the window.
+   *
+   * Not a cosmetic property. The server pages by offset, so a page is a *slice of its
+   * order* — and if this browser sorts the same requests differently, the slice it draws
+   * for page two is not the slice the server was asked for. What that looks like is some
+   * requests on two pages and others on none, which is how this was first found.
+   *
+   * A burst is the case that breaks it: many requests land in the same millisecond, and a
+   * sort on the timestamp alone leaves those in whatever order they were merged. The
+   * entries carry the server's own sequence number, so sorting by it is agreeing with the
+   * list being paged rather than guessing at it.
+   */
+  it("orders the feed the way the server orders it", async () => {
+    const page = await openFeed();
+    await walkToEnd(page);
+
+    const shown: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      for (const text of await page.locator("tbody tr.row .row-toggle").allInnerTexts()) {
+        const path = /\/n\/\d+/.exec(text)?.[0];
+        if (path !== undefined) shown.push(path);
+      }
+      const next = page.locator('#feed-pager-top button[aria-label="Next page"]');
+      if (!(await next.isEnabled())) break;
+      await next.click();
+      await page.waitForTimeout(900);
+    }
+    await page.close();
+
+    // The same window, as the server hands it over: newest first, densely.
+    const response = await fetch(`${pageServer.url}api/feed?offset=0&limit=${SEEDED}`);
+    const served = ((await response.json()) as { entries: Array<{ path: string }> }).entries
+      .map((entry) => entry.path)
+      .filter((path) => path.startsWith("/n/"));
+
+    expect(shown.length, "every request was drawn").toBe(served.length);
+    expect(shown, "in the server's order, not merely the same set").toEqual(served);
+  });
+
   it("goes back to the live first page, and stays live", async () => {
     const page = await openFeed();
     await page.locator('#feed-pager-top button[aria-label="Next page"]').click();

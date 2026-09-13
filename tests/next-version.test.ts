@@ -145,6 +145,21 @@ describe("declaring a version outright", () => {
     expect(declaredRelease("chore: rename Release-As: to something else")).toBeUndefined();
   });
 
+  it("does not fire on a subject line that *is* it, because a footer is a footer", () => {
+    // Two things stop a mention from becoming a release and they are not the same thing.
+    // The regex is anchored to the start of a line, which handles `docs: explain
+    // Release-As: 1.0.0` — the words are mid-line there. This is the other one: a message
+    // whose subject line begins with the footer, where the anchor matches and only
+    // dropping the subject before looking stops it.
+    //
+    // Worth holding because the two layers are easy to mistake for one, and removing the
+    // subject-dropping leaves every test above still passing.
+    expect(declaredRelease("Release-As: 1.0.0")).toBeUndefined();
+    expect(declaredRelease("Release-As: major\n\nsome body text")).toBeUndefined();
+    // And it still fires where it is meant to: in a footer, under a subject.
+    expect(declaredRelease("feat: a real change\n\nRelease-As: 1.0.0")).toEqual({ kind: "version", value: "1.0.0" });
+  });
+
   /**
    * Reported rather than ignored, so the caller can refuse the release. Falling back to
    * the derived number would publish *something*, which is exactly the outcome that hides
