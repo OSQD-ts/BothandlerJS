@@ -469,6 +469,120 @@ describe("the toolbar", () => {
  * User-Agent form was covered; the other two were not, and neither was refusing nothing.
  */
 /**
+ * The guard, shown to somebody who may not change it.
+ *
+ * The guard is the reason an aggressive policy is survivable — a probabilistic verdict
+ * cannot refuse anybody — so what it is set to is worth reading whether or not you are
+ * allowed to move it. Read-only has to mean *shown*, not hidden.
+ */
+describe("the guard where it may not be edited", () => {
+  it("states every setting, with nothing that could change one", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, controls: { editPolicy: true } });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1400, height: 980 } });
+      await page.goto(`${server.url}#policy`);
+      await page.waitForSelector("#view-policy:not([hidden])");
+      await page.waitForTimeout(900);
+
+      const panel = await page.locator("#stat-policy").innerText();
+      // Every setting that decides how far a rule may go, in words.
+      for (const label of ["False-positive policy", "Fallback", "Suspect threshold", "Challenge configured"]) {
+        expect(panel, label).toContain(label);
+      }
+      // And no control: `editPolicy` is on here and `editGuard` is not, so the two
+      // permissions have to be genuinely separate rather than one standing in for both.
+      expect(await page.locator("#stat-policy select, #stat-policy input").count(), "nothing to change it with").toBe(0);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * Reading a long rule set.
+ *
+ * A preset is a dozen rules and a real policy is more. They open collapsed, which is the
+ * right default for scanning and the wrong one for comparing two of them — so the control
+ * that opens them all is what makes the screen usable at that size.
+ */
+describe("expanding the rules", () => {
+  it("opens every rule at once and closes them again", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, controls: { editPolicy: true } });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1400, height: 980 } });
+      await page.goto(`${server.url}#policy`);
+      await page.waitForSelector("#view-policy:not([hidden])");
+      await page.waitForTimeout(900);
+
+      const expand = page.locator("#rule-expand");
+      expect(await expand.innerText()).toMatch(/Expand all/i);
+      const closed = await page.locator("#rulelist").innerText();
+
+      await expand.click();
+      await page.waitForTimeout(700);
+      const opened = await page.locator("#rulelist").innerText();
+      // The button becomes its own opposite, which is how a single control says what it
+      // will do next rather than what it just did.
+      expect(await expand.innerText()).toMatch(/Collapse all/i);
+      expect(opened.length, "every rule is showing its detail").toBeGreaterThan(closed.length);
+
+      await expand.click();
+      await page.waitForTimeout(700);
+      expect(await expand.innerText()).toMatch(/Expand all/i);
+      expect((await page.locator("#rulelist").innerText()).length).toBe(closed.length);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * Getting to the Actors screen's controls without a mouse.
+ *
+ * Every row carries four buttons and a link, and they are built by script after the table
+ * is drawn — which is exactly the shape that ends up unreachable by keyboard, because
+ * nothing about appending a node puts it in the tab order correctly on its own.
+ */
+describe("the actors screen without a mouse", () => {
+  it("reaches a row's actions with the Tab key", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, controls: { editRanges: true } });
+    try {
+      await own.handle(createFacts({ method: "GET", url: "/k", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.170" }));
+      const page = await browser.newPage({ viewport: { width: 1400, height: 980 } });
+      await page.goto(`${server.url}#actors`);
+      await page.waitForSelector("#view-actors:not([hidden])");
+      await page.waitForTimeout(900);
+
+      // Start from the row's first control and walk forward, which is what somebody using
+      // a keyboard actually does.
+      await page.locator("#actor-rows tr").first().locator("button").first().focus();
+      const reached: string[] = [];
+      for (let i = 0; i < 6; i++) {
+        const name = await page.evaluate(() => {
+          const node = document.activeElement as HTMLElement | null;
+          return node === null ? "" : `${node.tagName}:${(node.textContent ?? "").trim().slice(0, 24)}`;
+        });
+        reached.push(name);
+        await page.keyboard.press("Tab");
+      }
+      await page.close();
+
+      const text = reached.join(" | ");
+      for (const label of ["Allowlist", "Forget", "Clear as human", "Label"]) {
+        expect(text, `${label} is reachable`).toContain(label);
+      }
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
  * The last two controls on the feed, and what the Actors screen says when it has nothing.
  *
  * "Show" puts labelled-away traffic back on screen, and the download beside a row is the
