@@ -468,6 +468,165 @@ describe("the toolbar", () => {
  * first of those would make it a tool for the one case that was already easy. The
  * User-Agent form was covered; the other two were not, and neither was refusing nothing.
  */
+/**
+ * Who is allowed to read this page.
+ *
+ * The dashboard lists client addresses, the paths people asked for, and exactly which
+ * detector fired on each — which is a tuning guide for whoever is scraping you. Its
+ * authentication had no browser test, and the browser is where it matters: a 401 has to
+ * reach the browser as a prompt rather than as a blank page, and the page has to work
+ * afterwards without anything in it knowing that authentication happened.
+ */
+describe("getting in", () => {
+  const CREDENTIALS = { username: "ops", password: "a-long-enough-password-here" };
+
+  it("refuses a browser with no credentials, and works with them", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, auth: CREDENTIALS });
+    try {
+      await own.handle(createFacts({ method: "GET", url: "/a", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.61" }));
+
+      // Unauthenticated: a 401 carrying the challenge, so a browser asks rather than
+      // showing somebody a blank page and leaving them to guess.
+      const bare = await fetch(server.url);
+      expect(bare.status).toBe(401);
+      expect(bare.headers.get("www-authenticate") ?? "", "the prompt a browser needs").toMatch(/basic/i);
+
+      // With credentials the page works, and every fetch it makes carries them without
+      // anything in the client having to know.
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, httpCredentials: CREDENTIALS });
+      const failures: number[] = [];
+      page.on("response", (response) => {
+        if (response.status() === 401) failures.push(response.status());
+      });
+      await page.goto(server.url);
+      await page.waitForSelector("tbody tr.row");
+      await page.waitForTimeout(900);
+      expect(await page.locator("tbody tr.row").count()).toBeGreaterThan(0);
+      expect(failures, "nothing the page asked for was refused").toEqual([]);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("can disappear instead of refusing, for a dashboard that should not advertise itself", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, auth: { token: "a-long-enough-token-value-here" }, refusal: "not-found" });
+    try {
+      const bare = await fetch(server.url);
+      // 404 rather than 401: a 401 confirms there is something here worth authenticating
+      // against, which for an internal tool on a reachable address is itself a disclosure.
+      expect(bare.status).toBe(404);
+      expect(bare.headers.get("www-authenticate"), "and no prompt to confirm it either").toBeNull();
+
+      // And a page opened with the token keeps using it. The token authenticates the
+      // *navigation*; everything the page then fetches goes to a path of its own, and
+      // until this was fixed all of them were refused — the dashboard drew its chrome and
+      // then sat on "reconnecting…", which is indistinguishable from a server that died.
+      await own.handle(createFacts({ method: "GET", url: "/t", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.62" }));
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      const refused: string[] = [];
+      page.on("response", (response) => {
+        if (response.status() === 404) refused.push(new URL(response.url()).pathname);
+      });
+      await page.goto(`${server.url}?token=a-long-enough-token-value-here`);
+      await page.waitForSelector("tbody tr.row", { timeout: 15_000 });
+      // Including the stream, which is an EventSource and cannot carry a header.
+      await page.waitForFunction(() => (document.getElementById("conn")?.textContent ?? "") === "live", undefined, { timeout: 15_000 });
+      expect(refused, "nothing the page asked for was refused").toEqual([]);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * The audit, which is the one panel that is about the shape of the traffic rather than
+ * about any request in it.
+ *
+ * It was asserted *absent* on the analyst dashboard and never asserted present anywhere,
+ * so the panel had no test that it draws at all.
+ */
+describe("the audit panel", () => {
+  it("shows what the audit is watching for, and what it has seen", async () => {
+    const own = new BotHandler({ preset: "protect-content", audit: {} });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      for (let i = 0; i < 12; i++) {
+        await own.handle(
+          createFacts({ method: "GET", url: `/au/${i}`, headers: { host: "a.example", "user-agent": i % 2 === 0 ? "curl/8.4.0" : "python-requests/2.32.3" }, ip: `203.0.113.${100 + i}` }),
+        );
+      }
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(`${server.url}#stats`);
+      await page.waitForSelector("#view-stats:not([hidden])");
+      await page.waitForTimeout(1200);
+
+      const body = await page.locator("#audit-body").innerText();
+      const checks = await page.locator("#audit-checks").innerText();
+      await page.close();
+      // Either it has something to report or it says it has not — an empty panel reads as
+      // a panel that failed to draw, which is the one thing it must not look like.
+      expect(body.trim().length).toBeGreaterThan(0);
+      // The checks are the interesting half: naming what is being watched for is what
+      // makes "nothing to report" mean something.
+      expect(checks.trim().length).toBeGreaterThan(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("says the audit is off rather than drawing an empty panel", async () => {
+    const own = new BotHandler({ preset: "protect-content", audit: false });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+      await page.goto(`${server.url}#stats`);
+      await page.waitForSelector("#view-stats:not([hidden])");
+      await page.waitForTimeout(1000);
+      const body = await page.locator("#audit-body").innerText();
+      await page.close();
+      expect(body.trim().length, "an off audit explains itself").toBeGreaterThan(0);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * Which population the score distribution is drawn from.
+ *
+ * Two different answers to the same picture: every request since the process started, or
+ * the few hundred still retained. Comparing one against the other is a mistake the page
+ * used to invite, and the toggle plus its label is what stops it.
+ */
+describe("the score distribution's two populations", () => {
+  it("switches between the whole run and the retained window, and says which", async () => {
+    const page = await open(1440, "#stats", "#view-stats");
+    await page.waitForTimeout(1000);
+
+    const scope = page.locator("#score-scope button");
+    expect(await scope.count()).toBe(2);
+    expect(await page.locator("#score-window").innerText(), "it opens on the whole run").toContain("since start");
+
+    await scope.filter({ hasText: "this window" }).click();
+    await page.waitForTimeout(500);
+    expect(await scope.filter({ hasText: "this window" }).getAttribute("aria-pressed")).toBe("true");
+    // The label follows the toggle, which is the entire point: the same chart drawn from
+    // two populations must never wear the same subtitle.
+    const windowed = await page.locator("#score-window").innerText();
+    expect(windowed).not.toContain("since start");
+    expect(windowed).toMatch(/requests|empty/);
+
+    await scope.filter({ hasText: "since start" }).click();
+    await page.waitForTimeout(500);
+    expect(await page.locator("#score-window").innerText()).toContain("since start");
+    await page.close();
+  });
+});
+
 describe("what the request tester will read", () => {
   it("reads a curl command, headers and all", async () => {
     const page = await open();

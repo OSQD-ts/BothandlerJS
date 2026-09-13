@@ -1,8 +1,8 @@
 import { $ } from "./dom.js";
-import { API, SECTIONS } from "./boot.js";
+import { SECTIONS } from "./boot.js";
 import { app } from "./app.js";
 import { clearFeed, ingest, state, takeLabels } from "./store.js";
-import { getJson } from "./api.js";
+import { authed, getJson } from "./api.js";
 import { refreshWindowCount } from "./window-count.js";
 import { resetFeedCache } from "./feed.js";
 import type { DashboardEntry, Snapshot } from "./types.js";
@@ -47,7 +47,9 @@ export function connectStream(): void {
   }
   if (source !== undefined) return;
 
-  source = new EventSource(`${API}/api/stream`);
+  // Through the same helper as every other request: an `EventSource` cannot carry a
+  // header, so a token-authenticated dashboard reaches its stream the only way it can.
+  source = new EventSource(authed("/api/stream"));
 
   source.addEventListener("open", () => {
     $("dot").className = "dot on";
