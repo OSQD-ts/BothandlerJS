@@ -140,9 +140,15 @@ async function askForCount(): Promise<void> {
   }
 }
 
-/** Fetches one page of entries from the server, newest first. */
-export async function fetchFeedPage(page: number, size: number): Promise<DashboardEntry[]> {
-  const body = await getJson<PageResponse>(`/api/feed${query(state.fromMs, state.toMs, { offset: String(page * size), limit: String(size) })}`);
+/**
+ * Fetches entries from the window, newest first, by absolute offset.
+ *
+ * An offset rather than a page number, because the caller is filling a *range* — it asks
+ * for everything up to the end of the page somebody navigated to, which does not start on
+ * a page boundary once part of that range is already held.
+ */
+export async function fetchFeedEntries(offset: number, limit: number): Promise<DashboardEntry[]> {
+  const body = await getJson<PageResponse>(`/api/feed${query(state.fromMs, state.toMs, { offset: String(offset), limit: String(limit) })}`);
   state.window = {
     matching: body.matching,
     retained: body.retained,

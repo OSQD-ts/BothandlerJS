@@ -3,7 +3,7 @@ import { feedPage, goToFeedPage, hiddenCount, ingest, labelOf, matchingCount, ma
 import { deleteFilter, refreshSavedFilters, saveFilter, savedFilters } from "./saved.js";
 import { suggestFor } from "./query.js";
 import { getJson } from "./api.js";
-import { fetchFeedPage, refreshWindowCount } from "./window-count.js";
+import { fetchFeedEntries, refreshWindowCount } from "./window-count.js";
 import { renderPager } from "./pager.js";
 import { SECTIONS } from "./boot.js";
 import { app, download, today, toast } from "./app.js";
@@ -460,37 +460,54 @@ const FEED_PAGE_SIZES = [25, 50, 100, 200] as const;
  * rule and not worth a permanent row of chrome to keep.
  */
 /**
- * Loads a page of the feed this browser is not holding.
+ * Makes sure the rows behind a page are held before it is drawn.
  *
- * The page keeps a bounded ring of its own — a thousand rows — and the server's can be
- * five times that, so with a long retention there are pages the pager can *name* from the
- * window total but has never been sent. Fetching them on demand is what makes the pager's
- * page count something you can act on rather than an advertisement.
+ * The subtle part is *what* to fetch. The obvious thing — ask the server for page N — does
+ * not work, and the reason is worth stating plainly: the rows this browser holds are not
+ * the newest N of the window. The stream's rate cap thins a burst, so what arrived is
+ * scattered through the window, while the server pages a dense list by offset. A slice of
+ * a sparse list at a dense offset lands somewhere neither side meant, and what that looks
+ * like is pages numbered correctly and half empty.
  *
- * Merged through `ingest`, so an entry already held is refreshed rather than duplicated,
- * and nothing is fetched twice: the guard below is on what is loaded rather than on what
- * was requested, which is the version that survives a filter being changed underneath it.
+ * So this fetches from offset zero up to the end of the page being asked for. That makes
+ * the newest that many rows a *dense prefix*, and a slice of a dense prefix is exactly the
+ * server's page. It is still loading only what has been asked for — page four costs four
+ * pages, not the whole ring — and `densifiedTo` stops it being paid twice.
  */
+let densifying = false;
+
 async function ensureFeedPage(page: number, size: number): Promise<void> {
-  if (page === 0) return;
-  // Only when the page genuinely reaches past what is held. A filtered view pages over
-  // rows this browser already has, and fetching for it would ask the server questions
-  // about a query it has never seen.
-  const held = state.feedFrozen?.length ?? state.rows.length;
-  if ((page + 1) * size <= held) return;
+  const needed = (page + 1) * size;
+  if (densifying || needed <= state.densifiedTo) return;
   // A filtered view pages over rows this browser already holds, and the server has never
   // seen the query — so there is nothing coherent to ask it for.
   if (matchingCount() !== state.rows.length) return;
+  const retained = state.window?.retained;
+  if (retained === undefined) return;
+  const target = Math.min(needed, retained);
+  if (target <= state.densifiedTo) return;
+
+  densifying = true;
   try {
-    const entries = await fetchFeedPage(page, size);
-    for (const entry of entries) ingest(entry);
+    // In chunks, because the server caps a page and the range asked for may be larger.
+    for (let offset = state.densifiedTo; offset < target; offset += FETCH_CHUNK) {
+      const entries = await fetchFeedEntries(offset, Math.min(FETCH_CHUNK, target - offset));
+      for (const entry of entries) ingest(entry);
+      if (entries.length === 0) break;
+    }
     sortRows();
+    state.densifiedTo = Math.max(state.densifiedTo, target);
     refreshFrozenPage();
   } catch {
     // The count stays true and the table stays as it was. A failed fetch here is worth
     // less noise than a toast on every click of a pager somebody is holding down.
+  } finally {
+    densifying = false;
   }
 }
+
+/** How many entries one densifying request asks for. The server's own page cap. */
+const FETCH_CHUNK = 500;
 
 function drawPager(paged: { page: number; pages: number; total: number }): void {
   const size = state.feedPageSize;

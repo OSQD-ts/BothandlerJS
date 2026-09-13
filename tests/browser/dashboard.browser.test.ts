@@ -469,6 +469,164 @@ describe("the toolbar", () => {
  * User-Agent form was covered; the other two were not, and neither was refusing nothing.
  */
 /**
+ * Paging past the requests this browser was sent.
+ *
+ * The stream's rate cap thins the opening replay, so a page that has just loaded holds a
+ * *sparse* sample of the window — scattered through it rather than being its newest N.
+ * That is the fact every attempt at this has to survive: the server pages a dense list by
+ * offset, and slicing a sparse local list at a dense offset lands somewhere neither side
+ * meant, which is pages numbered correctly and half empty.
+ *
+ * What makes it work is fetching from offset zero up to the end of the page asked for, so
+ * the newest that many rows become a dense prefix — and a slice of a dense prefix is
+ * exactly the server's page.
+ */
+describe("reaching requests the stream never sent", () => {
+  const SEEDED = 120;
+  let pageHandler: BotHandler;
+  let pageServer: DashboardServer;
+
+  beforeAll(async () => {
+    pageHandler = new BotHandler({ preset: "protect-content" });
+    pageServer = await pageHandler.serveDashboard({ port: 0, feedLimit: 400 });
+    // In one burst, which is the point: the rate cap thins the replay, so the browser is
+    // handed a fraction of these and has to reach the rest.
+    for (let i = 0; i < SEEDED; i++) {
+      await pageHandler.handle(
+        createFacts({ method: "GET", url: `/n/${i}`, headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: `203.0.113.${i % 60}` }),
+      );
+    }
+  });
+
+  afterAll(async () => {
+    await pageServer?.close();
+  });
+
+  async function openFeed(): Promise<Page> {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+    await page.goto(pageServer.url);
+    await page.waitForSelector("tbody tr.row");
+    await page.waitForFunction(
+      () => /\d[\d,]* requests/.test(document.getElementById("feed-count")?.textContent ?? ""),
+      undefined,
+      { timeout: 15_000 },
+    );
+    return page;
+  }
+
+  /**
+   * Walks to the last page and back to the first.
+   *
+   * Paging is what fetches, and it fetches from offset zero up to the page asked for — so
+   * after one pass the whole window is held densely and page zero shows the newest fifty
+   * rather than the newest fifty *of the thinned sample*.
+   *
+   * Deliberately not done on load. Filling the first page automatically would fetch the
+   * backlog on every dashboard that opens, re-delivering entries the stream had already
+   * sent — and a re-delivered row is a rebuilt row, which takes any text selection inside
+   * it with it. The live feed is meant to be readable while it moves.
+   */
+  async function walkToEnd(page: Page): Promise<void> {
+    for (let i = 0; i < 10; i++) {
+      const next = page.locator('#feed-pager-top button[aria-label="Next page"]');
+      if (!(await next.isEnabled())) break;
+      await next.click();
+      await page.waitForTimeout(1200);
+    }
+    for (let i = 0; i < 10; i++) {
+      const previous = page.locator('#feed-pager-top button[aria-label="Previous page"]');
+      if (!(await previous.isEnabled())) break;
+      await previous.click();
+      await page.waitForTimeout(400);
+    }
+  }
+
+  const pagerText = async (page: Page): Promise<string> =>
+    ((await page.locator("#feed-pager-top").textContent()) ?? "").replace(/Per page.*/, "").trim();
+
+  it("offers every page the server can still fill, not just the loaded ones", async () => {
+    const page = await openFeed();
+    const count = (await page.locator("#feed-count").textContent()) ?? "";
+    const loaded = await page.locator("tbody tr.row").count();
+    const pager = await pagerText(page);
+    await page.close();
+
+    // The header is honest about both numbers: what happened, and what is here.
+    expect(count).toContain(`${SEEDED} requests`);
+    expect(loaded, "the rate cap thinned the replay").toBeLessThan(SEEDED);
+    // And the pager is sized by what the server can produce rather than by what arrived,
+    // so the requests the stream skipped are reachable rather than merely counted.
+    expect(pager).toContain(`of ${SEEDED}`);
+  });
+
+  it("fills a page it was never sent, and reaches the oldest request", async () => {
+    const page = await openFeed();
+    const size = 50;
+
+    await page.locator('#feed-pager-top button[aria-label="Next page"]').click();
+    await page.waitForTimeout(1500);
+    expect(await pagerText(page), "the second page").toContain("51–100");
+    expect(await page.locator("tbody tr.row").count(), "and it is full").toBe(size);
+
+    await page.locator('#feed-pager-top button[aria-label="Next page"]').click();
+    await page.waitForTimeout(1500);
+    expect(await pagerText(page)).toContain(`101–${SEEDED}`);
+    expect(await page.locator("tbody tr.row").count(), "the remainder, exactly").toBe(SEEDED - 2 * size);
+
+    // The last page ends at the oldest request in the window — which is the whole claim.
+    const rows = await page.locator("tbody tr.row .row-toggle").allInnerTexts();
+    expect(rows[rows.length - 1], "the oldest request is reachable").toContain("/n/0");
+
+    // And there is nowhere further to go: a pager that runs past the end is how the
+    // earlier version of this hid the fact that it was not really paging at all.
+    expect(await page.locator('#feed-pager-top button[aria-label="Next page"]').isEnabled()).toBe(false);
+    await page.close();
+  });
+
+  it("pages without duplicating or skipping a request", async () => {
+    const page = await openFeed();
+    // One pass to the end, which is what fetches the window; then read it from the top.
+    await walkToEnd(page);
+    const seen: string[] = [];
+    const collect = async (): Promise<void> => {
+      for (const text of await page.locator("tbody tr.row .row-toggle").allInnerTexts()) {
+        const path = /\/n\/(\d+)/.exec(text)?.[0];
+        if (path !== undefined) seen.push(path);
+      }
+    };
+    await collect();
+    for (let i = 0; i < 2; i++) {
+      await page.locator('#feed-pager-top button[aria-label="Next page"]').click();
+      await page.waitForTimeout(1500);
+      await collect();
+    }
+    await page.close();
+
+    // Every request in the window, once each. A sparse list sliced at a dense offset shows
+    // up here as both a gap and a repeat, which is why this is the assertion that matters.
+    expect(new Set(seen).size, "no request appears twice").toBe(seen.length);
+    expect(seen.length, "and every one of them is reachable").toBe(SEEDED);
+  });
+
+  it("goes back to the live first page, and stays live", async () => {
+    const page = await openFeed();
+    await page.locator('#feed-pager-top button[aria-label="Next page"]').click();
+    await page.waitForTimeout(1200);
+    expect(await pagerText(page)).toContain("51–100");
+
+    await page.locator('#feed-pager-top button[aria-label="Previous page"]').click();
+    await page.waitForTimeout(900);
+    expect(await pagerText(page)).toContain("1–50");
+
+    // Page zero follows the stream, which is what "held while you read" on the other pages
+    // is holding still *from*.
+    await pageHandler.handle(createFacts({ method: "GET", url: "/n/live", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.250" }));
+    await page.waitForFunction(() => (document.getElementById("rows")?.textContent ?? "").includes("/n/live"), undefined, { timeout: 15_000 });
+    await page.close();
+  });
+});
+
+/**
  * The guard, shown to somebody who may not change it.
  *
  * The guard is the reason an aggressive policy is survivable — a probabilistic verdict

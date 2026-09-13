@@ -113,6 +113,21 @@ export interface State {
    * arrives, which is why every reader falls back to the local count rather than to zero.
    */
   window: WindowCount | undefined;
+  /**
+   * How many of the newest entries in this window are held *densely*.
+   *
+   * The rows this page holds are not a prefix of the window. The stream's rate cap thins
+   * a burst, so what arrives is scattered through the window rather than being its newest
+   * N — and the server pages a dense list by offset. Slicing a sparse local list at a
+   * dense remote offset lands somewhere neither side meant, which is what made the first
+   * attempt at reaching past the loaded rows produce pages that were numbered correctly
+   * and half empty.
+   *
+   * So paging past what is held fetches from offset zero up to the end of the page being
+   * asked for, which makes the newest that many rows a dense prefix — and a slice of a
+   * dense prefix is exactly the server's page. This is how far that prefix reaches.
+   */
+  densifiedTo: number;
 }
 
 export const state: State = {
@@ -128,6 +143,7 @@ export const state: State = {
   actorScope: "tracked",
   actorsQuery: "",
   window: undefined,
+  densifiedTo: 0,
   actorsMatching: 0,
   paused: false,
   filter: "all",
@@ -166,6 +182,14 @@ export const state: State = {
 export function ingest(entry: DashboardEntry): void {
   const existing = state.byId.get(entry.requestId);
   if (existing !== undefined) {
+    // Only when it actually changed. `rev` is what tells the renderer a row is stale, and
+    // a stale row is rebuilt — which takes any text selection inside it with it, so a
+    // feed that bumped revisions for entries that had not moved could not be *read*.
+    //
+    // Re-ingesting an unchanged entry is ordinary rather than exceptional: a page fetched
+    // to fill the pager overlaps what the stream already delivered, and every one of those
+    // arrives here identical to the row already on screen.
+    if (sameEntry(existing.entry, entry)) return;
     existing.entry = entry;
     existing.rev++;
     existing.text = undefined;
@@ -180,6 +204,26 @@ export function ingest(entry: DashboardEntry): void {
       state.open.delete(dropped.entry.requestId);
     }
   }
+}
+
+/**
+ * Whether a re-delivered entry says anything new.
+ *
+ * Compared field by field rather than by serialising both: this runs once per entry on
+ * every merge, and the fields that can change after an entry is first published are few
+ * and known — a request is written once when it is assessed and again when the decision
+ * lands. Everything else about it is fixed by the time it reaches this page.
+ */
+function sameEntry(a: DashboardEntry, b: DashboardEntry): boolean {
+  return (
+    a.seq === b.seq &&
+    a.action === b.action &&
+    a.rule === b.rule &&
+    a.verdict === b.verdict &&
+    a.score === b.score &&
+    a.downgradedFrom === b.downgradedFrom &&
+    a.downgradeReason === b.downgradeReason
+  );
 }
 
 export function clearFeed(): void {
@@ -197,6 +241,7 @@ export function clearFeed(): void {
   // dropped for lagging reconnects with a stale cursor and is sent a fresh backlog, so the
   // gap this counted is exactly what has just been filled in.
   state.laggedDrops = 0;
+  state.densifiedTo = 0;
   // And the frozen page goes with them, for the same reason: it holds rows this store no
   // longer has, so a reader left on page three would be paging through a list of things
   // that are gone.
@@ -215,6 +260,9 @@ export function setSearch(value: string): void {
 export function setTimeframe(from: number | undefined, to: number | undefined): void {
   state.fromMs = from;
   state.toMs = to;
+  // A different window is a different list, so what was dense in the old one says nothing
+  // about this one.
+  state.densifiedTo = 0;
   resetPaging();
 }
 
@@ -238,7 +286,15 @@ function textOf(row: Row): string {
  * newest end, which is where the feed reads from.
  */
 export function sortRows(): void {
-  state.rows.sort((a, b) => a.entry.at - b.entry.at);
+  // By time, then by the server's own sequence number.
+  //
+  // The tiebreak is not a nicety. A burst puts many requests in the same millisecond, and
+  // a sort on `at` alone leaves those in whatever order they were merged — which for a
+  // page fetched over HTTP is not the order the server holds them in. The feed then
+  // disagrees with the server about which requests are "the newest fifty", and paging
+  // through a window shows some of them twice and misses others entirely. `seq` numbers
+  // the requests on the server, so sorting by it is agreeing with the list being paged.
+  state.rows.sort((a, b) => a.entry.at - b.entry.at || a.entry.seq - b.entry.seq);
 }
 
 /** Whether this row belongs to an actor whose label hides it from the feed. */
@@ -284,26 +340,26 @@ export function visibleRows(limit = FEED_LIMIT): Row[] {
  */
 export function feedPage(size: number): { rows: Row[]; page: number; pages: number; total: number } {
   const all = state.feedPage === 0 || state.feedFrozen === undefined ? matchingRows() : state.feedFrozen;
-  // Sized by the rows this browser is holding, deliberately.
+  // Sized by what the server can still produce, not by what this browser happens to hold.
   //
-  // The header above says how many requests fell in the window, which is a larger number
-  // and a true one. It is tempting to size the pager by it, and that does not work: the
-  // rows here are a *sparse* sample of the window — the stream's rate cap thins a burst,
-  // so what is held is scattered through the window rather than being its newest N — and
-  // the server pages a dense list by offset. Slicing a sparse local list at a dense remote
-  // offset lands somewhere neither side meant, which shows up as pages that are numbered
-  // correctly and half empty.
+  // Two different numbers live above this screen and only one of them belongs here. How
+  // many requests *happened* in the window is the larger and truer one, and it is what the
+  // header leads with — but the entries behind the older part of it may have been evicted,
+  // so pages sized by it would be pages that can never be filled. `retained` is how many
+  // the server still has, and every one of those is reachable: `ensureFeedPage` fetches
+  // what a page needs before it is drawn.
   //
-  // Reaching the rest is what the "N not streamed · Load them" button beside the count is
-  // for: it fetches the ring whole and the rows stop being sparse. Making this pager
-  // server-authoritative — drawing the server's page rather than a slice of local rows —
-  // is the change that would remove the button, and it is a bigger one than it looks.
-  const pages = Math.max(1, Math.ceil(all.length / size));
+  // Only when nothing is filtering. A query narrows the feed in *this browser* and the
+  // server has never seen it, so neither of the server's numbers says anything about how
+  // many rows match.
+  const unfiltered = matchingCount() === state.rows.length;
+  const reachable = unfiltered && state.window !== undefined ? Math.max(all.length, state.window.retained) : all.length;
+  const pages = Math.max(1, Math.ceil(reachable / size));
   // A filter that narrows while somebody is on the last page must not leave them past the
   // end looking at nothing.
   const page = Math.min(Math.max(0, state.feedPage), pages - 1);
   if (page !== state.feedPage) state.feedPage = page;
-  return { rows: all.slice(page * size, page * size + size), page, pages, total: all.length };
+  return { rows: all.slice(page * size, page * size + size), page, pages, total: reachable };
 }
 
 /**
