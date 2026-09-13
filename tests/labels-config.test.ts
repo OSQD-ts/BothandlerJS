@@ -190,6 +190,29 @@ describe("naming an actor the application has to look up", () => {
     expect(calls).toBe(2);
   });
 
+  /**
+   * Bounded, because every actor the resolver names is one this handler then holds.
+   *
+   * The comment on the store has claimed this since it was written; the code did not do
+   * it. A deployment naming signed-in accounts kept one entry per account that ever
+   * visited, for the life of the process — and the cache inside the resolver, which *is*
+   * bounded, only decides whether to ask again rather than what is kept.
+   */
+  it("does not keep a name for every actor that ever visited", async () => {
+    const engine = handler({ labels: { resolve: (key) => `user-${key}`, max: 5 } });
+    for (let i = 0; i < 25; i++) {
+      await engine.handle(facts(`203.0.113.${i}`));
+      await new Promise((done) => setImmediate(done));
+    }
+
+    const names = engine.actorLabels();
+    expect(names.size, "held down to the configured ceiling").toBeLessThanOrEqual(5);
+    // The oldest go first, so what is kept is the recent end — an evicted one is worked
+    // out again the next time that actor appears, which is what makes dropping it safe.
+    expect(names.get("203.0.113.24"), "the newest is still named").toBe("user-203.0.113.24");
+    expect(names.has("203.0.113.0"), "the oldest is not").toBe(false);
+  });
+
   it("prefers a name somebody typed over one it worked out", async () => {
     const engine = handler({ labels: { sources: [{ label: "Office", cidrs: ["198.51.100.0/24"] }] } });
     await engine.handle(facts("198.51.100.9"));

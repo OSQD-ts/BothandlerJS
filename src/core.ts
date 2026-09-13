@@ -326,6 +326,19 @@ export class BotHandler {
         this.config.clock,
         (key, name, hideFromFeed) => {
           this.derivedLabels.set(key, hideFromFeed ? { name, hideFromFeed: true } : { name });
+          // Bounded, which the comment on this map has claimed since it was written and
+          // the code did not do. Every actor the resolver names lands here and nothing
+          // took any of them out again — so a deployment naming signed-in accounts kept
+          // one entry per account that ever visited, for the life of the process.
+          //
+          // The oldest go first. These are derived rather than typed: an evicted one is
+          // worked out again the next time that actor appears, which is the property that
+          // makes dropping them safe and is why operator labels are kept separately.
+          if (this.derivedLabels.size > resolver.max) {
+            for (const oldest of [...this.derivedLabels.keys()].slice(0, this.derivedLabels.size - resolver.max)) {
+              this.derivedLabels.delete(oldest);
+            }
+          }
           this.registry.peek(key)?.setLabel(name);
           // Announced like any other label, so every open dashboard learns the name
           // rather than only the one that happened to be watching.

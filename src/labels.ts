@@ -78,6 +78,16 @@ export interface LabelOptions {
 
 const DEFAULTS = { resolveTimeoutMs: 500, ttlMs: 60 * 60_000, retryAfterMs: 60_000, max: 10_000 };
 
+/**
+ * Most actors held in the back-off map at once.
+ *
+ * Separate from `max`, which bounds the *names*. This one bounds the keys being
+ * deliberately not looked up, and it needs its own ceiling because the two fill up under
+ * opposite conditions: names accumulate when the resolver works, back-offs accumulate
+ * when it does not.
+ */
+const MAX_PENDING = 10_000;
+
 /** What a source matched, or a resolver returned. `null` means "asked, and there is no name". */
 type Resolved = { name: string; hideFromFeed?: boolean } | null;
 
@@ -115,11 +125,20 @@ export class LabelResolver {
     this.resolve = options.resolve;
     this.resolveTimeoutMs = options.resolveTimeoutMs ?? DEFAULTS.resolveTimeoutMs;
     this.retryAfterMs = options.retryAfterMs ?? DEFAULTS.retryAfterMs;
-    this.cache = new TtlLru<Resolved>(Math.max(1, options.max ?? DEFAULTS.max), options.ttlMs ?? DEFAULTS.ttlMs, clock);
+    this.max = Math.max(1, options.max ?? DEFAULTS.max);
+    this.cache = new TtlLru<Resolved>(this.max, options.ttlMs ?? DEFAULTS.ttlMs, clock);
   }
 
   /** Ranges that could not be parsed, for the caller to warn about. */
   readonly invalid: readonly string[];
+
+  /**
+   * Most derived names worth keeping.
+   *
+   * Read by the handler, which holds the names this resolver produces — the cache in here
+   * only decides whether to ask again, so bounding it does not bound what is kept.
+   */
+  readonly max: number;
 
   get active(): boolean {
     return this.sources.length > 0 || this.resolve !== undefined;
@@ -215,8 +234,22 @@ export class LabelResolver {
 
   /** Remembers that this key has no name *for now*, so it is asked about again later. */
   private holdOff(key: string): void {
-    const until = this.clock.now() + this.retryAfterMs;
-    this.pending.set(key, until);
+    const now = this.clock.now();
+    this.pending.set(key, now + this.retryAfterMs);
+    // Swept here rather than only on the next question about the same key. An entry is
+    // removed when that key is asked about again and its window has passed — which never
+    // happens for an actor that arrived once, could not be named, and did not come back.
+    // On a site whose visitors are mostly strangers that is nearly all of them, and the
+    // map would grow for the life of the process.
+    if (this.pending.size > MAX_PENDING) {
+      for (const [held, until] of this.pending) if (until <= now) this.pending.delete(held);
+      // Still over, because everything in it is genuinely still waiting: drop the oldest,
+      // which are the closest to expiring anyway. A back-off forgotten early costs one
+      // extra lookup; an unbounded map costs the process.
+      if (this.pending.size > MAX_PENDING) {
+        for (const held of [...this.pending.keys()].slice(0, this.pending.size - MAX_PENDING)) this.pending.delete(held);
+      }
+    }
   }
 
   private readonly pending = new Map<string, number>();
