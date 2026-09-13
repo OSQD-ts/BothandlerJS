@@ -469,6 +469,179 @@ describe("the toolbar", () => {
  * User-Agent form was covered; the other two were not, and neither was refusing nothing.
  */
 /**
+ * The metrics endpoint, which is the one thing on this listener a machine reads.
+ *
+ * Off by default, because it is an unauthenticated-by-habit path in most people's heads
+ * and this listener is not an unauthenticated place. Both halves of that are worth pinning.
+ */
+describe("the Prometheus endpoint", () => {
+  it("is not there unless it was asked for", async () => {
+    const own = new BotHandler({ preset: "protect-content", metrics: true });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      const response = await fetch(`${server.url}metrics`);
+      expect(response.status, "off by default").toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves the counters in Prometheus text format when it is", async () => {
+    const own = new BotHandler({ preset: "protect-content", metrics: true });
+    const server = await own.serveDashboard({ port: 0, exposePrometheus: true });
+    try {
+      await own.handle(createFacts({ method: "GET", url: "/p", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.71" }));
+      const response = await fetch(`${server.url}metrics`);
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      // The exposition format, not JSON wearing a different content type: a scraper
+      // reads HELP and TYPE lines and a metric name with a value on it.
+      expect(body).toMatch(/^# HELP /m);
+      expect(body).toMatch(/^# TYPE /m);
+      expect(body).toMatch(/^[a-z_]+(\{[^}]*\})? \d/m);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("says the counters are off rather than serving an empty page", async () => {
+    const own = new BotHandler({ preset: "protect-content", metrics: false });
+    const server = await own.serveDashboard({ port: 0, exposePrometheus: true });
+    try {
+      const response = await fetch(`${server.url}metrics`);
+      // 503 rather than 200-with-nothing: a scraper reading zero requests from a handler
+      // that is not counting would record a quiet site rather than a misconfiguration.
+      expect(response.status).toBe(503);
+      expect((await response.text()).toLowerCase()).toContain("metrics");
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * Editing a live bot policy, and the things that stop you doing it by accident.
+ *
+ * Applying a rule set was covered. What was not: that the editor says when it holds
+ * changes nobody has applied, that Revert throws them away and comes back to what is
+ * running, that adding a rule is possible at all, and that a rule set the server refuses
+ * says so rather than appearing to work. Every one of those is a guard around a control
+ * that rewrites what the site does to its visitors.
+ */
+describe("the policy editor's safety rails", () => {
+  async function editor(): Promise<{ own: BotHandler; server: DashboardServer; page: Page }> {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0, controls: { editPolicy: true } });
+    const page = await browser.newPage({ viewport: { width: 1400, height: 980 } });
+    await page.goto(`${server.url}#policy`);
+    await page.waitForSelector("#view-policy:not([hidden])");
+    await page.waitForTimeout(800);
+    return { own, server, page };
+  }
+
+  it("says when it is holding changes that are not running", async () => {
+    const { server, page } = await editor();
+    try {
+      expect(await page.locator("#policy-dirty").isVisible(), "nothing changed yet").toBe(false);
+      await page.locator("#rule-add").click();
+      await page.waitForTimeout(500);
+      // The editor and the running policy have diverged, and the page has to say so —
+      // otherwise a reader assumes what they see is what the site is doing.
+      expect(await page.locator("#policy-dirty").isVisible(), "and now it is").toBe(true);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("throws away an unapplied edit on Revert and comes back to what is running", async () => {
+    const { own, server, page } = await editor();
+    try {
+      const running = own.policy.rules.length;
+      const before = await page.locator("#rulelist .rule, #rulelist > *").count();
+      await page.locator("#rule-add").click();
+      await page.waitForTimeout(500);
+      expect(await page.locator("#rulelist .rule, #rulelist > *").count()).toBeGreaterThan(before);
+
+      await page.locator("#policy-revert").click();
+      await page.waitForTimeout(900);
+      expect(await page.locator("#policy-dirty").isVisible(), "no longer holding anything").toBe(false);
+      expect(await page.locator("#rulelist .rule, #rulelist > *").count(), "back to what is running").toBe(before);
+      expect(own.policy.rules.length, "and the running policy never moved").toBe(running);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("refuses a rule set the server will not take, and changes nothing", async () => {
+    const { own, server, page } = await editor();
+    try {
+      const before = own.policy.ruleIds.join(",");
+      // A rule with an action that does not exist. The server validates rather than
+      // trusting the page — the page is the thing an attacker would replace.
+      await page.locator("#mode-json").click();
+      await page.locator("#policy-json").fill(JSON.stringify([{ id: "nonsense", match: {}, action: "explode" }], null, 2));
+      await page.locator("#policy-preview").click();
+      await page.waitForTimeout(1200);
+
+      const said = `${await page.locator("#policy-result").innerText()} ${await page.locator("#toasts").innerText()}`.toLowerCase();
+      await page.close();
+      expect(said, "it says what is wrong").toMatch(/explode|action|refus|invalid|not one of/);
+      expect(own.policy.ruleIds.join(","), "and the live policy is untouched").toBe(before);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("shows the rules read-only where the dashboard may not edit them", async () => {
+    const own = new BotHandler({ preset: "protect-content" });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1400, height: 980 } });
+      await page.goto(`${server.url}#policy`);
+      await page.waitForSelector("#view-policy:not([hidden])");
+      await page.waitForTimeout(800);
+
+      // The rules are still worth reading — knowing what the policy is does not require
+      // permission to change it — so this is read-only rather than absent.
+      expect((await page.locator("#view-policy").innerText()).length).toBeGreaterThan(50);
+      expect(await page.locator("#policy-mode").innerText()).toMatch(/read-only/i);
+      expect(await page.locator("#policy-apply").isVisible(), "nothing that applies").toBe(false);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("says which rules robots.txt could not be generated from", async () => {
+    // A predicate rule is a function, and no `robots.txt` can be derived from one. The
+    // file is generated from what *can* be read, and the rest is named rather than
+    // silently left out — a permissive file that quietly omitted a rule is the expensive
+    // error here.
+    const own = new BotHandler({
+      preset: "protect-content",
+      // A denying action, because `robots.txt` is generated from what a policy *refuses*:
+      // a rule that only tags denies nothing, so there is nothing for the file to say
+      // about it and nothing to report as unreadable either.
+      rules: [{ id: "by-predicate", match: (assessment) => assessment.score > 90, action: "block" }],
+    });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1400, height: 980 } });
+      await page.goto(`${server.url}#policy`);
+      await page.waitForSelector("#view-policy:not([hidden])");
+      await page.waitForTimeout(900);
+      const notes = await page.locator("#robots-notes").innerText();
+      await page.close();
+      expect(notes).toContain("by-predicate");
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
  * Who is allowed to read this page.
  *
  * The dashboard lists client addresses, the paths people asked for, and exactly which
