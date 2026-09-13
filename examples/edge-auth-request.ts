@@ -29,6 +29,14 @@
  * has no way to return a page — so a challenge is a 401 that nginx turns into a real
  * response by fetching it from here. That is the `error_page` line in the config below,
  * and without it a challenged visitor gets nginx's own error page and no way through.
+ *
+ * **And decide now what happens when this process is not running.** `auth_request` reads
+ * anything that is not a 2xx as a refusal, so a guard that has died refuses *everybody*:
+ * the bot protection takes the site down with it. That is a worse outcome than the one it
+ * exists to prevent, and it is the default unless the configuration says otherwise — which
+ * is why the block below routes 502, 503 and 504 to a location that serves the request.
+ * Failing open is a decision rather than an accident, and an operator who would rather
+ * fail closed should make that choice deliberately and alert on it.
  */
 import { createServer } from "node:http";
 import { BotHandler, createFacts } from "../src/index.js";
@@ -139,12 +147,22 @@ server.listen(PORT, () => {
       proxy_set_header  X-Bot-Verdict $verdict;
 
       error_page 401 = @challenge;
+      # A guard that is not running refuses everybody, because auth_request reads anything
+      # that is not a 2xx as a refusal — so the bot protection would take the site down
+      # with it. Fail open, deliberately, and alert on the guard being down.
+      error_page 500 502 503 504 = @served;
+
       proxy_pass http://your-application;
     }
 
     # The interstitial, which auth_request cannot return by itself.
     location @challenge {
       proxy_pass http://127.0.0.1:${PORT}/;
+    }
+
+    # Where a request goes when the guard could not answer at all.
+    location @served {
+      proxy_pass http://your-application;
     }
 `);
 });

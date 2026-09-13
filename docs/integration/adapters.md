@@ -156,9 +156,18 @@ location / {
 }
 
 location @challenge { proxy_pass http://127.0.0.1:9680/; }
+location @served    { proxy_pass http://your-application; }
 ```
 
-Three things this costs, worth knowing before building on it:
+Four things this costs, worth knowing before building on it:
+
+**Decide now what happens when the guard is not running.** `auth_request` reads anything
+that is not a 2xx as a refusal, so a guard that has died refuses *everybody* — the bot
+protection takes the site down with it, which is worse than the outcome it exists to
+prevent. That is the default unless the configuration says otherwise, which is what the
+`error_page 500 502 503 504 = @served` line above is for. Failing open should be a
+decision rather than an accident; if you would rather fail closed, choose that explicitly
+and alert on the guard being down.
 
 **The subrequest has no body.** nginx sends a GET with the headers and no content, so
 anything reading a body cannot work — the [trap form field](../detection/detectors.md)
