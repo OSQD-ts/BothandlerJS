@@ -1672,7 +1672,10 @@ describe("testing a request", () => {
     // Nothing in the feed, and nothing skipped on the way to it. `skipped` rides along
     // with the backlog so the page can tell how much of a gap it has just closed without
     // reading it off a snapshot taken seconds earlier.
-    expect(await json<{ entries: unknown[]; skipped: number }>(await fetch(base + "/api/feed"))).toEqual({ entries: [], skipped: 0 });
+    // Asserted by part rather than by whole object: the response has grown a count and a
+    // retention since, and this test is about the tester recording nothing, not about the
+    // exact set of fields `/api/feed` happens to carry.
+    expect(await json<{ entries: unknown[]; skipped: number }>(await fetch(base + "/api/feed"))).toMatchObject({ entries: [], skipped: 0 });
   });
 
   it("says what it had to invent", async () => {
@@ -2242,5 +2245,124 @@ describe("headers that hold a secret", () => {
     const body = await withHeaders(base, handler, { "x-acme-token": "guessedvalue", "x-acme-automation": "namedvalue" });
     expect(body).toContain("guessedvalue");
     expect(body).not.toContain("namedvalue");
+  });
+});
+
+/**
+ * What happened, against what is left of it.
+ *
+ * The feed's ring is bounded by a count and by an age, so on a busy origin the entries it
+ * holds are a fraction of the requests that happened. The page used to report the former
+ * as though it were the latter — "last 693 requests · 141h" was a statement about 693
+ * surviving entries wearing the clothes of a statement about 141 hours. The counts are
+ * kept separately now, and these are the tests that they mean what they say.
+ */
+describe("counting a window against paging it", () => {
+  const hit = (handler: BotHandler, path: string, at: number) =>
+    handler.handle(createFacts({ method: "GET", url: path, headers: { host: "shop.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.9", timestamp: at }));
+
+  it("counts every request, including the ones eviction has taken", async () => {
+    // A ring of four, and nine requests through it.
+    const { handler, base } = await serve({ feedLimit: 4 });
+    const t0 = Date.now() - 60_000;
+    for (let i = 0; i < 9; i++) await hit(handler, `/p/${i}`, t0 + i * 1000);
+
+    const body = await json<{ entries: unknown[]; matching: number; retained: number }>(await fetch(`${base}/api/feed?offset=0&limit=50`));
+    expect(body.retained, "the ring kept what it could").toBe(4);
+    expect(body.matching, "and nine requests happened").toBe(9);
+    expect(body.entries).toHaveLength(4);
+  });
+
+  it("pages newest first, so page zero is the page somebody wants", async () => {
+    const { handler, base } = await serve({ feedLimit: 50 });
+    const t0 = Date.now() - 60_000;
+    for (let i = 0; i < 10; i++) await hit(handler, `/p/${i}`, t0 + i * 1000);
+
+    const first = await json<FeedBody>(await fetch(`${base}/api/feed?offset=0&limit=3`));
+    expect(first.entries.map((e) => e.path)).toEqual(["/p/9", "/p/8", "/p/7"]);
+    const second = await json<FeedBody>(await fetch(`${base}/api/feed?offset=3&limit=3`));
+    expect(second.entries.map((e) => e.path)).toEqual(["/p/6", "/p/5", "/p/4"]);
+    // Past the end is empty rather than an error: a pager that overshoots by one should
+    // show nothing, not a 500.
+    const past = await json<FeedBody>(await fetch(`${base}/api/feed?offset=99&limit=3`));
+    expect(past.entries).toEqual([]);
+  });
+
+  it("counts and pages only the window it was given", async () => {
+    const { handler, base } = await serve({ feedLimit: 100 });
+    const minute = 60_000;
+    const t0 = Math.floor((Date.now() - 20 * minute) / minute) * minute;
+    for (let i = 0; i < 10; i++) await hit(handler, `/p/${i}`, t0 + i * minute);
+
+    const half = await json<{ entries: unknown[]; matching: number }>(await fetch(`${base}/api/feed?from=${t0 + 5 * minute}&offset=0&limit=50`));
+    expect(half.matching).toBe(5);
+    expect(half.entries).toHaveLength(5);
+
+    const middle = await json<{ matching: number }>(await fetch(`${base}/api/feed?from=${t0 + 2 * minute}&to=${t0 + 4 * minute}&offset=0&limit=50`));
+    expect(middle.matching).toBe(3);
+  });
+
+  it("leaves the unpaged form exactly as it was", async () => {
+    // The stream's opening replay and the "load what was skipped" button both ask for the
+    // whole backlog. Paging is opt-in, so the entries they receive are unchanged — the
+    // response has gained a count and a retention alongside them, which is additive.
+    const { handler, base } = await serve({ feedLimit: 50 });
+    for (let i = 0; i < 5; i++) await hit(handler, `/p/${i}`, Date.now() - 5000 + i);
+    const body = await json<FeedBody & { skipped: number }>(await fetch(`${base}/api/feed`));
+    expect(body.entries).toHaveLength(5);
+    expect(body.entries[0]?.path, "oldest first, as the backlog has always been").toBe("/p/0");
+    expect(body.skipped).toBe(0);
+  });
+});
+
+describe("changing how long the feed is held", () => {
+  it("refuses without the edit permission, and says which one", async () => {
+    const { base } = await serve();
+    const response = await fetch(`${base}/api/retention`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ms: 60_000 }) });
+    expect(response.status).toBe(403);
+    expect((await json<{ error: string }>(response)).error).toContain("editPolicy");
+  });
+
+  it("takes a new retention and reports it back", async () => {
+    const { base } = await serve({ controls: { editPolicy: true } });
+    const response = await fetch(`${base}/api/retention`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ms: 15 * 60_000 }) });
+    expect(response.status).toBe(200);
+    expect((await json<{ retentionMs: number }>(response)).retentionMs).toBe(15 * 60_000);
+
+    // And every other dashboard learns about it, because it rides on the snapshot rather
+    // than on the boot payload it would otherwise have been fixed in.
+    const stats = await json<{ feed: { retentionMs: number; editable: boolean } }>(await fetch(`${base}/api/stats`));
+    expect(stats.feed.retentionMs).toBe(15 * 60_000);
+    expect(stats.feed.editable).toBe(true);
+  });
+
+  it("caps a retention somebody typed, rather than believing it", async () => {
+    const { base } = await serve({ controls: { editPolicy: true } });
+    const body = await json<{ retentionMs: number; capped: boolean; maxMs: number }>(
+      await fetch(`${base}/api/retention`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ms: 365 * 24 * 60 * 60_000 }) }),
+    );
+    expect(body.capped).toBe(true);
+    expect(body.retentionMs).toBe(body.maxMs);
+  });
+
+  it("refuses something that is not a duration", async () => {
+    const { base } = await serve({ controls: { editPolicy: true } });
+    for (const ms of ["an hour", -1, null]) {
+      const response = await fetch(`${base}/api/retention`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ms }) });
+      expect(response.status, JSON.stringify(ms)).toBe(400);
+    }
+  });
+
+  it("applies a shorter retention at once rather than to future requests", async () => {
+    // "We keep nothing older than fifteen minutes" is worth nothing if it only binds
+    // requests that have not arrived yet.
+    const { handler, base } = await serve({ feedLimit: 100, controls: { editPolicy: true } });
+    const now = Date.now();
+    await handler.handle(createFacts({ method: "GET", url: "/old", headers: { host: "s", "user-agent": "curl/8.4.0" }, ip: "203.0.113.9", timestamp: now - 40 * 60_000 }));
+    await handler.handle(createFacts({ method: "GET", url: "/new", headers: { host: "s", "user-agent": "curl/8.4.0" }, ip: "203.0.113.9", timestamp: now - 60_000 }));
+
+    await fetch(`${base}/api/retention`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ms: 15 * 60_000 }) });
+    const body = await json<FeedBody>(await fetch(`${base}/api/feed`));
+    expect(body.entries.map((e) => e.path)).toEqual(["/new"]);
   });
 });

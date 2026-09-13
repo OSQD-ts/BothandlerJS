@@ -11,6 +11,7 @@ import { applyActorScope, applyActorsQuery, drawActors, initActorScope, initActo
 import { drawPolicyTab, initPolicy, loadPolicy } from "./policy.js";
 import { loadRanges } from "./ranges.js";
 import { initTester } from "./tester.js";
+import { drawRetention, initRetention } from "./retention.js";
 import type { FilterName } from "./query.js";
 import type { TabName } from "./types.js";
 
@@ -373,6 +374,7 @@ function draw(): void {
 
   if (state.tab === "live") {
     drawActor();
+    drawRetention();
     drawFeed();
     drawLivePanels();
   } else if (state.tab === "actors") {
@@ -438,6 +440,7 @@ function start(): void {
   initActorScope();
   initActorsSearch();
   initTester();
+  initRetention();
   initPolicy();
 
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;

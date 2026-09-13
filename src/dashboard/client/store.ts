@@ -2,7 +2,7 @@ import { matches as matchesFilterExpression, matchesFilter, parseFilter, searcha
 import { outcome } from "./outcome.js";
 import type { EditorRule } from "./draft.js";
 import type { Filter, FilterName } from "./query.js";
-import type { ActorRow, DashboardEntry, Policy, Row, Snapshot, TabName } from "./types.js";
+import type { ActorRow, DashboardEntry, Policy, Row, Snapshot, TabName, WindowCount } from "./types.js";
 
 /** Requests the page keeps. The server's ring is smaller; this is the ceiling, not the target. */
 const MAX_ROWS = 1000;
@@ -104,6 +104,15 @@ export interface State {
    * are *still* missing rather than how many ever were.
    */
   caughtUp: number;
+  /**
+   * What the *server* says about the window on screen: how many requests fell in it, and
+   * how many of those it still holds entries for.
+   *
+   * Distinct from `rows.length`, which is what this browser happens to be holding, and the
+   * distinction is the point — see `window-count.ts`. `undefined` until the first answer
+   * arrives, which is why every reader falls back to the local count rather than to zero.
+   */
+  window: WindowCount | undefined;
 }
 
 export const state: State = {
@@ -118,6 +127,7 @@ export const state: State = {
   actorsTracked: 0,
   actorScope: "tracked",
   actorsQuery: "",
+  window: undefined,
   actorsMatching: 0,
   paused: false,
   filter: "all",

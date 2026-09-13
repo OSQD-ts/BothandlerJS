@@ -64,6 +64,42 @@ const DEFAULT_EVENTS_PER_SECOND = 100;
  * have to think of.
  */
 const DEFAULT_FEED_TTL_MS = 60 * 60_000;
+
+/** Most entries one page of the feed may carry. A page is read, not scrolled past. */
+const MAX_FEED_PAGE = 500;
+
+/**
+ * The longest the feed may be asked to hold requests from the dashboard.
+ *
+ * A ceiling rather than a suggestion, because this is a number typed into a box by
+ * whoever can reach the page, and every retained entry holds an address, a User-Agent, a
+ * header set and an evidence list. Seven days is far past any question the live feed is
+ * good at answering — beyond a few hours the counts and the Statistics screen are the
+ * right tools — and it is short enough that a busy origin cannot be asked to hold a
+ * fortnight of traffic in memory by accident.
+ *
+ * `feedTtlMs` in the handler's own configuration is not capped by this: that is an
+ * operator writing code about their own process, which is a different act from somebody
+ * choosing a value on a web page.
+ */
+const MAX_RETENTION_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * The window a request is asking about, as absolute instants with either end open.
+ *
+ * Both ends optional, because the three questions people actually ask are "since the
+ * incident started", "up to when it stopped" and "between these two moments", and one
+ * control answers all three only if either end may be left off.
+ */
+function readWindow(url: URL): { from: number | undefined; to: number | undefined } {
+  const read = (name: string): number | undefined => {
+    const raw = url.searchParams.get(name);
+    if (raw === null || raw === "") return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : undefined;
+  };
+  return { from: read("from"), to: read("to") };
+}
 /** Actors listed on the Actors screen. More than a person reads, fewer than a registry holds. */
 const MAX_ACTORS_LISTED = 200;
 /** How long "clear as human" lasts when the page does not say. */
@@ -176,7 +212,8 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
   const allowGuardEdit = sections.guard && sections.policy && validateEditing(options.controls?.editGuard === true, auth, host ?? MOUNTED_HOST, "controls.editGuard");
   const startedAt = handler.config.clock.now();
 
-  const feed = new DashboardFeed(handler, options.feedLimit ?? 500, options.redact ?? {}, {
+  const feedCapacity = options.feedLimit ?? 500;
+  const feed = new DashboardFeed(handler, feedCapacity, options.redact ?? {}, {
     maxEventsPerSecond: options.maxEventsPerSecond ?? DEFAULT_EVENTS_PER_SECOND,
     ttlMs: options.feedTtlMs ?? DEFAULT_FEED_TTL_MS,
   });
@@ -398,7 +435,7 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
         send(response, 200, "application/json; charset=utf-8", JSON.stringify({ filters: saved.list() }));
         return;
       }
-      case "/api/feed":
+      case "/api/feed": {
         if (!sections.feed) return sectionOff(response, "feed");
         // `skipped` travels with the backlog on purpose. The page uses it to work out how
         // much of the gap it has now closed, and its own snapshot is refreshed on a timer
@@ -406,7 +443,84 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
         // ago, and a snapshot arriving afterwards with a larger count made the badge
         // reappear on a feed that had just been fully loaded. This is the count as of the
         // response that closed the gap, which is the only one that answers the question.
-        return send(response, 200, "application/json; charset=utf-8", JSON.stringify({ entries: feed.backlog().map(project), skipped: feed.skipped }));
+        const window = readWindow(url);
+        // No paging asked for means the whole backlog, which is what the stream's opening
+        // replay and the "load what was skipped" button both want. Paging is opt-in so
+        // that adding it did not change what every existing caller receives.
+        const paged = url.searchParams.has("offset") || url.searchParams.has("limit");
+        if (!paged) {
+          return send(
+            response,
+            200,
+            "application/json; charset=utf-8",
+            JSON.stringify({
+              entries: feed.backlog().map(project),
+              skipped: feed.skipped,
+              matching: feed.countIn(window.from, window.to),
+              retentionMs: feed.retentionMs,
+              countsFrom: feed.countsFrom,
+            }),
+          );
+        }
+        const page = feed.page({
+          ...window,
+          offset: Math.max(0, Math.floor(Number(url.searchParams.get("offset") ?? 0) || 0)),
+          limit: Math.max(1, Math.min(MAX_FEED_PAGE, Math.floor(Number(url.searchParams.get("limit") ?? 50) || 50))),
+        });
+        return send(
+          response,
+          200,
+          "application/json; charset=utf-8",
+          JSON.stringify({
+            entries: page.entries.map(project),
+            // What happened, and what is left of it. They differ once eviction has been
+            // through the window, and the page says so rather than quietly reporting the
+            // smaller one as though it were the answer.
+            matching: page.matching,
+            retained: page.retained,
+            oldestRetained: page.oldestRetained,
+            countsFrom: feed.countsFrom,
+            retentionMs: feed.retentionMs,
+            skipped: feed.skipped,
+          }),
+        );
+      }
+
+      case "/api/retention": {
+        if (!sections.feed) return sectionOff(response, "feed");
+        if (request.method !== "POST") {
+          sendError(response, 405, "Use POST.");
+          return;
+        }
+        // The same gate as the policy editor, and for the same reason: this is a change to
+        // what the *server* holds, for everybody looking at it, not a preference belonging
+        // to one browser.
+        if (!allowEdit) {
+          sendError(response, 403, "Changing how long the feed is kept is disabled on this dashboard. Enable it with controls: { editPolicy: true }.");
+          return;
+        }
+        const body = await readJson(request);
+        if ("error" in body) {
+          send(response, 400, "application/json; charset=utf-8", JSON.stringify({ error: body.error }));
+          return;
+        }
+        const asked = (body.value as { ms?: unknown } | null)?.ms;
+        if (typeof asked !== "number" || !Number.isFinite(asked) || asked < 0) {
+          sendError(response, 400, "Expected `ms`, a number of milliseconds to keep requests for. 0 keeps them until the capacity bound evicts them.");
+          return;
+        }
+        // Capped, because every retained entry holds an address, a User-Agent, a header
+        // set and an evidence list. A number typed into a box should not be able to ask a
+        // busy origin to hold a fortnight of those in memory.
+        const ms = Math.min(MAX_RETENTION_MS, Math.floor(asked));
+        feed.setRetention(ms, Date.now());
+        return send(
+          response,
+          200,
+          "application/json; charset=utf-8",
+          JSON.stringify({ retentionMs: feed.retentionMs, capped: ms !== Math.floor(asked), maxMs: MAX_RETENTION_MS }),
+        );
+      }
       case "/api/stream":
         if (!sections.feed) return sectionOff(response, "feed");
         return stream(request, url, response);
@@ -720,6 +834,14 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
         guardEditable: allowGuardEdit,
       },
       notices: sections.notices ? notices.list() : [],
+      feed: {
+        retentionMs: feed.retentionMs,
+        maxRetentionMs: MAX_RETENTION_MS,
+        editable: allowEdit,
+        retained: feed.size,
+        capacity: feedCapacity,
+        countsFrom: feed.countsFrom,
+      },
       instance,
       // The markers on the traffic timeline. Not gated on the policy section: a change
       // to the guard or the allowlist is a thing that happened to the traffic, and the

@@ -81,3 +81,41 @@ export interface ActorRow {
   lastSeen: number;
 }
 
+/**
+ * How many requests happened in the window on screen, as opposed to how many are on it.
+ *
+ * The feed's header used to read "last 693 requests · 141h". Both halves were true and
+ * together they said something false: 693 was the number of entries this browser was
+ * holding, and 141h was how far back the oldest of them went, so the sentence invited the
+ * reader to conclude that 693 requests had arrived in 141 hours. On a busy origin the ring
+ * evicts constantly and the real number is orders of magnitude larger.
+ *
+ * The server counts requests in minute buckets, apart from the entries and outliving them,
+ * so the total for a window is a fact it can state whether or not it still has the
+ * requests behind it. This module is what asks.
+ *
+ * ## What is knowable, and what is not
+ *
+ * Two different numbers, and keeping them apart is the whole point:
+ *
+ * - **How many requests fell in the window.** Always knowable, always exact, straight from
+ *   the counters. This is the number the header leads with.
+ * - **How many of them match the query box.** Only knowable over entries this page is
+ *   holding, because the feed's query language runs here and the server has never seen it.
+ *
+ * So a filtered count is reported as what it is — a count over what has been loaded — and
+ * never quietly presented as a count over the window. The alternative is a page that
+ * confidently reports "12 matching" when it means "12 of the 400 I happen to have".
+ */
+export interface WindowCount {
+  /** Requests in the window, from the server's counters. Exact. */
+  matching: number;
+  /** How many of those the server still holds entries for. */
+  retained: number;
+  /** The earliest instant the counters can speak for. Before it, nothing is known. */
+  countsFrom: number | undefined;
+  /** How long the server is holding entries, so the page can say so and cache to match. */
+  retentionMs: number;
+  /** When this answer was taken. */
+  at: number;
+}

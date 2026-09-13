@@ -578,6 +578,26 @@ export interface DashboardSnapshot {
     /** Whether this dashboard may change the guard. See {@link DashboardControls.editGuard}. */
     guardEditable: boolean;
   };
+  /**
+   * How the feed is bounded right now, and whether this dashboard may change it.
+   *
+   * In the snapshot rather than the boot payload because it is settable at runtime: a
+   * value carried once at start-up would go stale the moment somebody changed it, and
+   * every *other* open dashboard would go on showing the old promise.
+   */
+  feed: {
+    /** How long entries are held. 0 means only the capacity bound applies. */
+    retentionMs: number;
+    /** The ceiling the dashboard's own control is clamped to. */
+    maxRetentionMs: number;
+    /** Whether this dashboard may change it. See {@link DashboardControls.editPolicy}. */
+    editable: boolean;
+    /** How many entries the ring is holding, against how many it may. */
+    retained: number;
+    capacity: number;
+    /** The earliest instant the counts can speak for, if anything has been counted. */
+    countsFrom: number | undefined;
+  };
   /** Which process this is, and how long it has been up. See {@link DashboardOptions.instance}. */
   instance: string;
   /**

@@ -3,6 +3,7 @@ import { API, SECTIONS } from "./boot.js";
 import { app } from "./app.js";
 import { clearFeed, ingest, state, takeLabels } from "./store.js";
 import { getJson } from "./api.js";
+import { refreshWindowCount } from "./window-count.js";
 import { resetFeedCache } from "./feed.js";
 import type { DashboardEntry, Snapshot } from "./types.js";
 
@@ -100,6 +101,11 @@ export function connectStream(): void {
   source.addEventListener("stats", (event) => {
     state.snapshot = JSON.parse((event as MessageEvent<string>).data) as Snapshot;
     takeLabels(state.snapshot.labels, state.snapshot.labelSwitches);
+    // The window total rides on the same cadence as the counters, because it answers the
+    // same kind of question and because it cannot ride on the snapshot itself: the window
+    // is this viewer's, chosen in their own From/To boxes, and the server has no idea what
+    // it is. Throttled inside, so a burst of frames is still one request.
+    void refreshWindowCount();
     app.draw();
   });
 
@@ -119,6 +125,7 @@ export async function loadInitialSnapshot(): Promise<void> {
   try {
     state.snapshot = await getJson<Snapshot>("/api/stats");
     takeLabels(state.snapshot.labels, state.snapshot.labelSwitches);
+    await refreshWindowCount();
     app.drawNow();
   } catch {
     /* the stream is the primary path */

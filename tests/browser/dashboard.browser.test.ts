@@ -2918,6 +2918,249 @@ defineBotDashboard();
   });
 
   /**
+   * Everything the feed's header and window controls gained, exercised together and
+   * through the embedded element rather than the served page.
+   *
+   * Embedded is the harder of the two and the one worth testing: there is no URL to keep a
+   * view in, the storage belongs to the host page, and the element is a separate bundle
+   * from the handler. If these work here they work on the standalone page.
+   *
+   * Its own handler and its own listener, seeded once. Sharing one with the rest of the
+   * file was the first version and it was wrong twice over: the tests pile traffic on each
+   * other, and seeding *backwards* from `Date.now()` in several batches leaves the ring
+   * out of time order — which the age-based eviction reasonably assumes it never is,
+   * because requests arrive in the order they happen.
+   */
+  describe("the feed's window, counts and retention", () => {
+    const HOUR = 60 * 60_000;
+    const CREDENTIALS = { username: "ops", password: "a-long-enough-password-here" };
+    const BASIC = `Basic ${Buffer.from(`${CREDENTIALS.username}:${CREDENTIALS.password}`).toString("base64")}`;
+    const SEEDED = 40;
+    let winHandler: BotHandler;
+    let winServer: ReturnType<typeof createServer>;
+    let winUrl: string;
+
+    beforeAll(async () => {
+      winHandler = new BotHandler({ preset: "protect-content" });
+      // The dashboard first, and the traffic after it. `DashboardFeed` subscribes to the
+      // handler when it is constructed, so anything assessed before that point is simply
+      // never seen — the first version of this seeded first and spent three tests
+      // reporting an empty feed that was working exactly as designed.
+      const mounted = createDashboardHandler(winHandler, {
+        basePath: "/_bots",
+        // Authenticated rather than `auth: false`, and not for decoration: a *mounted*
+        // handler cannot see what its host server binds, so the library refuses to run the
+        // editor without authentication here. That refusal is the reason this block has
+        // credentials at all.
+        auth: CREDENTIALS,
+        controls: { editPolicy: true },
+        // Long enough that nothing is evicted before a test asks about it.
+        feedTtlMs: 24 * HOUR,
+      });
+      const now = Date.now();
+      // Oldest first, spread over three hours: in time order, as real traffic is, and
+      // wide enough that a window and a retention both have something to bite on.
+      for (let i = 0; i < SEEDED; i++) {
+        await winHandler.handle(
+          createFacts({
+            method: "GET",
+            url: `/p/${i}`,
+            headers: { host: "shop.example", "user-agent": "curl/8.4.0" },
+            ip: `203.0.113.${i % 200}`,
+            timestamp: now - 3 * HOUR + Math.floor((i / SEEDED) * (3 * HOUR)),
+          }),
+        );
+      }
+      winServer = createServer((request, response) => {
+        const path = (request.url ?? "").split("?")[0];
+        if (path === "/element.js") {
+          response.writeHead(200, { "content-type": "text/javascript" });
+          response.end(bundle);
+          return;
+        }
+        if ((request.url ?? "").startsWith("/_bots")) {
+          void mounted(request, response);
+          return;
+        }
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(
+          '<!doctype html><html lang="en"><body><bot-dashboard id="d" src="/_bots"></bot-dashboard>' +
+            '<script type="module">import { defineBotDashboard } from "/element.js"; defineBotDashboard();</script></body></html>',
+        );
+      });
+      await new Promise<void>((resolve) => winServer.listen(0, "127.0.0.1", () => resolve()));
+      winUrl = `http://127.0.0.1:${(winServer.address() as { port: number }).port}/`;
+    });
+
+    afterAll(() => winServer?.close());
+
+    async function open(): Promise<Page> {
+      const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, httpCredentials: CREDENTIALS });
+      await page.goto(winUrl);
+      await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector("#rows") != null, undefined, { timeout: 15_000 });
+      // Waited for by *shape*, not merely for non-empty text. Before the server's count
+      // arrives the header honestly reads "0 loaded" — it says what it is counting — and a
+      // wait for "something is written there" is satisfied by that, so the assertions ran
+      // against the fallback and read zero. This waits for the server-backed form.
+      await page.waitForFunction(
+        () => /\d[\d,]* requests/.test((document.getElementById("d") as HTMLElement).shadowRoot?.getElementById("feed-count")?.textContent ?? ""),
+        undefined,
+        { timeout: 15_000 },
+      );
+      return page;
+    }
+
+    const countText = (page: Page) =>
+      page.evaluate(() => (document.getElementById("d") as HTMLElement).shadowRoot?.getElementById("feed-count")?.textContent ?? "");
+    const numberIn = (text: string): number => Number((text.match(/([\d,]+)/)?.[1] ?? "0").replace(/,/g, ""));
+
+    it("shows the full date and time on every row, not just the time", async () => {
+      const page = await open();
+      const when = await page.evaluate(() => {
+        const cell = (document.getElementById("d") as HTMLElement).shadowRoot?.querySelector("tbody td.when");
+        return {
+          date: cell?.querySelector(".when-date")?.textContent ?? "",
+          time: cell?.querySelector(".when-time")?.textContent ?? "",
+          title: cell?.getAttribute("title") ?? "",
+        };
+      });
+      await page.close();
+
+      // A feed retaining hours cannot be read as "today" without thinking about it, and
+      // "09:14:02" on a row from last Tuesday is the kind of wrong nobody catches.
+      expect(when.date, "DD-MM-YYYY").toMatch(/^\d{2}-\d{2}-\d{4}$/);
+      expect(when.time, "HH:MM:SS").toMatch(/^\d{2}:\d{2}:\d{2}$/);
+      expect(when.title).toBe(`${when.date} ${when.time}`);
+    });
+
+    it("leads with how many requests happened, from the server's counters", async () => {
+      const page = await open();
+      const text = await countText(page);
+      const title = await page.evaluate(() => (document.getElementById("d") as HTMLElement).shadowRoot?.getElementById("feed-count")?.getAttribute("title") ?? "");
+      await page.close();
+
+      // The header used to lead with the number of rows this browser was holding, wearing
+      // the clothes of a statement about the window.
+      expect(text).toMatch(/\d[\d,]* requests/);
+      expect(numberIn(text)).toBe(SEEDED);
+      expect(title).toMatch(/happened in this window/);
+    });
+
+    it("narrows the count to a window somebody typed", async () => {
+      const page = await open();
+      const before = numberIn(await countText(page));
+
+      // An hour back, against three hours of seeded traffic.
+      const from = new Date(Date.now() - HOUR);
+      const local = new Date(from.getTime() - from.getTimezoneOffset() * 60_000).toISOString().slice(0, 19);
+      await page.evaluate((value) => {
+        const input = (document.getElementById("d") as HTMLElement).shadowRoot?.getElementById("from-at") as HTMLInputElement;
+        input.value = value;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }, local);
+      await page.waitForTimeout(1500);
+      const after = numberIn(await countText(page));
+      await page.close();
+
+      expect(before).toBe(SEEDED);
+      expect(after, "the window selects a strict subset").toBeLessThan(before);
+      expect(after).toBeGreaterThan(0);
+    });
+
+    it("offers the retention control only where the dashboard may change it", async () => {
+      const page = await open();
+      const editable = await page.evaluate(() => {
+        const shadow = (document.getElementById("d") as HTMLElement).shadowRoot as ShadowRoot;
+        return { hidden: shadow.getElementById("retention")?.hidden ?? true, options: Array.from(shadow.querySelectorAll("#retention-pick option")).map((o) => o.textContent) };
+      });
+      await page.close();
+      expect(editable.hidden, "the editable listener offers it").toBe(false);
+      expect(editable.options).toContain("15 minutes");
+      expect(editable.options).toContain("7 days");
+
+      // A dashboard that may not edit hides it rather than offering a control whose only
+      // possible outcome is a refusal.
+      const readOnly = await openEmbed();
+      const hidden = await readOnly.evaluate(() => (document.getElementById("d") as HTMLElement).shadowRoot?.getElementById("retention")?.hidden ?? null);
+      await readOnly.close();
+      expect(hidden).toBe(true);
+    });
+
+    it("changes how long the server keeps requests, for everybody", async () => {
+      const page = await open();
+      const posts: string[] = [];
+      page.on("response", (response) => {
+        if (response.request().method() === "POST") posts.push(`${response.status()} ${new URL(response.url()).pathname}`);
+      });
+
+      await page.evaluate(() => {
+        const pick = (document.getElementById("d") as HTMLElement).shadowRoot?.getElementById("retention-pick") as HTMLSelectElement;
+        pick.value = String(60 * 60_000);
+        pick.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      // Waited for the number to actually move rather than for a fixed delay: under a
+      // loaded machine two seconds is sometimes not the round trip plus the redraw.
+      await page.waitForFunction(
+        (seeded) => {
+          const text = (document.getElementById("d") as HTMLElement).shadowRoot?.getElementById("feed-count")?.textContent ?? "";
+          const value = Number((text.match(/([\d,]+)/)?.[1] ?? "0").replace(/,/g, ""));
+          return /\d[\d,]* requests/.test(text) && value < seeded;
+        },
+        SEEDED,
+        { timeout: 15_000 },
+      );
+      const shown = numberIn(await countText(page));
+      await page.close();
+
+      expect(posts.join(" "), "it reached the server").toContain("200 /_bots/api/retention");
+      const stats = (await (await fetch(`${winUrl}_bots/api/stats`, { headers: { authorization: BASIC } })).json()) as { feed: { retentionMs: number } };
+      expect(stats.feed.retentionMs, "the server is what changed, not one browser").toBe(60 * 60_000);
+
+      // A shorter promise binds requests that already arrived, not only future ones.
+      const feed = (await (await fetch(`${winUrl}_bots/api/feed`, { headers: { authorization: BASIC } })).json()) as { entries: Array<{ at: number }>; matching: number };
+      for (const entry of feed.entries) expect(Date.now() - entry.at).toBeLessThanOrEqual(70 * 60_000);
+      // And the count followed it down: three hours of traffic, one hour of retention.
+      expect(shown).toBeLessThan(SEEDED);
+      expect(feed.matching).toBeLessThan(SEEDED);
+    });
+
+    /**
+     * Counts are cached in this browser; request data never is.
+     *
+     * Embedded, *neither* is: the storage belongs to the host page and writing somebody
+     * else's origin is not this element's to do — the same rule saved filters already
+     * follow. So the caching is asserted on the served page, where the origin is ours, and
+     * the embedded case is asserted to leave the host page's storage alone.
+     */
+    it("remembers window counts on the served page, and only counts", async () => {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      await page.goto(url);
+      await page.waitForFunction(() => document.getElementById("rows") != null, undefined, { timeout: 15_000 });
+      await page.waitForTimeout(1500);
+      const stored = await page.evaluate(() => localStorage.getItem("bothandler.window-counts"));
+      await page.close();
+
+      expect(stored, "the count for a window survives a reload").not.toBeNull();
+      const parsed = JSON.parse(stored ?? "[]") as Array<Record<string, unknown>>;
+      expect(parsed.length).toBeGreaterThan(0);
+      // Numbers and window keys only. Entries carry addresses, User-Agents and headers,
+      // and writing those to disk would put request data at rest on the operator's
+      // machine, outliving the session that was allowed to see it.
+      expect(Object.keys(parsed[0] as object).sort()).toEqual(["at", "expiresAt", "key", "matching"]);
+      expect(stored).not.toMatch(/curl|Mozilla|user-agent/i);
+    });
+
+    it("writes nothing to the host page's storage when embedded", async () => {
+      const page = await open();
+      await page.waitForTimeout(1500);
+      const keys = await page.evaluate(() => Object.keys(localStorage));
+      await page.close();
+      expect(keys, "the storage belongs to the page around us").not.toContain("bothandler.window-counts");
+    });
+  });
+
+  /**
    * The whole point of `controls.editPolicy`, exercised through the element rather than
    * assumed to survive the move. The write path is guarded by a same-origin check that
    * reads `Sec-Fetch-Site`, and embedded the request now originates from the host page —

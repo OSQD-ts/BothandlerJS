@@ -1,4 +1,5 @@
 import { isSecretHeader } from "../notify/redact.js";
+import { FeedCounts } from "./counts.js";
 import { maskAddresses, networkKey } from "../internal/ip.js";
 import type { BotHandler } from "../core.js";
 import type { DashboardChange, DashboardEntry, DashboardNotice, DashboardRedaction } from "./types.js";
@@ -85,7 +86,16 @@ export class DashboardFeed {
    * "We keep the last five hundred requests" is a capacity statement; "we keep nothing
    * older than an hour" is a promise you can make to a person.
    */
-  private readonly ttlMs: number;
+  private ttlMs: number;
+  /**
+   * How many requests happened, kept apart from the requests themselves.
+   *
+   * The ring answers "which requests do I still have"; this answers "how many were
+   * there". They used to be the same number and they are not the same question — see
+   * `counts.ts`. Minute buckets, so the second one stays exact over a window far longer
+   * than the entries survive.
+   */
+  private readonly counts: FeedCounts;
   private windowStart = 0;
   private publishedThisSecond = 0;
   private skippedTotal = 0;
@@ -97,6 +107,7 @@ export class DashboardFeed {
     this.limit = Math.max(1, Math.min(MAX_FEED_LIMIT, Math.floor(limit)));
     this.maxPerSecond = Math.max(0, Math.floor(limits.maxEventsPerSecond));
     this.ttlMs = Math.max(0, Math.floor(limits.ttlMs));
+    this.counts = new FeedCounts(this.ttlMs);
     this.maskIp = redact.maskIp === true;
     // The configured names, plus the service-token header — which is a secret by
     // construction rather than by being remembered. A deployment that sets `serviceTokens`
@@ -122,6 +133,70 @@ export class DashboardFeed {
     return this.entries;
   }
 
+  /** How long entries are held. See {@link DashboardOptions.feedTtlMs}. */
+  get retentionMs(): number {
+    return this.ttlMs;
+  }
+
+  /**
+   * Changes how long entries are held, at runtime.
+   *
+   * Lowering it takes effect at once — the promise "nothing older than an hour" is worth
+   * nothing if it only applies to requests that have not arrived yet — so the ring is
+   * pruned here rather than on the next request. Raising it cannot bring anything back:
+   * what was evicted is gone, and the counts are what still speak for that stretch.
+   */
+  setRetention(ms: number, now: number): void {
+    this.ttlMs = Math.max(0, Math.floor(ms));
+    this.counts.setRetention(this.ttlMs, now);
+    this.prune(now);
+  }
+
+  /**
+   * How many requests happened in a window, whether or not their entries survive.
+   *
+   * This is the number the page puts on screen, and it is deliberately not
+   * `page().entries.length`: one is what happened and the other is what is left, and
+   * conflating them is what made "last 693 requests · 141h" mean neither.
+   */
+  countIn(from: number | undefined, to: number | undefined): number {
+    return this.counts.count(from, to);
+  }
+
+  /** The earliest instant the counts can speak for. Before this, the answer is unknown. */
+  get countsFrom(): number | undefined {
+    return this.counts.oldest;
+  }
+
+  /**
+   * One page of entries from a window, newest first.
+   *
+   * Newest first because that is the order the feed is read in, and because page zero
+   * should be the page somebody wants. `retained` is how many entries this window can
+   * still produce — always at most `matching`, and less once eviction has been through.
+   * The gap between the two is not an error to hide: it is the page's way of saying that
+   * the older end of this window is a count rather than a list.
+   */
+  page(options: { from?: number | undefined; to?: number | undefined; offset?: number; limit?: number }): {
+    entries: DashboardEntry[];
+    matching: number;
+    retained: number;
+    oldestRetained: number | undefined;
+  } {
+    const { from, to } = options;
+    const within = this.entries.filter((entry) => (from === undefined || entry.at >= from) && (to === undefined || entry.at <= to));
+    const offset = Math.max(0, Math.floor(options.offset ?? 0));
+    const limit = Math.max(1, Math.min(MAX_FEED_LIMIT, Math.floor(options.limit ?? 50)));
+    // Reversed before slicing, so offset 0 is the newest rather than the oldest.
+    const newestFirst = [...within].reverse();
+    return {
+      entries: newestFirst.slice(offset, offset + limit),
+      matching: this.counts.count(from, to),
+      retained: within.length,
+      oldestRetained: within[0]?.at,
+    };
+  }
+
   /**
    * Drops everything older than the TTL.
    *
@@ -130,6 +205,7 @@ export class DashboardFeed {
    * a busy one evicts by count long before anything reaches this age.
    */
   prune(now: number): number {
+    this.counts.prune(now);
     if (this.ttlMs === 0) return 0;
     const cutoff = now - this.ttlMs;
     let expired = 0;
@@ -194,6 +270,7 @@ export class DashboardFeed {
 
   clear(): void {
     this.entries.length = 0;
+    this.counts.clear();
     this.pending.clear();
     this.frames.clear();
     this.sequence = 0;
@@ -214,6 +291,11 @@ export class DashboardFeed {
 
   private record(assessment: Assessment): void {
     if (this.closed) return;
+
+    // Counted first, and unconditionally. Everything below this line may drop the entry
+    // — the capacity bound, the age bound, the stream's rate cap — and none of them are
+    // reasons for the request not to have happened.
+    this.counts.record(assessment.facts.timestamp);
 
     this.prune(assessment.facts.timestamp);
     const entry = this.entryFor(assessment, ++this.sequence);

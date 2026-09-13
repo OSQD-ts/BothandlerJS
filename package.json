@@ -94,6 +94,7 @@
     "docs:check": "node scripts/check-links.mjs",
     "format": "biome check --write .",
     "demo": "tsx demo/server.ts",
+    "demo:embedded": "tsx demo/embedded.ts",
     "demo:roles": "tsx demo/roles.ts",
     "simulate": "tsx scripts/simulate.ts",
     "simulate:corpus": "tsx scripts/simulate.ts --corpus",

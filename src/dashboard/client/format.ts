@@ -79,3 +79,45 @@ export function windowLabel(count: number, oldestAt: number | undefined, now: nu
   const span = oldestAt === undefined ? 0 : Math.max(0, now - oldestAt);
   return `last ${n(count)} requests · ${rangeLabel(span)}`;
 }
+
+/**
+ * What the feed's header says, now that the count and the entries are different things.
+ *
+ * It used to read "last 693 requests · 141h", where 693 was how many entries this browser
+ * was holding and 141h was how far back the oldest of them reached. Both true, and
+ * together an invitation to conclude that 693 requests had arrived in 141 hours — which on
+ * any busy origin is wrong by orders of magnitude, because the ring had been evicting the
+ * whole time.
+ *
+ * So the window total leads, and it comes from the server's counters rather than from this
+ * page's rows. The other two numbers appear only when they say something the first does
+ * not: how many match the query box, and how many entries are actually held. A filtered
+ * count is always described as a count over what is loaded, because that is what it is —
+ * the query language runs in this browser and the server has never seen it.
+ */
+export function feedCountLabel(input: { total: number | undefined; loaded: number; matching: number; filtered: boolean }): { text: string; title: string } {
+  const { loaded, matching, filtered } = input;
+  // No answer from the server yet. Fall back to what this page can see, and say that is
+  // what it is rather than passing it off as the window.
+  if (input.total === undefined) {
+    return filtered
+      ? { text: `${n(matching)} of ${n(loaded)} loaded`, title: "Counting what this page has loaded. The window total has not arrived from the server yet." }
+      : { text: `${n(loaded)} loaded`, title: "Counting what this page has loaded. The window total has not arrived from the server yet." };
+  }
+  const total = input.total;
+  const partial = loaded < total;
+  if (!filtered) {
+    return {
+      text: partial ? `${n(total)} requests · ${n(loaded)} loaded` : `${n(total)} requests`,
+      title: partial
+        ? `${n(total)} requests happened in this window. ${n(loaded)} of them are on this page; the rest are fetched as you page through them, and some may be past the retention and gone.`
+        : `${n(total)} requests happened in this window, and all of them are on this page.`,
+    };
+  }
+  return {
+    text: partial ? `${n(matching)} of ${n(loaded)} loaded · ${n(total)} in window` : `${n(matching)} of ${n(total)}`,
+    title: partial
+      ? `Your filter matches ${n(matching)} of the ${n(loaded)} requests this page has loaded. ${n(total)} requests happened in the window; the filter runs in this browser, so it can only speak for what has been loaded.`
+      : `Your filter matches ${n(matching)} of the ${n(total)} requests in this window, all of which are loaded.`,
+  };
+}

@@ -361,6 +361,11 @@ button.tile:hover { border-color: var(--focus); }
    "everything up to when it stopped" and "between these two moments" are the same control
    with one end left empty. */
 .timeframe { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); }
+/* Set apart from the window boxes beside it, because it is a different kind of control:
+   From/To narrow what this reader is looking at, this changes what the server keeps for
+   everybody. */
+.retention { border-left: 1px solid var(--line); padding-left: 10px; }
+.retention select { font-size: 11.5px; }
 .timeframe label { display: inline-flex; align-items: center; gap: 4px; }
 .timeframe input {
   font: inherit; font-size: 11.5px; padding: 2px 5px; border-radius: 6px;
@@ -550,6 +555,10 @@ tbody td { padding: 7px 14px; border-bottom: 1px solid var(--line-soft); vertica
 /* Narrow, quiet, and never the reason a row wraps: the time is for scanning down, not
    for reading across. */
 tbody td.when { color: var(--muted); font-size: 11.5px; white-space: nowrap; width: 1%; padding-right: 4px; }
+/* Date above time rather than beside it: the column is the narrowest on the table and a
+   single line of "13-09-2026 09:14:02" pushes the path column into wrapping. */
+tbody td.when .when-date { display: block; opacity: 0.72; }
+tbody td.when .when-time { display: block; }
 tbody tr.row { cursor: pointer; }
 tbody tr.row:hover { background: color-mix(in srgb, var(--ink) 3.5%, transparent); }
 tbody tr.row.open { background: color-mix(in srgb, var(--s1) 7%, transparent); }
@@ -994,6 +1003,10 @@ export const DASHBOARD_MARKUP = String.raw`
             <label>From <input type="datetime-local" id="from-at" step="1"></label>
             <label>To <input type="datetime-local" id="to-at" step="1"></label>
             <button type="button" id="timeframe-clear" hidden>Clear</button>
+          </div>
+          <div class="timeframe retention" id="retention" hidden>
+            <label for="retention-pick">Keep</label>
+            <select id="retention-pick"></select>
           </div>
           <button id="feed-export" title="Download every request matching this filter as replay JSONL">Export</button>
           <div class="pager pager-inline" id="feed-pager-top" hidden></div>

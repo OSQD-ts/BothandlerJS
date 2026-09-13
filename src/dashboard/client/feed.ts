@@ -3,10 +3,11 @@ import { feedPage, goToFeedPage, hiddenCount, ingest, labelOf, matchingCount, ma
 import { deleteFilter, refreshSavedFilters, saveFilter, savedFilters } from "./saved.js";
 import { suggestFor } from "./query.js";
 import { getJson } from "./api.js";
+import { fetchFeedPage, refreshWindowCount } from "./window-count.js";
 import { renderPager } from "./pager.js";
 import { SECTIONS } from "./boot.js";
 import { app, download, today, toast } from "./app.js";
-import { clockTime, n } from "./format.js";
+import { clockDate, clockStamp, clockTime, feedCountLabel, n } from "./format.js";
 import { corpusCase, replayFile, replayLine } from "./replay.js";
 import { openActor } from "./actor.js";
 import { outcome, verdictBadge } from "./outcome.js";
@@ -423,6 +424,11 @@ function initTimeframe(): void {
     }
     setTimeframe(start, end);
     clearButton.hidden = start === undefined && end === undefined;
+    // A new window is a new question, so the count is asked again immediately rather than
+    // on the next counters frame — otherwise the header goes on stating the old window's
+    // total for up to two seconds after the reader changed it, which is exactly long
+    // enough to be read and believed.
+    void refreshWindowCount({ force: true }).then(() => app.drawNow());
     app.drawNow();
   };
 
@@ -453,6 +459,35 @@ const FEED_PAGE_SIZES = [25, 50, 100, 200] as const;
  * furniture — and with it the size chooser goes too, which is the one thing lost by that
  * rule and not worth a permanent row of chrome to keep.
  */
+/**
+ * Loads a page of the feed this browser is not holding.
+ *
+ * The page keeps a bounded ring of its own — a thousand rows — and the server's can be
+ * five times that, so with a long retention there are pages the pager can *name* from the
+ * window total but has never been sent. Fetching them on demand is what makes the pager's
+ * page count something you can act on rather than an advertisement.
+ *
+ * Merged through `ingest`, so an entry already held is refreshed rather than duplicated,
+ * and nothing is fetched twice: the guard below is on what is loaded rather than on what
+ * was requested, which is the version that survives a filter being changed underneath it.
+ */
+async function ensureFeedPage(page: number, size: number): Promise<void> {
+  if (page === 0) return;
+  // Only when the page genuinely reaches past what is held. A filtered view pages over
+  // rows this browser already has, and fetching for it would ask the server questions
+  // about a query it has never seen.
+  const held = state.feedFrozen?.length ?? state.rows.length;
+  if ((page + 1) * size <= held) return;
+  try {
+    const entries = await fetchFeedPage(page, size);
+    for (const entry of entries) ingest(entry);
+    sortRows();
+  } catch {
+    // The count stays true and the table stays as it was. A failed fetch here is worth
+    // less noise than a toast on every click of a pager somebody is holding down.
+  }
+}
+
 function drawPager(paged: { page: number; pages: number; total: number }): void {
   const size = state.feedPageSize;
   const hidden = paged.pages <= 1;
@@ -466,6 +501,11 @@ function drawPager(paged: { page: number; pages: number; total: number }): void 
     ...(paged.page > 0 ? { held: "held while you read" } : {}),
     go: (page: number): void => {
       goToFeedPage(page);
+      // Pages past what this browser holds are fetched rather than shown empty. The
+      // server's ring can be several times the size of the page's, and the window total
+      // already told the pager those pages exist — so a reader who clicks through to one
+      // should get the requests, not a blank table under a truthful page number.
+      void ensureFeedPage(page, size).then(() => app.drawNow());
       app.drawNow();
     },
     size: {
@@ -548,7 +588,20 @@ export function drawFeed(): void {
   $("empty").hidden = total > 0;
   // No "showing 300" any more: the pager reaches the rest, so the count says what is in
   // the window and the pager says where in it you are.
-  $("feed-count").textContent = matching === total ? `${n(total)} in this window` : `${n(matching)} of ${n(total)}`;
+  //
+  // The window total comes from the server, which counts requests in minute buckets apart
+  // from the entries, so it is exact whether or not the entries behind it survive. What
+  // this page can count for itself — how many of its loaded rows match the query box — is
+  // reported as exactly that. See `feedCountLabel`.
+  const label = feedCountLabel({
+    total: state.window?.matching,
+    loaded: total,
+    matching,
+    filtered: matching !== total,
+  });
+  const count = $("feed-count");
+  count.textContent = label.text;
+  count.title = label.title;
   drawPager(paged);
   // Redrawn with the feed rather than once at start-up: its whole message is a count of
   // what is being hidden *now*, and drawn once it said "hiding 0 of 0" for the rest of
@@ -600,7 +653,16 @@ function buildRow(entry: DashboardEntry, open: boolean): HTMLTableRowElement {
 
   // When it happened, which the feed never used to say. Ordering implies it while the
   // stream is live and stops implying it the moment you type into the filter box.
-  tr.appendChild(el("td", "num mono tnum when", clockTime(entry.at)));
+  //
+  // The full date as well as the time. A feed that retains an hour can be read as "today"
+  // without thinking about it; one retaining a week cannot, and "09:14:02" on a row from
+  // last Tuesday is the kind of wrong that nobody catches because it looks right. The
+  // date is in its own element so the stylesheet can drop it on a narrow screen, where
+  // the column has no room and the rows are all recent anyway.
+  const when = el("td", "num mono tnum when");
+  when.append(el("span", "when-date", clockDate(entry.at)), el("span", "when-time", clockTime(entry.at)));
+  when.title = clockStamp(entry.at);
+  tr.appendChild(when);
 
   const request = el("td", "edge req");
   // The row's one control. It carries the name, the state and the keys; the row itself
@@ -796,7 +858,7 @@ function buildDetail(entry: DashboardEntry): HTMLTableRowElement {
   cell.appendChild(tools);
 
   const foot = el("div", "detail-foot");
-  foot.appendChild(el("span", null, clockTime(entry.at)));
+  foot.appendChild(el("span", null, clockStamp(entry.at)));
   // Both, here. The row above shows the name; this is where somebody comes to find out
   // what the name stands for, and which key a rule would have to name to reach it.
   const named = labelOf(entry.actor);
