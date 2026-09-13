@@ -410,7 +410,15 @@ describe("the toolbar", () => {
   });
 
   it("copies a request as a replay line and as a corpus case", async () => {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, permissions: ["clipboard-read", "clipboard-write"] });
+    // Reading the clipboard needs a permission only Chromium has a name for, so elsewhere
+    // the assertion is on what the page does rather than on where the text landed. The
+    // button changing to "Copied" is the whole of the feedback a copy can give, and it is
+    // the half that is the same everywhere.
+    const readable = ENGINE_NAME === "chromium";
+    const context = await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+      ...(readable ? { permissions: ["clipboard-read", "clipboard-write"] } : {}),
+    });
     const page = await context.newPage();
     await page.goto(url);
     await page.waitForSelector("tbody tr.row");
@@ -423,11 +431,13 @@ describe("the toolbar", () => {
     ] as const) {
       await page.locator("tr.detail button", { hasText: label }).first().click();
       await page.waitForTimeout(400);
-      const copied = await page.evaluate(() => navigator.clipboard.readText());
-      expect(copied.length, label).toBeGreaterThan(10);
-      check(copied);
+      if (readable) {
+        const copied = await page.evaluate(() => navigator.clipboard.readText());
+        expect(copied.length, label).toBeGreaterThan(10);
+        check(copied);
+      }
       // The button says so, which is the only feedback a copy can give.
-      expect(await page.locator("tr.detail button", { hasText: /^Copied$/ }).count()).toBeGreaterThan(0);
+      expect(await page.locator("tr.detail button", { hasText: /^Copied$/ }).count(), label).toBeGreaterThan(0);
       await page.waitForTimeout(1300);
     }
     await context.close();
@@ -1168,15 +1178,22 @@ describe("getting in", () => {
       // With credentials the page works, and every fetch it makes carries them without
       // anything in the client having to know.
       const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, httpCredentials: CREDENTIALS });
-      const failures: number[] = [];
+      // Tracked by path rather than by count. Engines differ on whether they send
+      // credentials pre-emptively — Firefox asks once, is refused, and retries with them,
+      // which is the prompt mechanism working rather than a request being denied. What
+      // has to be true everywhere is that nothing stayed refused.
+      const refused = new Set<string>();
+      const served = new Set<string>();
       page.on("response", (response) => {
-        if (response.status() === 401) failures.push(response.status());
+        const path = new URL(response.url()).pathname;
+        if (response.status() === 401) refused.add(path);
+        else if (response.ok()) served.add(path);
       });
       await page.goto(server.url);
       await page.waitForSelector("tbody tr.row");
       await page.waitForTimeout(900);
       expect(await page.locator("tbody tr.row").count()).toBeGreaterThan(0);
-      expect(failures, "nothing the page asked for was refused").toEqual([]);
+      for (const path of refused) expect(served, `${path} was refused and never served`).toContain(path);
       await page.close();
     } finally {
       await server.close();
