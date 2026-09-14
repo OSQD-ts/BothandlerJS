@@ -34,6 +34,23 @@ export function drawTiles(force = false): void {
   if (!force && paintedSnapshot === snapshot) return;
   paintedSnapshot = snapshot;
 
+  // Which tile the keyboard is on, so it can be given back afterwards.
+  //
+  // These are rebuilt on every counters frame, about every two seconds, and rebuilding
+  // the node somebody has tabbed to drops focus to the body. For a keyboard user that
+  // makes the tiles unusable: tab to "Actors tracked", wait two seconds, and the Enter
+  // that was about to open the screen goes nowhere instead. The page already refuses to
+  // repaint over a half-typed name for the same reason — see `holdsTextEntry` — but a
+  // pressable tile is not text entry, and skipping the repaint would freeze the counts
+  // for as long as somebody leaves the focus there. So it repaints and hands focus back.
+  //
+  // Matched on the caption rather than on position: the set of tiles is fixed, but the
+  // caption is what a reader is actually on, and an index would follow the layout rather
+  // than the thing.
+  const focused = (rootNode() as Document | ShadowRoot).activeElement;
+  const hadFocus = focused !== null && box.contains(focused) ? (focused.querySelector(".k")?.textContent ?? "") : undefined;
+  let restore: HTMLElement | undefined;
+
   const metrics = snapshot.metrics;
   clear(box);
   if (metrics === undefined) {
@@ -74,6 +91,7 @@ export function drawTiles(force = false): void {
     ["good", n(served), "Served", `${pct(served, total)} of traffic`, undefined],
     ["", n(metrics.actorsTracked), "Actors tracked", "in the registry now", actors],
   ];
+
   for (const [kind, value, key, sub, goes] of tiles) {
     // A real button where it navigates, so it is in the tab order, answers Enter and
     // Space, and is announced as something to press — none of which a div with a click
@@ -90,7 +108,9 @@ export function drawTiles(force = false): void {
       tile.addEventListener("click", () => app.showTab(goes.tab, { replace: false }));
     }
     box.appendChild(tile);
+    if (hadFocus !== undefined && hadFocus === key && goes !== undefined) restore = tile as HTMLElement;
   }
+  restore?.focus();
 }
 
 /**

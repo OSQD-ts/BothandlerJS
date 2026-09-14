@@ -142,6 +142,13 @@ describe("moving between views", () => {
     await expect.poll(() => page.locator("#tab-actors").getAttribute("aria-selected")).toBe("true");
     await expect.poll(() => page.locator("#view-actors").isVisible()).toBe(true);
 
+    // Focus survives the counters frame that rebuilds these every two seconds. Without
+    // that, a keyboard user tabs to a tile, the page repaints, and the Enter that was
+    // about to open the screen goes to the body instead.
+    await tile.focus();
+    await page.waitForTimeout(2600);
+    expect(await tile.evaluate((node) => document.activeElement === node), "focus survives a repaint").toBe(true);
+
     // And from the keyboard, which is the half a div would have lost.
     await page.locator("#tab-live").click();
     await expect.poll(() => page.locator("#view-actors").isVisible()).toBe(false);
@@ -2090,6 +2097,11 @@ describe("the live connection", () => {
       await own.handle(createFacts({ method: "GET", url: "/a", headers: { host: "a.example", "user-agent": "curl/8.4.0" }, ip: "203.0.113.71" }));
       const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
       await page.goto(base);
+      // A row, not merely a live connection. "live" says the stream opened; the backlog it
+      // replays arrives after that, and on a slow machine the server was being closed in
+      // between — so the assertion below, that rows survive a disconnect, was being made
+      // against a feed that had never drawn one.
+      await page.waitForSelector("tbody tr.row", { timeout: 15_000 });
       await page.waitForFunction(() => (document.getElementById("conn")?.textContent ?? "") === "live", undefined, { timeout: 15_000 });
 
       await server.close();
@@ -4953,7 +4965,15 @@ defineBotDashboard();
     async function open(): Promise<Page> {
       const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, httpCredentials: CREDENTIALS });
       await page.goto(winUrl);
-      await page.waitForFunction(() => (document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelector("#rows") != null, undefined, { timeout: 15_000 });
+      // A row inside the table, not the table. `#rows` is a `<tbody>` that ships with the
+      // markup, so waiting for it to exist waits for nothing — and the count below can
+      // arrive before a single row is drawn, which left the date-and-time assertion
+      // reading an empty cell on the slowest of the three engines.
+      await page.waitForFunction(
+        () => ((document.getElementById("d") as HTMLElement | null)?.shadowRoot?.querySelectorAll("tbody tr.row").length ?? 0) > 0,
+        undefined,
+        { timeout: 20_000 },
+      );
       // Waited for by *shape*, not merely for non-empty text. Before the server's count
       // arrives the header honestly reads "0 loaded" — it says what it is counting — and a
       // wait for "something is written there" is satisfied by that, so the assertions ran
