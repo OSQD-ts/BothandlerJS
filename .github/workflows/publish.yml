@@ -198,13 +198,31 @@ jobs:
           version="${{ steps.version.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
+          # The generated version constant as well as the manifest. The build regenerates
+          # it from the version just set, and leaving it out of the commit left the tree
+          # dirty — which is harmless until a push is refused, and then `git pull --rebase`
+          # refuses to run at all. 0.11.1 was stranded exactly that way: published, then
+          # killed on the first retry, with no release commit and no tag.
+          git add package.json package-lock.json src/version.generated.ts
           git commit -m "release: $version [skip ci]"
+          # Anything else the build touched is not part of a release commit, and must not be
+          # what stops one landing either.
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "::warning::the build changed tracked files outside the release commit; setting them aside:"
+            git status --short --untracked-files=no
+            git stash push --quiet
+          fi
           landed=no
           for attempt in 1 2 3 4 5; do
             if git push; then landed=yes; break; fi
             echo "::warning::push $attempt was refused; replaying the release commit on top of main"
-            git pull --rebase
+            # Not allowed to end the step. The shell runs with -e, so a failed rebase used to
+            # exit on the spot and the message below — the one that says what to do — was
+            # never printed.
+            if ! git pull --rebase; then
+              git rebase --abort 2>/dev/null || true
+              echo "::warning::could not replay the release commit on attempt $attempt"
+            fi
           done
           if [ "$landed" != yes ]; then
             echo "::error::$version is published, but its release commit could not be pushed. Push it and tag it v$version by hand: the next release is derived from that tag."
