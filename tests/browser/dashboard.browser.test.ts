@@ -2296,15 +2296,22 @@ describe("the feed without a mouse", () => {
     const page = await open();
     const first = page.locator("tbody tr.row .row-toggle").first();
     await first.focus();
-    expect(await first.getAttribute("aria-expanded")).toBe("false");
+    // Pinned by request id rather than by position. The claim is about *the row that was
+    // opened*, and "whichever row is first afterwards" is only the same row if nothing
+    // redraws in between — which on CI's slowest engine it sometimes did, so the test read
+    // a neighbour's toggle and reported the open row as closed.
+    const request = await first.getAttribute("data-request");
+    expect(request).toBeTruthy();
+    const opened = page.locator(`tbody tr.row .row-toggle[data-request="${request}"]`);
+    expect(await opened.getAttribute("aria-expanded")).toBe("false");
 
     await page.keyboard.press("Enter");
     await expect.poll(() => page.locator("tr.detail").count()).toBe(1);
     // The row is a new node after the redraw; focus has to survive it or a keyboard
     // user is dumped back at the top of the document on every open.
-    expect(await page.evaluate(() => document.activeElement?.getAttribute("data-request"))).toBeTruthy();
+    expect(await page.evaluate(() => document.activeElement?.getAttribute("data-request")), "focus is on the row that was opened").toBe(request);
     expect(await page.evaluate(() => document.activeElement?.className)).toContain("row-toggle");
-    expect(await page.locator("tbody tr.row .row-toggle").first().getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => opened.getAttribute("aria-expanded")).toBe("true");
     await page.close();
   });
 
