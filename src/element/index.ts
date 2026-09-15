@@ -52,6 +52,7 @@ const TAB_ELEMENT: Record<BotDashboardTabId, string> = {
   actors: "tab-actors",
   stats: "tab-stats",
   policy: "tab-policy",
+  challenge: "tab-challenge",
   reference: "tab-reference",
 };
 

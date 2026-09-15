@@ -91,6 +91,12 @@ export interface DashboardSections {
   /** The `robots.txt` the policy implies. Default true. */
   robots?: boolean;
   /**
+   * The Challenge tab: the interstitial a visitor sees, previewed and tried from here, and
+   * edited when `controls.editChallenge` allows. Default true, and it follows `policy`:
+   * what a challenged visitor is shown is part of what the policy does to them.
+   */
+  challenge?: boolean;
+  /**
    * The Reference tab: how every detector and action works, in the words of the
    * documentation that ships with the library. Default true.
    *

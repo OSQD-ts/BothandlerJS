@@ -15,8 +15,9 @@ const FALLBACK: Boot = {
   allowEdit: false,
   allowGuardEdit: false,
   allowActing: false,
+  allowChallengeEdit: false,
   peers: [],
-  sections: { feed: true, evidence: true, actors: true, registry: true, tester: true, statistics: true, audit: true, notices: true, changes: true, policy: true, guard: true, robots: true, ranges: true, reference: true },
+  sections: { feed: true, evidence: true, actors: true, registry: true, tester: true, statistics: true, audit: true, notices: true, changes: true, policy: true, guard: true, robots: true, ranges: true, challenge: true, reference: true },
   links: [],
 };
 

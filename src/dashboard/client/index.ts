@@ -11,6 +11,7 @@ import { applyActorScope, applyActorsQuery, drawActors, initActorScope, initActo
 import { drawPolicyTab, initPolicy, loadPolicy } from "./policy.js";
 import { loadRanges } from "./ranges.js";
 import { drawReference, initReference, selectedReference, setSelectedReference } from "./reference.js";
+import { drawChallengeTab, initChallenge, leaveChallengeTab } from "./challenge.js";
 import { initTester } from "./tester.js";
 import { drawRetention, initRetention } from "./retention.js";
 import type { FilterName } from "./query.js";
@@ -22,6 +23,7 @@ const TABS: Array<[id: string, name: TabName, enabled: boolean]> = [
   ["tab-actors", "actors", SECTIONS.registry],
   ["tab-stats", "stats", SECTIONS.statistics],
   ["tab-policy", "policy", SECTIONS.policy],
+  ["tab-challenge", "challenge", SECTIONS.challenge],
   ["tab-reference", "reference", SECTIONS.reference],
 ];
 
@@ -218,6 +220,8 @@ function showTab(name: TabName, options: { focus?: boolean; replace?: boolean; p
     $(`view-${tab}`).hidden = !selected || !enabled;
   }
   if (options.focus === true) $(available[tabIndexOf(target)]?.[0] ?? "tab-live").focus();
+  // The preview polls for its result, which is pointless on a screen nobody is looking at.
+  if (target !== "challenge") leaveChallengeTab();
   if (target === "policy" && state.policy === undefined) {
     void loadPolicy();
     void loadRanges();
@@ -302,9 +306,9 @@ function initKeyboard(): void {
       search.select();
       return;
     }
-    // 1 to 5 for the views, the way every tabbed console does it. They index the tabs
+    // 1 to 6 for the views, the way every tabbed console does it. They index the tabs
     // this listener actually has, so a dashboard with two of them has two shortcuts.
-    const digit = ["1", "2", "3", "4", "5"].indexOf(event.key);
+    const digit = ["1", "2", "3", "4", "5", "6"].indexOf(event.key);
     if (digit !== -1 && digit < available.length) {
       event.preventDefault();
       showTab(available[digit]?.[1] ?? FIRST, { focus: true, replace: false });
@@ -396,6 +400,8 @@ function draw(): void {
     drawPolicyTab();
     if (SECTIONS.notices) drawNotices();
     if (SECTIONS.changes) drawChanges();
+  } else if (state.tab === "challenge") {
+    drawChallengeTab();
   } else {
     drawReference();
   }
@@ -455,6 +461,7 @@ function start(): void {
   initRetention();
   initPolicy();
   initReference();
+  initChallenge();
 
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   addEventListener("resize", () => {

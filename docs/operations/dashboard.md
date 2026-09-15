@@ -22,7 +22,7 @@ console.log(dashboard.url);   // http://127.0.0.1:9674/
 That is the whole integration. It listens on a port of its own, subscribes to the
 handler you called it on, and returns a handle with the URL and a `close()`.
 
-### Five screens
+### Six screens
 
 **Live feed** — one row per request: when it happened, method and path, the actor, the
 User-Agent, the verdict, the score, the action and the rule that chose it. Filter by
@@ -221,6 +221,14 @@ rules in evaluation order and the `robots.txt` they imply.
 
 The counters come from the same `metrics()` snapshot as the Prometheus endpoint, so
 the numbers on the screen and the numbers in your alerting agree by construction.
+
+**Challenge** — the page a challenged visitor sees, edited on a form and previewed beside
+it as you type. **Try the check** runs the real page in the frame, solved by its own script
+against your handler's challenge, and says whether it passed — bound to a throwaway actor,
+so nothing reaches the feed or the counters. Saving needs `controls.editChallenge`; keeping
+the page across restarts needs `challengePage: { file }`. Only the page's words, contact
+details, colours and translations are on the form: the difficulty, the gesture and the
+secrets stay in code. See [the challenge](../challenge/index.md#designing-it-from-the-dashboard).
 
 **Reference** — how every detector and action works, in the words of these documents,
 which the build reads into the page. Every detector and action named elsewhere on the
@@ -512,7 +520,7 @@ traffic chart, the score distribution and the latency histogram now each have a
 description naming their totals, their bands and — for traffic — the runtime changes
 marked on them.
 
-`npm run test:browser` runs axe against all five screens on every change and fails on
+`npm run test:browser` runs axe against all six screens on every change and fails on
 anything it rates serious or critical. It is what found the two defects above.
 
 ### One dashboard, one process — and the others

@@ -335,6 +335,12 @@ export interface BotHandlerConfig {
     after: import("./policy/policy.js").GuardSettings & { suspectThreshold: number };
     by?: string | undefined;
   }) => void;
+  /** The challenge page's words, contact details, colours or translations changed at runtime. Your audit trail for {@link BotHandler.updateChallengePage}. */
+  onChallengeChange?: (event: {
+    before: import("./challenge/appearance.js").ChallengeAppearance;
+    after: import("./challenge/appearance.js").ChallengeAppearance;
+    by?: string | undefined;
+  }) => void;
   /**
    * A range set was replaced at runtime.
    *

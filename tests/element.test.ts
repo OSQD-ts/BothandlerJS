@@ -41,10 +41,10 @@ describe("the shared stylesheet and markup", () => {
    * behaving differently, which is the kind of bug nobody looks for.
    */
   it("builds the same boot object the page stamps in", () => {
-    const sections = { feed: true, evidence: true, actors: true, registry: true, tester: true, statistics: true, audit: true, notices: true, changes: true, policy: false, guard: true, robots: true, ranges: true, reference: true };
+    const sections = { feed: true, evidence: true, actors: true, registry: true, tester: true, statistics: true, audit: true, notices: true, changes: true, policy: false, guard: true, robots: true, ranges: true, challenge: true, reference: true };
     const boot = bootFor({
       title: "shop", basePath: "/_bots", links: [{ label: "Site", href: "/" }],
-      allowReset: false, allowEdit: false, allowGuardEdit: false, allowActing: false,
+      allowReset: false, allowEdit: false, allowGuardEdit: false, allowActing: false, allowChallengeEdit: false,
       sections, peers: [],
     });
     expect(boot["base"]).toBe("/_bots");
@@ -61,8 +61,8 @@ describe("the shared stylesheet and markup", () => {
    */
   it("tells the page which version of the library is serving it", () => {
     const boot = bootFor({
-      title: "x", basePath: "/_bots", links: [], allowReset: false, allowEdit: false, allowGuardEdit: false, allowActing: false,
-      sections: { feed: true, evidence: true, actors: true, registry: true, tester: true, statistics: true, audit: true, notices: true, changes: true, policy: true, guard: true, robots: true, ranges: true, reference: true },
+      title: "x", basePath: "/_bots", links: [], allowReset: false, allowEdit: false, allowGuardEdit: false, allowActing: false, allowChallengeEdit: false,
+      sections: { feed: true, evidence: true, actors: true, registry: true, tester: true, statistics: true, audit: true, notices: true, changes: true, policy: true, guard: true, robots: true, ranges: true, challenge: true, reference: true },
       peers: [],
     });
     expect(boot["version"]).toBe(VERSION);
@@ -74,8 +74,8 @@ describe("the shared stylesheet and markup", () => {
   it("reports a root-mounted dashboard as an empty base, not as a slash", () => {
     // The client joins this onto every request path, so "/" would produce "//api/stats".
     const boot = bootFor({
-      title: "x", basePath: "/", links: [], allowReset: false, allowEdit: false, allowGuardEdit: false, allowActing: false,
-      sections: { feed: true, evidence: true, actors: true, registry: true, tester: true, statistics: true, audit: true, notices: true, changes: true, policy: true, guard: true, robots: true, ranges: true, reference: true },
+      title: "x", basePath: "/", links: [], allowReset: false, allowEdit: false, allowGuardEdit: false, allowActing: false, allowChallengeEdit: false,
+      sections: { feed: true, evidence: true, actors: true, registry: true, tester: true, statistics: true, audit: true, notices: true, changes: true, policy: true, guard: true, robots: true, ranges: true, challenge: true, reference: true },
       peers: [],
     });
     expect(boot["base"]).toBe("");
@@ -242,7 +242,7 @@ describe("resolving which screens exist", () => {
   it("names a screen in `tabs` that does not exist", () => {
     const { warnings } = resolveSections(all, { tabs: [{ id: "stat" as never }] });
     expect(warnings.join(" ")).toContain('"stat"');
-    expect(warnings.join(" ")).toContain("live, actors, stats, policy, reference");
+    expect(warnings.join(" ")).toContain("live, actors, stats, policy, challenge, reference");
   });
 
   it("blames the server when the server is what withheld the screen", () => {

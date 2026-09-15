@@ -584,6 +584,7 @@ export class DashboardChanges {
         }),
       ),
       handler.on("range-change", ({ name, size, by }) => this.add({ at: now(), kind: "range", summary: `${name}: ${size} entr${size === 1 ? "y" : "ies"}`, by })),
+      handler.on("challenge-change", ({ after, by }) => this.add({ at: now(), kind: "challenge", summary: after.title === undefined ? "challenge page changed" : `challenge page "${after.title}"`, by })),
       handler.on("actor-change", ({ key, action, label, by }) =>
         this.add({
           at: now(),

@@ -17,7 +17,7 @@
 
 import type { DashboardSections } from "../dashboard/sections.js";
 
-export type BotDashboardTabId = "live" | "actors" | "stats" | "policy" | "reference";
+export type BotDashboardTabId = "live" | "actors" | "stats" | "policy" | "challenge" | "reference";
 
 export interface BotDashboardTab {
   id: BotDashboardTabId;
@@ -173,6 +173,7 @@ export const TAB_SECTION: Record<BotDashboardTabId, keyof DashboardSections> = {
   actors: "registry",
   stats: "statistics",
   policy: "policy",
+  challenge: "challenge",
   reference: "reference",
 };
 
@@ -199,7 +200,7 @@ export function resolveSections(
   const warnings: string[] = [];
 
   // `tabs` and `hide` do not share a vocabulary — `tabs` names screens (`live`, `actors`,
-  // `stats`, `policy`, `reference`) and `hide` names sections (`feed`, `registry`, `statistics`,
+  // `stats`, `policy`, `challenge`, `reference`) and `hide` names sections (`feed`, `registry`, `statistics`,
   // `policy`, and the finer-grained ones that are not screens at all). A name from the
   // wrong list is not a type error to anyone writing plain JavaScript, and did nothing
   // whatsoever: `hide: { live: true }` is the natural thing to write after reading about

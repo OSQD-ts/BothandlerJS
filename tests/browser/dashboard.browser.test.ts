@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium, firefox, webkit } from "playwright";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createRequire } from "node:module";
 import { createServer } from "node:http";
 import { BotHandler, ChallengeService, createFacts } from "../../src/index.js";
@@ -286,9 +288,9 @@ describe("moving between views", () => {
   it("keeps exactly one tab in the tab order", async () => {
     const page = await open();
     const order = (): Promise<number[]> => page.locator(".tab").evaluateAll((tabs) => tabs.map((tab) => (tab as HTMLElement).tabIndex));
-    expect(await order()).toEqual([0, -1, -1, -1, -1]);
+    expect(await order()).toEqual([0, -1, -1, -1, -1, -1]);
     await page.locator("#tab-stats").click();
-    expect(await order()).toEqual([-1, -1, 0, -1, -1]);
+    expect(await order()).toEqual([-1, -1, 0, -1, -1, -1]);
     await page.close();
   });
 
@@ -332,8 +334,10 @@ describe("moving between views", () => {
 
   it("takes a digit as a shortcut to a view", async () => {
     const page = await open();
-    await page.keyboard.press("5");
+    await page.keyboard.press("6");
     await expect.poll(() => page.locator("#view-reference").isVisible()).toBe(true);
+    await page.keyboard.press("5");
+    await expect.poll(() => page.locator("#view-challenge").isVisible()).toBe(true);
     await page.keyboard.press("4");
     await expect.poll(() => page.locator("#view-policy").isVisible()).toBe(true);
     await page.keyboard.press("2");
@@ -341,6 +345,113 @@ describe("moving between views", () => {
     await page.keyboard.press("1");
     await expect.poll(() => page.locator("#view-live").isVisible()).toBe(true);
     await page.close();
+  });
+});
+
+/**
+ * The Challenge screen: the page a challenged visitor sees, designed, tried and kept.
+ *
+ * On a listener of its own with a challenge configured at a low difficulty, so trying the
+ * check takes milliseconds, and with a save file in a directory of its own, so keeping a
+ * page can be proven the only way that means anything — by starting again.
+ */
+describe("the challenge screen", () => {
+  const secrets = ["a-browser-test-challenge-secret-long-enough-1234"];
+  const directory = mkdtempSync(join(tmpdir(), "bh-challenge-tab-"));
+  const file = join(directory, "challenge-page.json");
+  const frameHeading = (page: Page): Promise<string | null | undefined> =>
+    page.evaluate(() => document.querySelector<HTMLIFrameElement>("#challenge-frame")?.contentDocument?.querySelector("h1")?.textContent);
+
+  it("previews the draft as it is typed, without running the check", async () => {
+    const own = new BotHandler({ preset: "protect-content", onWarning: () => {}, challenge: { secrets, difficulty: 8, cookieSecure: false, title: "From code" } });
+    const server = await own.serveDashboard({ port: 0, controls: { editChallenge: true } });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+      await page.goto(`${server.url}#challenge`);
+      await expect.poll(() => frameHeading(page), { timeout: 15_000 }).toBe("From code");
+      await page.getByLabel("Heading").first().fill("One moment, please");
+      await expect.poll(() => frameHeading(page), { timeout: 15_000 }).toBe("One moment, please");
+      // Held: a preview for looking at never answers, so it cannot turn into a result
+      // before anybody has seen the page.
+      await page.waitForTimeout(800);
+      expect(await frameHeading(page)).toBe("One moment, please");
+      // And the visitor-facing page is unchanged until Save.
+      expect(own.challenge?.issue("203.0.113.40").body).toContain("From code");
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("runs the real check in the frame and says it passed", async () => {
+    const own = new BotHandler({ preset: "protect-content", onWarning: () => {}, challenge: { secrets, difficulty: 8, cookieSecure: false } });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+      await page.goto(`${server.url}#challenge`);
+      await expect.poll(() => frameHeading(page), { timeout: 15_000 }).toBe("Checking your browser");
+      await page.locator("#challenge-try").click();
+      await expect.poll(() => page.locator("#challenge-outcome").textContent(), { timeout: 20_000 }).toMatch(/^Passed/);
+      expect(await frameHeading(page)).toBe("Check passed");
+      // Solved for a throwaway actor: nothing reached the feed or the counters.
+      expect(own.metrics()?.requests).toBe(0);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps a saved page across a restart, and goes back to the code's on reset", async () => {
+    const first = new BotHandler({ preset: "protect-content", onWarning: () => {}, challenge: { secrets, difficulty: 8, cookieSecure: false, title: "From code" } });
+    const firstServer = await first.serveDashboard({ port: 0, controls: { editChallenge: true }, challengePage: { file } });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+      await page.goto(`${firstServer.url}#challenge`);
+      await expect.poll(() => frameHeading(page), { timeout: 15_000 }).toBe("From code");
+      await page.getByLabel("Heading").first().fill("Saved heading");
+      await page.locator('input[aria-label="Accent in the light scheme, as a hex colour"]').fill("#aa3300");
+      await expect.poll(() => page.locator("#challenge-save").isDisabled()).toBe(false);
+      await page.locator("#challenge-save").click();
+      await expect.poll(() => page.locator("#challenge-dirty").isHidden(), { timeout: 10_000 }).toBe(true);
+      expect(first.challenge?.issue("203.0.113.41").body).toContain("Saved heading");
+      await page.close();
+    } finally {
+      await firstServer.close();
+    }
+
+    const second = new BotHandler({ preset: "protect-content", onWarning: () => {}, challenge: { secrets, difficulty: 8, cookieSecure: false, title: "From code" } });
+    const secondServer = await second.serveDashboard({ port: 0, controls: { editChallenge: true }, challengePage: { file } });
+    try {
+      const body = second.challenge?.issue("203.0.113.42").body ?? "";
+      expect(body, "the saved heading, after starting again").toContain("Saved heading");
+      expect(body).toContain("--accent: #aa3300");
+
+      const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+      await page.goto(`${secondServer.url}#challenge`);
+      await expect.poll(() => frameHeading(page), { timeout: 15_000 }).toBe("Saved heading");
+      await page.locator("#challenge-reset").click();
+      await expect.poll(() => frameHeading(page), { timeout: 15_000 }).toBe("From code");
+      expect(second.challenge?.issue("203.0.113.43").body).toContain("From code");
+      await page.close();
+    } finally {
+      await secondServer.close();
+    }
+  });
+
+  it("refuses a save without editChallenge, and still previews", async () => {
+    const own = new BotHandler({ preset: "protect-content", onWarning: () => {}, challenge: { secrets, difficulty: 8, cookieSecure: false } });
+    const server = await own.serveDashboard({ port: 0 });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+      await page.goto(`${server.url}#challenge`);
+      await expect.poll(() => frameHeading(page), { timeout: 15_000 }).toBe("Checking your browser");
+      expect(await page.locator("#challenge-save").isHidden()).toBe(true);
+      const status = await page.evaluate(async () => (await fetch("api/challenge", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ appearance: { title: "x" } }) })).status);
+      expect(status).toBe(403);
+      await page.close();
+    } finally {
+      await server.close();
+    }
   });
 });
 
@@ -2286,6 +2397,7 @@ describe("acting on one actor, and having nothing to show", () => {
         ["#tab-actors", "#view-actors"],
         ["#tab-stats", "#view-stats"],
         ["#tab-policy", "#view-policy"],
+        ["#tab-challenge", "#view-challenge"],
         ["#tab-reference", "#view-reference"],
         ["#tab-live", "#view-live"],
       ] as const) {
@@ -3276,6 +3388,7 @@ describe("accessibility", () => {
     ["the actors screen", "#actors"],
     ["the statistics screen", "#stats"],
     ["the policy screen with a rule open", "#policy"],
+    ["the challenge screen", "#challenge"],
     ["the reference screen", "#reference"],
     ["a reference entry", "#reference?r=detector:cadence"],
   ];
@@ -3558,7 +3671,7 @@ describe("paging through more than fits", () => {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
       await page.goto(pagedUrl);
       await page.waitForSelector("tbody tr.row");
-      for (const tab of ["live", "actors", "stats", "policy", "reference"] as const) {
+      for (const tab of ["live", "actors", "stats", "policy", "challenge", "reference"] as const) {
         await page.click(`#tab-${tab}`);
         await page.waitForTimeout(400);
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

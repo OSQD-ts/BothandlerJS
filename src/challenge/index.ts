@@ -1,4 +1,5 @@
 import { renderChallengePage } from "./page.js";
+import type { ChallengeAppearance } from "./appearance.js";
 import { parseAcceptLanguage, pickTranslation } from "./language.js";
 import type { ChallengeCopy } from "./language.js";
 import { clampDifficulty, verifyProofOfWork, DEFAULT_DIFFICULTY } from "./pow.js";
@@ -16,6 +17,7 @@ import type { ChallengeClaims, ClearanceClaims, ClearanceLevel } from "./token.j
 export { renderChallengePage } from "./page.js";
 export { parseAcceptLanguage, pickTranslation } from "./language.js";
 export type { ChallengeCopy } from "./language.js";
+export type { ChallengeAppearance } from "./appearance.js";
 export type { ChallengePageOptions, RenderedChallenge } from "./page.js";
 export { DEFAULT_DIFFICULTY, MAX_DIFFICULTY, clampDifficulty, countLeadingZeroBits, solveProofOfWork, verifyProofOfWork } from "./pow.js";
 export { issueToken, verifyToken, newChallenge, newClearance } from "./token.js";
@@ -54,6 +56,10 @@ export interface ChallengeOptions {
    * link to a form. Everyone who sees it is a person your site just turned away.
    */
   contactHtml?: string;
+  /** Accent colour in the light scheme, `#rgb` or `#rrggbb`. Default blue. */
+  accent?: string;
+  /** Accent colour in the dark scheme, `#rgb` or `#rrggbb`. Default a lighter blue. */
+  accentDark?: string;
   /**
    * Copy for other languages, keyed by language tag — `"ja"`, `"pt-BR"`, `"de"`.
    *
@@ -174,6 +180,12 @@ export class ChallengeService {
    * the cookie hands a solved actor a window in which it is never re-challenged.
    */
   readonly clearanceTtlMs: number;
+  /**
+   * The page as saved from the dashboard, laid over the one in code. `undefined` when
+   * nothing has been saved, so "what code says" and "what was saved" stay distinguishable
+   * — the dashboard offers to go back to the first.
+   */
+  private overlay: ChallengeAppearance | undefined;
 
   constructor(private readonly options: ChallengeOptions) {
     if (options.secrets.length === 0) throw new Error("ChallengeService requires at least one secret");
@@ -206,6 +218,49 @@ export class ChallengeService {
   /** Whether this service asks for a gesture as well as the puzzle. */
   get wantsInteraction(): boolean {
     return this.interaction !== undefined;
+  }
+
+  /** Leading zero bits this service demands, after clamping. */
+  get difficultyBits(): number {
+    return this.difficulty;
+  }
+
+  /** The page as the code that constructed this service describes it. */
+  get codeAppearance(): ChallengeAppearance {
+    const { title, message, contactHtml, accent, accentDark, translations } = this.options;
+    return {
+      ...(title !== undefined ? { title } : {}),
+      ...(message !== undefined ? { message } : {}),
+      ...(contactHtml !== undefined ? { contactHtml } : {}),
+      ...(accent !== undefined ? { accent } : {}),
+      ...(accentDark !== undefined ? { accentDark } : {}),
+      ...(translations !== undefined ? { translations } : {}),
+    };
+  }
+
+  /** What was laid over the code, if anything. */
+  get savedAppearance(): ChallengeAppearance | undefined {
+    return this.overlay;
+  }
+
+  /**
+   * The page a visitor is served now: the saved fields where there are any, the code's
+   * everywhere else. A saved set of translations replaces the code's whole, because a
+   * translation removed on the dashboard must stay removed.
+   */
+  get appearance(): ChallengeAppearance {
+    return this.overlay === undefined ? this.codeAppearance : { ...this.codeAppearance, ...this.overlay };
+  }
+
+  /**
+   * Replaces what is laid over the code. Pass `undefined` to serve the code's page again.
+   *
+   * Only the page. The secrets, the difficulty and the gesture decide who gets through and
+   * stay where the code put them. Callers are expected to have checked the value with
+   * `cleanAppearance`; the renderer checks the colours again regardless.
+   */
+  setAppearance(appearance: ChallengeAppearance | undefined): void {
+    this.overlay = appearance === undefined || Object.keys(appearance).length === 0 ? undefined : { ...appearance };
   }
 
   /**
@@ -246,22 +301,40 @@ export class ChallengeService {
    * written in a language they read. It is optional because a caller that has no request
    * to hand — a test, a script — should still be able to render one.
    */
-  issue(actorKey: string, options: { acceptLanguage?: string | undefined } = {}): ChallengeResponse {
+  issue(
+    actorKey: string,
+    options: {
+      acceptLanguage?: string | undefined;
+      /** Render this page instead of the running one. For previews. */
+      appearance?: ChallengeAppearance | undefined;
+      /** Post the answer somewhere else. For previews served from another listener. */
+      verifyPath?: string | undefined;
+      /** Force a scheme. For previews. */
+      scheme?: "light" | "dark" | undefined;
+      /** Draw the page without starting the check. For previews. */
+      hold?: boolean | undefined;
+    } = {},
+  ): ChallengeResponse {
     const claims = newChallenge(this.subjectFor(actorKey), this.difficulty, this.challengeTtlMs, this.clock.now());
     const token = issueToken(claims, this.secrets);
     // The visitor's language, where one of yours matches. Everything the translation
     // omits falls through to the defaults below it, so a partial translation is a
     // partial improvement rather than a broken page.
-    const chosen = pickTranslation(this.options.translations, parseAcceptLanguage(options.acceptLanguage));
-    const title = chosen?.copy.title ?? this.options.title;
-    const message = chosen?.copy.message ?? this.options.message;
-    const contactHtml = chosen?.copy.contactHtml ?? this.options.contactHtml;
-    const lang = chosen === undefined ? undefined : (chosen.copy.lang ?? chosen.tag);
+    const page = options.appearance ?? this.appearance;
+    const chosen = pickTranslation(page.translations, parseAcceptLanguage(options.acceptLanguage));
+    const title = chosen?.copy.title ?? page.title;
+    const message = chosen?.copy.message ?? page.message;
+    const contactHtml = chosen?.copy.contactHtml ?? page.contactHtml;
+    const lang = chosen === undefined ? page.lang : (chosen.copy.lang ?? chosen.tag);
 
     const rendered = renderChallengePage({
       challenge: token,
       difficulty: this.difficulty,
-      verifyPath: this.verifyPath,
+      verifyPath: options.verifyPath ?? this.verifyPath,
+      ...(page.accent !== undefined ? { accent: page.accent } : {}),
+      ...(page.accentDark !== undefined ? { accentDark: page.accentDark } : {}),
+      ...(options.scheme !== undefined ? { scheme: options.scheme } : {}),
+      ...(options.hold === true ? { hold: true } : {}),
       ...(title !== undefined ? { title } : {}),
       ...(message !== undefined ? { message } : {}),
       ...(contactHtml !== undefined ? { contactHtml } : {}),

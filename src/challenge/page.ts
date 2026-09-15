@@ -1,4 +1,5 @@
 import { randomId } from "../internal/crypto.js";
+import { isHexColour } from "./appearance.js";
 
 export interface ChallengePageOptions {
   /** Signed challenge blob the client must solve and return. */
@@ -30,7 +31,30 @@ export interface ChallengePageOptions {
    * so that answering it requires laying it out; see `probeShapeFor`.
    */
   probe?: { boxes: number; height: number };
+  /** Accent colour in the light scheme, `#rgb` or `#rrggbb`. Anything else is ignored. */
+  accent?: string;
+  /** Accent colour in the dark scheme, `#rgb` or `#rrggbb`. Anything else is ignored. */
+  accentDark?: string;
+  /**
+   * Draw one scheme regardless of the visitor's preference. For previews: a real visitor
+   * gets the scheme their system asks for, and this is left unset.
+   */
+  scheme?: "light" | "dark";
+  /**
+   * Draw the page without starting the check. For previews that are only for looking at:
+   * an unpaused one finishes in milliseconds and reloads, so nobody would see the page
+   * they are designing.
+   */
+  hold?: boolean;
 }
+
+/** What the page says and looks like when nothing has been configured. */
+export const CHALLENGE_PAGE_DEFAULTS = {
+  title: "Checking your browser",
+  message: "This takes a moment and happens once. Your browser is solving a small puzzle to show it can run scripts.",
+  accent: "#2f6feb",
+  accentDark: "#6c9bff",
+} as const;
 
 export interface RenderedChallenge {
   html: string;
@@ -60,15 +84,31 @@ export interface RenderedChallenge {
  */
 export function renderChallengePage(options: ChallengePageOptions): RenderedChallenge {
   const scriptNonce = randomId(12);
-  const title = escapeHtml(options.title ?? "Checking your browser");
-  const message = escapeHtml(options.message ?? "This takes a moment and happens once. Your browser is solving a small puzzle to show it can run scripts.");
+  const title = escapeHtml(options.title ?? CHALLENGE_PAGE_DEFAULTS.title);
+  const message = escapeHtml(options.message ?? CHALLENGE_PAGE_DEFAULTS.message);
   const lang = escapeHtml(options.lang ?? "en");
+  // Checked again here rather than trusted from the caller: these are written into the
+  // stylesheet, and a value that is not a plain colour is a way to write CSS.
+  const accent = options.accent !== undefined && isHexColour(options.accent) ? options.accent : CHALLENGE_PAGE_DEFAULTS.accent;
+  const accentDark = options.accentDark !== undefined && isHexColour(options.accentDark) ? options.accentDark : CHALLENGE_PAGE_DEFAULTS.accentDark;
+  const lightVars = `--fg: #16181d; --muted: #5b6270; --bg: #fbfbfc; --line: #e2e5ea; --accent: ${accent};`;
+  const darkVars = `--fg: #e8eaee; --muted: #98a0ae; --bg: #14161a; --line: #2a2e36; --accent: ${accentDark};`;
+  const schemeStyles =
+    options.scheme === "dark"
+      ? `:root { color-scheme: dark; ${darkVars} }`
+      : options.scheme === "light"
+        ? `:root { color-scheme: light; ${lightVars} }`
+        : `:root { color-scheme: light dark; ${lightVars} }
+  @media (prefers-color-scheme: dark) {
+    :root { ${darkVars} }
+  }`;
 
   const config = jsonForScript({
     challenge: options.challenge,
     difficulty: options.difficulty,
     verifyPath: options.verifyPath,
     interaction: options.interaction === true,
+    hold: options.hold === true,
   });
 
   const contact = options.contactHtml ?? "";
@@ -299,10 +339,7 @@ export function renderChallengePage(options: ChallengePageOptions): RenderedChal
 <link rel="icon" href="data:,">
 <title>${title}</title>
 <style>
-  :root { color-scheme: light dark; --fg: #16181d; --muted: #5b6270; --bg: #fbfbfc; --line: #e2e5ea; --accent: #2f6feb; }
-  @media (prefers-color-scheme: dark) {
-    :root { --fg: #e8eaee; --muted: #98a0ae; --bg: #14161a; --line: #2a2e36; --accent: #6c9bff; }
-  }
+  ${schemeStyles}
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
          background: var(--bg); color: var(--fg);
@@ -433,6 +470,13 @@ ${interactionStyles}
     });
   }
 
+  // A preview for looking at, not trying: the page as a visitor sees it while the check
+  // runs, frozen there.
+  if (config.hold) {
+    say("Working…");
+    return;
+  }
+
   if (config.interaction && box) {
     probe();
     watch();
@@ -455,7 +499,7 @@ ${interactionStyles}
  * U+2029 are perfectly legal inside a JSON string but are *line terminators* in
  * JavaScript, so an unescaped one silently breaks the literal it sits in.
  */
-function jsonForScript(value: { challenge: string; difficulty: number; verifyPath: string; interaction: boolean }): string {
+function jsonForScript(value: { challenge: string; difficulty: number; verifyPath: string; interaction: boolean; hold: boolean }): string {
   // The nonce is lifted out for the solver loop; it is already inside the signed blob.
   const nonce = readNonce(value.challenge);
   const payload = { ...value, challenge_nonce: nonce };

@@ -14,6 +14,11 @@ import type { BotHandler } from "../core.js";
 import { createFacts } from "../facts.js";
 import { maskAddresses, networkKey } from "../internal/ip.js";
 import { SavedFilterStore, cleanSavedFilter } from "./saved-filters.js";
+import { ChallengePageStore } from "./challenge-page-store.js";
+import { ChallengePreviews, renderPreviewOutcome } from "./challenge-preview.js";
+import { ChallengeService } from "../challenge/index.js";
+import { cleanAppearance } from "../challenge/appearance.js";
+import { CHALLENGE_PAGE_DEFAULTS } from "../challenge/page.js";
 import { matchesActor, parseActorFilter } from "./actor-filter.js";
 import { MAX_QUERY_CHARS } from "./client/query.js";
 import type { ActorSummary } from "../state.js";
@@ -210,6 +215,9 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
   // asked for, and an operator who wrote both would have to read the code to find out
   // which won. The section decides.
   const allowGuardEdit = sections.guard && sections.policy && validateEditing(options.controls?.editGuard === true, auth, host ?? MOUNTED_HOST, "controls.editGuard");
+  // The one page the public sees is edited from here, so it is refused on a public bind
+  // without auth like every other editor, and it follows the tab it lives on.
+  const allowChallengeEdit = sections.challenge && validateEditing(options.controls?.editChallenge === true, auth, host ?? MOUNTED_HOST, "controls.editChallenge");
   const startedAt = handler.config.clock.now();
 
   const feedCapacity = options.feedLimit ?? 500;
@@ -222,6 +230,20 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
   const notices = new DashboardNotices(handler, undefined, { maskIp });
   const changes = new DashboardChanges(handler, undefined, { maskIp });
   const saved = new SavedFilterStore(options.savedFilters?.file, (message) => handler.warn(message));
+  const challengePage = new ChallengePageStore(options.challengePage?.file, (message) => handler.warn(message));
+  // A page saved on an earlier run is the page, from the first request. Laid over the
+  // service directly rather than through `updateChallengePage`: this is configuration
+  // being read at start-up, not somebody changing it, and announcing it as a runtime
+  // change on every restart would make the change log say something that did not happen.
+  const savedPage = challengePage.saved();
+  if (savedPage !== undefined && handler.challenge !== undefined) handler.challenge.setAppearance(savedPage);
+  const previews = new ChallengePreviews(handler.config.clock);
+  // Without a challenge configured there is still a page worth designing, so the preview
+  // gets a service of its own: a random secret that lives as long as this process and
+  // signs nothing a visitor will ever carry.
+  let previewService: ChallengeService | undefined;
+  const serviceForPreview = (): ChallengeService =>
+    handler.challenge ?? (previewService ??= new ChallengeService({ secrets: [randomId(33)], cookieSecure: false, clock: handler.config.clock }));
   const instance = options.instance ?? hostname();
   const pageOptions = {
     title: options.title ?? "bothandlerjs",
@@ -231,6 +253,7 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
     allowEdit,
     allowGuardEdit,
     allowActing,
+    allowChallengeEdit,
     sections,
     peers: options.peers ?? [],
   };
@@ -693,6 +716,146 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
         return;
       }
 
+      case "/api/challenge": {
+        if (!sections.challenge) return sectionOff(response, "challenge");
+        if (request.method === "GET") {
+          send(response, 200, "application/json; charset=utf-8", JSON.stringify(challengeState()));
+          return;
+        }
+        if (request.method !== "POST") {
+          sendError(response, 405, "Use GET or POST.");
+          return;
+        }
+        if (!allowChallengeEdit) {
+          sendError(response, 403, "Saving the challenge page is disabled on this dashboard. Enable it with controls: { editChallenge: true }.");
+          return;
+        }
+        const body = await readJson(request);
+        if ("error" in body) {
+          sendError(response, 400, body.error);
+          return;
+        }
+        const { appearance, errors } = cleanAppearance((body.value as { appearance?: unknown } | null)?.appearance ?? {});
+        if (errors.length > 0) {
+          sendError(response, 400, errors.join(" "));
+          return;
+        }
+        // Applied first, saved second: a page that cannot be applied should not be written
+        // somewhere it would be applied from on the next start.
+        if (handler.challenge !== undefined) handler.updateChallengePage(appearance, { by });
+        challengePage.save(appearance);
+        send(response, 200, "application/json; charset=utf-8", JSON.stringify(challengeState()));
+        return;
+      }
+
+      case "/api/challenge/preview": {
+        if (!sections.challenge) return sectionOff(response, "challenge");
+        if (request.method !== "POST") {
+          sendError(response, 405, "Use POST.");
+          return;
+        }
+        const body = await readJson(request);
+        if ("error" in body) {
+          sendError(response, 400, body.error);
+          return;
+        }
+        const raw = (body.value ?? {}) as { appearance?: unknown; lang?: unknown; scheme?: unknown; live?: unknown };
+        const { appearance, errors } = cleanAppearance(raw.appearance ?? {});
+        if (errors.length > 0) {
+          sendError(response, 400, errors.join(" "));
+          return;
+        }
+        const session = previews.open(appearance, {
+          lang: typeof raw.lang === "string" && raw.lang.length <= 35 ? raw.lang : undefined,
+          scheme: raw.scheme === "dark" ? "dark" : raw.scheme === "light" ? "light" : undefined,
+          live: raw.live === true,
+        });
+        send(response, 200, "application/json; charset=utf-8", JSON.stringify({ id: session.id }));
+        return;
+      }
+
+      case "/api/challenge/frame": {
+        if (!sections.challenge) return sectionOff(response, "challenge");
+        const session = previews.get(url.searchParams.get("id"));
+        // Relative, so it resolves against wherever this frame was served from — a
+        // listener of its own or a mount under somebody else's prefix — and carrying the
+        // token the frame arrived with, because the page's own request needs it too.
+        const token = url.searchParams.get("token");
+        const suffix = token === null ? "" : `&token=${encodeURIComponent(token)}`;
+        if (session === undefined) {
+          sendFrame(response, 404, "<!doctype html><title>Preview expired</title><p>This preview has expired. Change anything on the form, or press Run again, to open a new one.</p>");
+          return;
+        }
+        if (url.searchParams.get("again") === "1") session.outcome = undefined;
+        if (session.outcome !== undefined) {
+          sendFrame(response, 200, renderPreviewOutcome(session.outcome, `frame?id=${encodeURIComponent(session.id)}&again=1${suffix}`));
+          return;
+        }
+        const issued = serviceForPreview().issue(previews.actorFor(session), {
+          appearance: session.appearance,
+          acceptLanguage: session.lang,
+          scheme: session.scheme,
+          hold: !session.live,
+          verifyPath: `verify?id=${encodeURIComponent(session.id)}${suffix}`,
+        });
+        previews.issued(session);
+        // The interstitial's own headers, with one change: it may be framed by this page.
+        // Everything else — the nonce-only script policy, no-store, no referrer — is the
+        // policy a visitor gets, so the preview behaves like the real thing.
+        const headers: Record<string, string> = {};
+        for (const [name, value] of Object.entries(issued.headers)) headers[name] = name === "content-security-policy" ? value.replace("frame-ancestors 'none'", "frame-ancestors 'self'") : value;
+        response.writeHead(200, headers);
+        response.end(issued.body);
+        return;
+      }
+
+      case "/api/challenge/verify": {
+        if (!sections.challenge) return sectionOff(response, "challenge");
+        if (request.method !== "POST") {
+          sendError(response, 405, "Use POST.");
+          return;
+        }
+        const session = previews.get(url.searchParams.get("id"));
+        if (session === undefined) {
+          sendError(response, 404, "This preview has expired.");
+          return;
+        }
+        // A page drawn only to be looked at never starts its check, so an answer for one
+        // was not produced by that page.
+        if (!session.live) {
+          sendError(response, 409, "This preview is not running a check. Press Try the check.");
+          return;
+        }
+        const body = await readJson(request);
+        if ("error" in body) {
+          previews.record(session, { ok: false, reason: body.error });
+          sendError(response, 400, body.error);
+          return;
+        }
+        const outcome = await serviceForPreview().verifySolution(previews.actorFor(session), body.value);
+        // No cookie: a clearance for a throwaway actor on the dashboard's own origin would
+        // be a credential for nothing. The page reloads into the outcome instead.
+        if (outcome.ok) {
+          previews.record(session, { ok: true, level: outcome.level, interactionScore: outcome.interactionScore });
+          send(response, 200, "application/json; charset=utf-8", JSON.stringify({ ok: true }));
+        } else {
+          previews.record(session, { ok: false, reason: outcome.reason, interactionScore: outcome.interactionScore });
+          sendError(response, outcome.status, outcome.reason);
+        }
+        return;
+      }
+
+      case "/api/challenge/result": {
+        if (!sections.challenge) return sectionOff(response, "challenge");
+        const session = previews.get(url.searchParams.get("id"));
+        if (session === undefined) {
+          sendError(response, 404, "This preview has expired.");
+          return;
+        }
+        send(response, 200, "application/json; charset=utf-8", JSON.stringify({ outcome: session.outcome ?? null }));
+        return;
+      }
+
       case "/api/policy/preview": {
         if (!sections.policy) return sectionOff(response, "policy");
         if (request.method !== "POST") {
@@ -1036,6 +1199,36 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
     return merged;
   }
 
+  /** What the Challenge tab is told about the page it edits. */
+  function challengeState(): Record<string, unknown> {
+    const service = handler.challenge;
+    const saved = service?.savedAppearance ?? challengePage.saved() ?? null;
+    const code = service?.codeAppearance ?? {};
+    return {
+      configured: service !== undefined,
+      editable: allowChallengeEdit,
+      file: challengePage.file ?? null,
+      interaction: service?.wantsInteraction ?? false,
+      difficulty: serviceForPreview().difficultyBits,
+      code,
+      saved,
+      effective: service?.appearance ?? { ...code, ...(saved ?? {}) },
+      defaults: CHALLENGE_PAGE_DEFAULTS,
+    };
+  }
+
+  /** A document for the preview frame: framable by this page, and by nothing else. */
+  function sendFrame(response: ServerResponse, status: number, html: string): void {
+    response.writeHead(status, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store, private",
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+    });
+    response.end(html);
+  }
+
   function sendPage(response: ServerResponse): void {
     // A fresh nonce per response, so the page's own inline script runs under a CSP
     // that permits nothing else — no remote script, no remote style, no framing.
@@ -1044,7 +1237,9 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
     response.writeHead(200, {
       ...SECURITY_HEADERS,
       "content-type": "text/html; charset=utf-8",
-      "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+      // `frame-src 'self'` for the Challenge tab's preview, which is this listener's own
+      // document and nothing else's.
+      "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; img-src 'self' data:; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
     });
     response.end(html);
   }
@@ -1566,6 +1761,7 @@ function resolveSections(sections: DashboardSections | undefined): Required<Dash
     guard: policy && on(sections?.guard),
     robots: policy && on(sections?.robots),
     ranges: policy && on(sections?.ranges),
+    challenge: policy && on(sections?.challenge),
     reference: on(sections?.reference),
   };
 }

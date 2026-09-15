@@ -98,7 +98,7 @@ false` on a server of your own.
 </script>
 ```
 
-Five screens exist — `live`, `actors`, `stats`, `policy`, `reference`. Listing them chooses which
+Six screens exist — `live`, `actors`, `stats`, `policy`, `challenge`, `reference`. Listing them chooses which
 appear, in what order, under what labels. A screen left out is not built at all.
 
 **`tabs` and `hide` do not take the same names.** `tabs` names screens — `live`, `actors`,
@@ -158,7 +158,7 @@ config = {
 
 | Field | What it sets |
 | --- | --- |
-| `tab` | `live`, `actors`, `stats`, `policy` or `reference` — must be a screen that survives `tabs` and `hide` |
+| `tab` | `live`, `actors`, `stats`, `policy`, `challenge` or `reference` — must be a screen that survives `tabs` and `hide` |
 | `filter` | the Live screen's chip: `all`, `proven`, `suspected`, `human`, `guard`, `deny`, `mitigate`, `allow` |
 | `query` | the Live screen's query box, in the [feed's query language](dashboard.md) |
 | `actorScope` | `tracked` (every actor) or `feed` (only those in the current feed) |
@@ -344,7 +344,7 @@ the console says which of these it was:
 | "could not start: src points at …, which is not this page's origin" | The dashboard sends no CORS headers on purpose. Mount it on this origin and use a path. |
 | "A bot dashboard is already running on this page" | Two elements are connected at once. One at a time; the second takes over if the first leaves. |
 | "`<bot-dashboard>` is already registered … by something else" | Another library owns the name. Use `defineBotDashboard("your-name")`. |
-| "tabs lists `x`, which is not a screen" | The screens are `live`, `actors`, `stats`, `policy` and `reference`. |
+| "tabs lists `x`, which is not a screen" | The screens are `live`, `actors`, `stats`, `policy`, `challenge` and `reference`. |
 | "tabs lists `x`, but this dashboard's server has the `y` section switched off" | `sections` on the handler, not something this page can override — and deliberately so. |
 | "hide.`x` did nothing" | `hide` takes section names, `tabs` takes screen names. The message names the one you meant. |
 | "panel `x` asks for screen `y`, which this dashboard does not have" | A typo in `screen`; the message lists the screens that exist. |

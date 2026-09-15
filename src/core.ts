@@ -1,6 +1,8 @@
 import { ActorRegistry, ActorState, cleanLabel } from "./state.js";
 import { LabelResolver } from "./labels.js";
 import { ChallengeService } from "./challenge/index.js";
+import { cleanAppearance } from "./challenge/appearance.js";
+import type { ChallengeAppearance } from "./challenge/appearance.js";
 import { Emitter } from "./internal/emitter.js";
 import { MemoryStore } from "./stores/memory.js";
 import { Metrics, toPrometheus } from "./metrics.js";
@@ -112,6 +114,15 @@ export interface BotHandlerEvents extends Record<string, unknown> {
    * `before` and `after` both travel so the alert can say what actually moved.
    */
   "guard-change": { before: GuardSettings & { suspectThreshold: number }; after: GuardSettings & { suspectThreshold: number }; by?: string | undefined };
+  /**
+   * The challenge page was changed at runtime — its words, contact details, colours or
+   * translations.
+   *
+   * Only the page: nothing that decides who gets through can be changed this way. It still
+   * has an event, because this is the one page the public sees, and a change to it that
+   * nobody can account for is a change somebody will want to account for.
+   */
+  "challenge-change": { before: ChallengeAppearance; after: ChallengeAppearance; by?: string | undefined };
   /**
    * A range set was replaced at runtime — an allowlist entry added, a crawler's
    * published ranges refreshed.
@@ -455,6 +466,7 @@ export class BotHandler {
       ["detector-failure", options.onDetectorFailure as never],
       ["policy-change", options.onPolicyChange as never],
       ["guard-change", options.onGuardChange as never],
+      ["challenge-change", options.onChallengeChange as never],
       ["range-change", options.onRangeChange as never],
       ["actor-change", options.onActorChange as never],
       ["anomaly", options.onAnomaly as never],
@@ -804,6 +816,33 @@ export class BotHandler {
     );
     this.events.emit("guard-change", { before, after, by: context.by });
     return { guard: after };
+  }
+
+  /**
+   * Replaces the challenge page's words, contact details, colours or translations on the
+   * running handler, over whatever the code configured. Pass `undefined` or `{}` to serve
+   * the code's page again.
+   *
+   * Checked whole before anything moves, and refused whole: a colour that is not a plain
+   * hex value or a language tag that is not one throws, and the page stays as it was.
+   * Only the page can be changed — the secrets, the difficulty and the gesture stay where
+   * the code put them.
+   */
+  updateChallengePage(appearance: ChallengeAppearance | undefined, context: ChangeContext = {}): { appearance: ChallengeAppearance } {
+    const service = this.challenge;
+    if (service === undefined) throw new ConfigError("No challenge is configured, so there is no challenge page to change. Set challenge.secrets first.");
+    const { appearance: cleaned, errors } = cleanAppearance(appearance ?? {});
+    if (errors.length > 0) throw new ConfigError(`The challenge page was not changed: ${errors.join(" ")}`);
+    const before = service.appearance;
+    service.setAppearance(cleaned);
+    const after = service.appearance;
+    this.warn(
+      Object.keys(cleaned).length === 0
+        ? `The challenge page was reset to the one in code at runtime${attribute(context)}.`
+        : `The challenge page was changed at runtime${attribute(context)}.`,
+    );
+    this.events.emit("challenge-change", { before, after, by: context.by });
+    return { appearance: after };
   }
 
   /**

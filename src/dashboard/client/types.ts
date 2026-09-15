@@ -11,6 +11,7 @@ export interface Boot {
   allowEdit: boolean;
   allowGuardEdit: boolean;
   allowActing: boolean;
+  allowChallengeEdit: boolean;
   peers: ReadonlyArray<{ label: string; href: string }>;
   sections: Required<DashboardSections>;
   links: ReadonlyArray<{ label: string; href: string }>;
@@ -51,7 +52,7 @@ export interface Row {
 }
 
 /** The views, in the order the tab strip and the digit shortcuts use. */
-export type TabName = "live" | "actors" | "stats" | "policy" | "reference";
+export type TabName = "live" | "actors" | "stats" | "policy" | "challenge" | "reference";
 
 export interface Preview extends PolicyPreview {}
 export interface Policy extends PolicyDocument {}

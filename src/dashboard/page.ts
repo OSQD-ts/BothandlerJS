@@ -37,6 +37,8 @@ export interface DashboardPageOptions {
   allowEdit: boolean;
   allowGuardEdit: boolean;
   allowActing: boolean;
+  /** Whether a viewer may save the challenge page. The preview works either way. */
+  allowChallengeEdit: boolean;
   peers: ReadonlyArray<{ label: string; href: string }>;
   /** Which parts of the page this listener has. The client removes the rest of them. */
   sections: Required<DashboardSections>;
@@ -63,6 +65,7 @@ export function bootFor(options: DashboardPageOptions): Record<string, unknown> 
     allowEdit: options.allowEdit,
     allowGuardEdit: options.allowGuardEdit,
     allowActing: options.allowActing,
+    allowChallengeEdit: options.allowChallengeEdit,
     peers: options.peers.map((peer) => ({ label: String(peer.label), href: String(peer.href) })),
     sections: options.sections,
     links: options.links.map((link) => ({ label: String(link.label), href: String(link.href) })),
@@ -1022,6 +1025,41 @@ input.label-input:focus { outline: 2px solid var(--accent); outline-offset: 1px;
 .cidr button { border: 0; background: none; padding: 0 4px; font-size: 12px; line-height: 1; color: var(--muted); border-radius: 999px; }
 .cidr button:hover { background: none; color: var(--crit-text); }
 .cidr.readonly { padding-right: 9px; }
+/* The Challenge screen. The form on the left, and on the right the page itself at a
+   visitor's size — a frame tall enough that the check, its status and the contact line
+   are all visible without scrolling inside it. */
+.challenge-layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); align-items: start; }
+.challenge-layout > * { min-width: 0; }
+@container dash (max-width: 1000px) { .challenge-layout { grid-template-columns: minmax(0, 1fr); } }
+.challenge-form { display: grid; gap: 4px; padding: 4px 0 10px; }
+.challenge-group { border: 0; margin: 0; padding: 8px 15px 6px; display: grid; gap: 8px; border-top: 1px solid var(--line-soft); }
+.challenge-group:first-child { border-top: 0; }
+.challenge-group legend { padding: 8px 0 2px; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); float: left; width: 100%; }
+.challenge-group legend + * { clear: both; }
+.challenge-group > .hint { margin: 0; }
+.field-stack { display: grid; gap: 3px; min-width: 0; }
+.field-stack > input, .field-stack > textarea { width: 100%; box-sizing: border-box; }
+textarea.challenge-text { min-height: 0; resize: vertical; padding: 6px 9px; font-family: inherit; font-size: 12.5px; }
+textarea.challenge-text.mono-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+input[type="color"] { width: 38px; height: 30px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); cursor: pointer; flex: none; }
+/* The swatch and its hex value are one control, so they share a line; the general rule
+   that stretches a text box across its column would otherwise push the value under it. */
+.field-stack .field-row { flex-wrap: nowrap; }
+.field-stack .field-row input.colour-text { width: 96px; flex: none; }
+#challenge-status { padding-top: 12px; }
+.challenge-group > button { justify-self: start; }
+.translation { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--surface-2); }
+.translation-head { display: flex; gap: 8px; align-items: center; }
+.translation-head input.translation-tag { width: 110px; flex: none; }
+.translation-head { justify-content: space-between; }
+.inline-label { font-size: 12px; color: var(--muted); }
+.challenge-frame-wrap { padding: 12px 15px 4px; }
+#challenge-frame { display: block; width: 100%; height: 520px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.challenge-outcome { margin: 0 15px 14px; padding: 9px 12px; border-radius: 8px; font-size: 12.5px; color: var(--ink-2); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.challenge-outcome:empty { display: none; }
+.challenge-outcome.ok { color: var(--good-text); background: color-mix(in srgb, var(--good-text) 12%, transparent); }
+.challenge-outcome.bad { color: var(--crit-text); background: color-mix(in srgb, var(--crit-text) 12%, transparent); }
+
 /* The Reference screen. The article is set for reading rather than scanning: a longer
    measure, a larger size and more leading than the panels around it, because it is the
    one place on the page somebody reads paragraphs. */
@@ -1128,6 +1166,7 @@ export const DASHBOARD_MARKUP = String.raw`
       <button class="tab" id="tab-actors" role="tab" aria-selected="false" aria-controls="view-actors">Actors</button>
       <button class="tab" id="tab-stats" role="tab" aria-selected="false" aria-controls="view-stats">Statistics</button>
       <button class="tab" id="tab-policy" role="tab" aria-selected="false" aria-controls="view-policy">Policy<span id="notice-badge" class="pill" hidden></span></button>
+      <button class="tab" id="tab-challenge" role="tab" aria-selected="false" aria-controls="view-challenge">Challenge</button>
       <button class="tab" id="tab-reference" role="tab" aria-selected="false" aria-controls="view-reference">Reference</button>
     </div>
     <div class="facts" id="chips"></div>
@@ -1446,6 +1485,38 @@ export const DASHBOARD_MARKUP = String.raw`
           </div>
         </section>
       </div>
+    </div>
+  </div>
+
+  <div id="view-challenge" role="tabpanel" aria-labelledby="tab-challenge" class="stack" hidden>
+    <div class="challenge-layout">
+      <section class="panel" id="challenge-editor-panel">
+        <h2>Challenge page <span class="sub" id="challenge-mode"></span></h2>
+        <div class="note aside" id="challenge-status"></div>
+        <form class="challenge-form" id="challenge-form" autocomplete="off"></form>
+        <div class="bar-actions">
+          <button id="challenge-save" class="primary" hidden disabled>Save</button>
+          <button id="challenge-revert" disabled>Revert</button>
+          <span class="grow"></span>
+          <button id="challenge-reset" hidden>Reset to code</button>
+          <span class="dirty" id="challenge-dirty" hidden>unsaved</span>
+        </div>
+      </section>
+      <section class="panel" id="challenge-preview-panel" aria-labelledby="challenge-preview-title">
+        <h2 id="challenge-preview-title">Preview <span class="sub" id="challenge-preview-state">follows the form</span></h2>
+        <div class="bar-actions">
+          <label class="inline-label" for="challenge-lang">Language</label>
+          <select id="challenge-lang"></select>
+          <div class="seg" id="challenge-scheme" role="group" aria-label="Colour scheme">
+            <button data-scheme="light" aria-pressed="true">Light</button>
+            <button data-scheme="dark" aria-pressed="false">Dark</button>
+          </div>
+          <span class="grow"></span>
+          <button id="challenge-try" class="primary">Try the check</button>
+        </div>
+        <div class="challenge-frame-wrap"><iframe id="challenge-frame" title="Challenge page preview"></iframe></div>
+        <div class="challenge-outcome" id="challenge-outcome" role="status" aria-live="polite"></div>
+      </section>
     </div>
   </div>
 

@@ -75,6 +75,7 @@ challenge: { secrets: [NEW_SECRET, PREVIOUS_SECRET] }
 | `cookieSameSite` | `"Lax"` | |
 | `title`, `message` | English defaults | page copy |
 | `contactHtml` | — | **supply something real** |
+| `accent`, `accentDark` | blue | the accent colour in each scheme, as `#rgb` or `#rrggbb` |
 | `translations` | — | see [localisation](localisation.md) |
 
 ### Difficulty
@@ -92,6 +93,29 @@ Everyone who sees the no-JavaScript fallback is a person your site just turned a
 JavaScript, no WebCrypto, or a device too slow to finish. Put a support address, a phone
 number or a link to a form there. This is the single highest-value line of configuration on
 this page.
+
+### Designing it from the dashboard
+
+The dashboard's **Challenge** tab edits the page's words, contact details, language,
+accent colours and translations, and shows the result as you type. The preview is not a
+picture of the page: it is the real interstitial, issued by your handler's challenge and
+solved by its own script in a frame, so ticking the box and waiting for it to pass is how
+you find out the page you just changed still works. It is bound to a throwaway actor, so
+solving it grants nobody clearance and adds nothing to the feed or the counters.
+
+Saving needs `controls.editChallenge`, and keeping a save across restarts needs a file:
+
+```ts
+await botHandler.serveDashboard({
+  controls: { editChallenge: true },
+  challengePage: { file: "./.bothandler/challenge-page.json" },
+});
+```
+
+A saved page is applied over the one in code when the dashboard starts, and **Reset to
+code** removes it. Difficulty, the gesture and the secrets are not on the form: they decide
+who gets through, and loosening them stays a deploy. Colours are accepted only as hex, and
+a script in `contactHtml` does not run — the page's policy admits only its own.
 
 ---
 

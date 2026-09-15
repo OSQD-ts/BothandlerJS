@@ -150,6 +150,17 @@ export interface DashboardControls {
    */
   editGuard?: boolean;
   /**
+   * Allow saving the challenge page from the Challenge tab: its words, contact details,
+   * colours and translations. Default false; the preview and trying the page work without
+   * it.
+   *
+   * Only the page — the secrets, the difficulty and the gesture are not on the form and
+   * cannot be changed from here. It is still an editor for the one page a member of the
+   * public sees, so it is refused on a public bind with `auth: false` like the others, and
+   * every save is announced and emitted as `challenge-change`.
+   */
+  editChallenge?: boolean;
+  /**
    * Allow the range editor and the per-actor operations: adding an address to the
    * allowlist or any other range set, forgetting one actor's history, and granting an
    * actor human clearance. Default false.
@@ -328,6 +339,18 @@ export interface DashboardOptions {
    * ```
    */
   savedFilters?: { file?: string | undefined } | undefined;
+  /**
+   * Where the challenge page saved from the Challenge tab is kept.
+   *
+   * Without a file a save applies to the running handler and lasts until it restarts. With
+   * one it is written there and laid over the page in code each time the dashboard starts,
+   * so a page designed on the dashboard stays the page.
+   *
+   * ```ts
+   * serveDashboard({ controls: { editChallenge: true }, challengePage: { file: "./.bothandler/challenge-page.json" } })
+   * ```
+   */
+  challengePage?: { file?: string | undefined } | undefined;
   /** Which parts of the page exist on this listener. See {@link DashboardSections}. */
   sections?: DashboardSections;
   redact?: DashboardRedaction;
@@ -519,7 +542,7 @@ export interface DashboardActor {
 /** One runtime change, for the timeline markers and the change list. */
 export interface DashboardChange {
   at: number;
-  kind: "policy" | "guard" | "range" | "actor";
+  kind: "policy" | "guard" | "range" | "actor" | "challenge";
   summary: string;
   /** Who asked for it, when the dashboard's `authorize` was able to say. */
   by?: string | undefined;
