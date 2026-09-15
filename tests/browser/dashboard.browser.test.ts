@@ -304,6 +304,25 @@ describe("moving between views", () => {
     await page.close();
   });
 
+  /**
+   * The header is sticky, and sticky only works within its containing block. `<body>` was
+   * held to exactly the viewport's height, so the block ended one screen down and the
+   * header scrolled away with it on every screen long enough to scroll — which is the
+   * statistics screen, the live feed, and any policy with a few rules.
+   */
+  it("keeps the header in view all the way down a long screen", async () => {
+    const page = await open(1440, "#stats", "#view-stats");
+    await page.setViewportSize({ width: 1440, height: 600 });
+    await page.waitForTimeout(600);
+    const bottom = await page.evaluate(() => document.documentElement.scrollHeight);
+    expect(bottom, "long enough to prove anything").toBeGreaterThan(1800);
+    for (const y of [900, 1500, bottom]) {
+      await page.evaluate((to) => window.scrollTo(0, to), y);
+      await expect.poll(() => page.evaluate(() => Math.round((document.querySelector("header") as HTMLElement).getBoundingClientRect().top)), { message: `scrolled to ${y}` }).toBe(0);
+    }
+    await page.close();
+  });
+
   it("opens on the view a link names", async () => {
     const page = await open(1440, "#stats", "#view-stats");
     await expect.poll(() => page.locator("#view-stats").isVisible()).toBe(true);

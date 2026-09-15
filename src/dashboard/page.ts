@@ -211,7 +211,11 @@ export const DASHBOARD_CSS = String.raw`/* -------------------------------------
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+/* At least the viewport, never exactly it. The header sticks within <body>, and a body held
+   to one screen's height is a containing block that ends one screen down: scroll past it
+   and the header went with it, on every screen long enough to need scrolling. */
+html { height: 100%; }
+body { min-height: 100%; }
 /* Restored by the client once the first render has settled. See the note on .tiles. */
 html.settling { overflow-anchor: none; }
 body {
