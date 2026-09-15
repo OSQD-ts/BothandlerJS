@@ -1,4 +1,5 @@
 import { $, byId, clear, el } from "./dom.js";
+import { referenceLink } from "./reference.js";
 import { SECTIONS } from "./boot.js";
 import { ms } from "./format.js";
 import { outcome, verdictBadge } from "./outcome.js";
@@ -89,7 +90,9 @@ async function run(): Promise<void> {
       row.appendChild(el("div", `tier t-${item.certainty}`, item.certainty));
       const detail = el("div");
       detail.appendChild(el("div", null, item.summary));
-      detail.appendChild(el("div", "ev-meta", `${item.detector} · points to ${item.direction}`));
+      const meta = el("div", "ev-meta");
+      meta.append(referenceLink("detector", item.detector), ` · points to ${item.direction}`);
+      detail.appendChild(meta);
       if (item.deterministicBasis !== undefined) detail.appendChild(el("div", "basis", item.deterministicBasis));
       row.appendChild(detail);
       list.appendChild(row);

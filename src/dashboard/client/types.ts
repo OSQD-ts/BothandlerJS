@@ -51,7 +51,7 @@ export interface Row {
 }
 
 /** The views, in the order the tab strip and the digit shortcuts use. */
-export type TabName = "live" | "actors" | "stats" | "policy";
+export type TabName = "live" | "actors" | "stats" | "policy" | "reference";
 
 export interface Preview extends PolicyPreview {}
 export interface Policy extends PolicyDocument {}

@@ -1,4 +1,5 @@
 import { $, byId, clear, el, label } from "./dom.js";
+import { referenceLink } from "./reference.js";
 import { API, SECTIONS } from "./boot.js";
 import { app, download, today, toast } from "./app.js";
 import { getJson, postJson } from "./api.js";
@@ -234,7 +235,7 @@ function ruleCard(rule: EditorRule, index: number): HTMLElement {
     head.appendChild(action);
   } else {
     head.appendChild(matchSummary(rule));
-    head.appendChild(el("span", `act-pill ${actionKind(rule.action)}`, rule.action));
+    head.appendChild(referenceLink("action", rule.action, rule.action, `act-pill ${actionKind(rule.action)}`));
   }
 
   const up = el("button", "icon", "↑");

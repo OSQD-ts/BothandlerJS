@@ -1,4 +1,5 @@
 import { $, byId, clear, cssEscape, el, rootNode } from "./dom.js";
+import { referenceLink } from "./reference.js";
 import { feedPage, goToFeedPage, hiddenCount, ingest, labelOf, matchingCount, matchingRows, refreshFrozenPage, resetPaging, setSearch, setTimeframe, sortRows, state } from "./store.js";
 import { deleteFilter, refreshSavedFilters, saveFilter, savedFilters } from "./saved.js";
 import { suggestFor } from "./query.js";
@@ -783,6 +784,17 @@ function buildDetail(entry: DashboardEntry): HTMLTableRowElement {
   const cell = el("td");
   cell.colSpan = 6;
 
+  // What was done, with the action as a way to read what it does. The row says the same in
+  // its action column, but the row is one control that opens and closes, and a link
+  // inside it would be a second one competing for the same click.
+  if (entry.action !== undefined) {
+    const decided = el("div", "ev-meta");
+    decided.append("Action ", referenceLink("action", entry.action));
+    if (entry.rule !== undefined) decided.append(`, chosen by rule ${entry.rule}`);
+    if (entry.downgradedFrom !== undefined) decided.append(" · the guard stopped ", referenceLink("action", entry.downgradedFrom));
+    cell.appendChild(decided);
+  }
+
   if (!SECTIONS.evidence) {
     cell.appendChild(
       el(
@@ -808,13 +820,15 @@ function buildDetail(entry: DashboardEntry): HTMLTableRowElement {
       row.appendChild(el("div", `tier t-${item.certainty}`, item.certainty));
       const body = el("div");
       body.appendChild(el("div", null, item.summary));
-      let meta = `${item.detector} · points to ${item.direction}`;
+      let meta = ` · points to ${item.direction}`;
       if (item.family !== undefined) meta += ` · family “${item.family}”, counted once with its siblings`;
       // Said on every shadowed line rather than once at the top. A reader scanning the
       // list is looking at one row at a time, and a row that reads like evidence and was
       // not evidence is the single most misleading thing this page could show.
       if (item.shadow === true) meta += " · shadowed: counted, and part of no decision";
-      body.appendChild(el("div", "ev-meta", meta));
+      const metaLine = el("div", "ev-meta");
+      metaLine.append(referenceLink("detector", item.detector), meta);
+      body.appendChild(metaLine);
       if (item.deterministicBasis !== undefined) body.appendChild(el("div", "basis", item.deterministicBasis));
       row.appendChild(body);
       list.appendChild(row);
@@ -838,7 +852,9 @@ function buildDetail(entry: DashboardEntry): HTMLTableRowElement {
   }
 
   for (const failure of entry.failures) {
-    cell.appendChild(el("div", "ev-meta", `Detector ${failure.detector} ${failure.reason}: ${failure.message}`));
+    const line = el("div", "ev-meta");
+    line.append("Detector ", referenceLink("detector", failure.detector), ` ${failure.reason}: ${failure.message}`);
+    cell.appendChild(line);
   }
   if (entry.downgradeReason !== undefined) cell.appendChild(el("div", "basis", `Guard: ${entry.downgradeReason}`));
 

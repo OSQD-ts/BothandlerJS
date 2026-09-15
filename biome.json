@@ -9,6 +9,7 @@
     "includes": [
       "src/**/*.ts",
       "!src/dashboard/client.generated.ts",
+      "!src/dashboard/client/reference.generated.ts",
       "tests/**/*.ts",
       "scripts/**/*.ts",
       "demo/**/*.ts",

@@ -2,7 +2,7 @@ import { clear, el } from "./dom.js";
 import { n } from "./format.js";
 
 /** A horizontal bar list, sorted by value, capped at what a panel can show without scrolling. */
-export function drawBars(target: HTMLElement, rows: Iterable<[string, number]>, emptyText: string): void {
+export function drawBars(target: HTMLElement, rows: Iterable<[string, number]>, emptyText: string, link?: (label: string) => HTMLElement): void {
   clear(target);
   const filtered = [...rows].filter(([, value]) => value > 0);
   if (filtered.length === 0) {
@@ -17,7 +17,11 @@ export function drawBars(target: HTMLElement, rows: Iterable<[string, number]>, 
     const fill = el("div", "fill");
     fill.style.width = `${Math.max(2, Math.round((value / max) * 100))}%`;
     track.appendChild(fill);
-    track.appendChild(el("div", "lbl", label));
+    const name = el("div", "lbl");
+    // A link when the label names something the Reference screen explains.
+    if (link === undefined) name.textContent = label;
+    else name.appendChild(link(label));
+    track.appendChild(name);
     bar.appendChild(track);
     bar.appendChild(el("div", "v tnum", n(value)));
     target.appendChild(bar);

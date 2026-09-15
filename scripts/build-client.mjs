@@ -20,9 +20,11 @@ import { build } from "esbuild";
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { buildReference } from "./build-reference.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const target = join(root, "src", "dashboard", "client.generated.ts");
+const referenceTarget = join(root, "src", "dashboard", "client", "reference.generated.ts");
 
 /**
  * Sequences that would end the `<script>` element early, or open a comment the HTML
@@ -43,7 +45,7 @@ const FORBIDDEN_IN_SCRIPT = ["</script", "<!--", "-->"];
  */
 const FORBIDDEN_SINKS = ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"];
 
-export async function buildClient() {
+export async function buildClient(reference) {
   const result = await build({
     entryPoints: [join(root, "src", "dashboard", "client", "index.ts")],
     bundle: true,
@@ -57,6 +59,20 @@ export async function buildClient() {
     charset: "utf8",
     write: false,
     logLevel: "silent",
+    // The Reference screen's data is bundled from what was just generated rather than from
+    // the copy on disk, so `--check` compares the bundle against the documentation as it
+    // is now, not as it was the last time somebody built.
+    plugins: [
+      {
+        name: "reference-data",
+        setup(bundler) {
+          // Resolved by hand as well as loaded, so a checkout where the file has not been
+          // written yet still bundles.
+          bundler.onResolve({ filter: /reference\.generated\.js$/ }, () => ({ path: referenceTarget, namespace: "reference-data" }));
+          bundler.onLoad({ filter: /.*/, namespace: "reference-data" }, () => ({ contents: reference, loader: "ts", resolveDir: dirname(referenceTarget) }));
+        },
+      },
+    ],
   });
 
   const code = result.outputFiles[0].text;
@@ -109,10 +125,11 @@ export const VERSION = ${JSON.stringify(version)};
 }
 
 /**
- * The two generated files, and whether `--check` holds them to being current.
+ * The generated files, and whether `--check` holds them to being current.
  *
- * The client bundle is derived from source under `src/dashboard/client/`, so a committed
- * copy that disagrees with that source is a real defect — somebody edited the client and
+ * The client bundle is derived from source under `src/dashboard/client/`, and the reference
+ * data from the write-ups in `docs/`, so a committed copy that disagrees with its source is
+ * a real defect — somebody edited the client and
  * shipped the old bundle — and CI should refuse it.
  *
  * The version constant is derived from `package.json`, which the release workflow bumps
@@ -123,8 +140,10 @@ export const VERSION = ${JSON.stringify(version)};
  * right after it. It cannot ship stale — `prebuild`, `pretest` and `pretypecheck` all
  * regenerate it first — so being current in git is not a property worth enforcing.
  */
+const reference = await buildReference(root);
 const outputs = [
-  [target, await buildClient(), "dashboard client bundle", "src/dashboard/client.generated.ts", true],
+  [referenceTarget, reference, "reference data", "src/dashboard/client/reference.generated.ts", true],
+  [target, await buildClient(reference), "dashboard client bundle", "src/dashboard/client.generated.ts", true],
   [versionTarget, await buildVersion(), "version constant", "src/version.generated.ts", false],
 ];
 

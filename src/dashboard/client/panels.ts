@@ -1,4 +1,5 @@
 import { $, clear, el, rootNode } from "./dom.js";
+import { referenceLink } from "./reference.js";
 import { BOOT, SECTIONS } from "./boot.js";
 import { aggregate, oldestAt, state } from "./store.js";
 import { drawBars, pairs } from "./bars.js";
@@ -160,7 +161,7 @@ export function updateWindowLabels(): void {
 export function drawLivePanels(): void {
   if (!SECTIONS.statistics) return;
   const totals = aggregate(state.rows);
-  drawBars($("live-detectors"), totals.detectors, "Nothing has fired in this window.");
+  drawBars($("live-detectors"), totals.detectors, "Nothing has fired in this window.", (id) => referenceLink("detector", id));
   if (SECTIONS.actors) drawBars($("live-actors"), totals.actors, "No traffic in this window.");
 }
 
@@ -171,9 +172,9 @@ export function drawStatsPanels(): void {
 
   if (metrics !== undefined) {
     drawBars($("stat-verdicts"), pairs(metrics.verdicts), "Nothing assessed yet.");
-    drawBars($("stat-actions"), pairs(metrics.actions), "No decisions yet.");
+    drawBars($("stat-actions"), pairs(metrics.actions), "No decisions yet.", (name) => referenceLink("action", name));
     drawBars($("stat-classes"), pairs(metrics.botClasses), "Nothing classified yet.");
-    drawBars($("stat-detectors"), pairs(metrics.detectorFirings), "No detector has produced evidence yet.");
+    drawBars($("stat-detectors"), pairs(metrics.detectorFirings), "No detector has produced evidence yet.", (id) => referenceLink("detector", id));
 
     const challenges = $("stat-challenges");
     clear(challenges);
@@ -232,7 +233,9 @@ export function drawStatsPanels(): void {
   for (const detector of snapshot.detectors) {
     const row = el("div", `det${detector.shadow === true ? " shadow" : ""}`);
     const left = el("div");
-    left.appendChild(el("div", "mono", detector.id));
+    const name = el("div", "mono");
+    name.appendChild(referenceLink("detector", detector.id));
+    left.appendChild(name);
     left.appendChild(el("div", "d", detector.description));
     row.appendChild(left);
     // A shadowed detector's firings are counted elsewhere and mean something else, so

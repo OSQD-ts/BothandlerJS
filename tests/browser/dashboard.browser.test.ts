@@ -116,7 +116,7 @@ describe("moving between views", () => {
     await expect.poll(() => page.locator("#view-actors").isVisible()).toBe(true);
 
     await page.keyboard.press("End");
-    await expect.poll(() => page.locator("#tab-policy").getAttribute("aria-selected")).toBe("true");
+    await expect.poll(() => page.locator("#tab-reference").getAttribute("aria-selected")).toBe("true");
     await page.keyboard.press("Home");
     await expect.poll(() => page.locator("#tab-live").getAttribute("aria-selected")).toBe("true");
     await page.close();
@@ -286,9 +286,9 @@ describe("moving between views", () => {
   it("keeps exactly one tab in the tab order", async () => {
     const page = await open();
     const order = (): Promise<number[]> => page.locator(".tab").evaluateAll((tabs) => tabs.map((tab) => (tab as HTMLElement).tabIndex));
-    expect(await order()).toEqual([0, -1, -1, -1]);
+    expect(await order()).toEqual([0, -1, -1, -1, -1]);
     await page.locator("#tab-stats").click();
-    expect(await order()).toEqual([-1, -1, 0, -1]);
+    expect(await order()).toEqual([-1, -1, 0, -1, -1]);
     await page.close();
   });
 
@@ -313,12 +313,84 @@ describe("moving between views", () => {
 
   it("takes a digit as a shortcut to a view", async () => {
     const page = await open();
+    await page.keyboard.press("5");
+    await expect.poll(() => page.locator("#view-reference").isVisible()).toBe(true);
     await page.keyboard.press("4");
     await expect.poll(() => page.locator("#view-policy").isVisible()).toBe(true);
     await page.keyboard.press("2");
     await expect.poll(() => page.locator("#view-actors").isVisible()).toBe(true);
     await page.keyboard.press("1");
     await expect.poll(() => page.locator("#view-live").isVisible()).toBe(true);
+    await page.close();
+  });
+});
+
+/**
+ * The Reference screen, and the names elsewhere on the page that lead to it.
+ *
+ * What is worth covering is the journey rather than the text: a detector named in a
+ * request's evidence is one click from what it reads, the entry it lands on is a link that
+ * can be sent, and the back button returns to the request that raised the question.
+ */
+describe("the reference screen", () => {
+  it("opens a detector's write-up from the evidence that names it, and goes back", async () => {
+    const page = await open();
+    const link = page.locator("tr.detail .ev-meta button.ref-link");
+    // Not every request carries evidence, so open rows until one names a detector.
+    for (let i = 0; i < 12 && (await link.count()) === 0; i++) {
+      const toggle = page.locator("tbody tr.row .row-toggle").nth(i);
+      if ((await toggle.count()) === 0) break;
+      await toggle.click();
+    }
+    await expect.poll(() => link.count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    const evidence = link.filter({ hasNotText: /^(allow|tag|log|delay|rate-limit|challenge|redirect|block|drop|custom)$/ }).first();
+    const id = ((await evidence.textContent()) ?? "").trim();
+    await evidence.click();
+
+    await expect.poll(() => page.locator("#view-reference").isVisible()).toBe(true);
+    expect(await page.locator("#ref-title").textContent()).toBe(id);
+    expect(await page.locator("#ref-article .ref-body p").count()).toBeGreaterThan(0);
+    expect(decodeURIComponent(new URL(page.url()).hash)).toBe(`#reference?r=detector:${id}`);
+    expect(await page.locator('#ref-index [aria-current="true"]').textContent()).toContain(id);
+
+    await page.goBack();
+    await expect.poll(() => page.locator("#view-live").isVisible()).toBe(true);
+    await page.close();
+  });
+
+  it("opens an action from the rule that uses it", async () => {
+    const page = await open(1440, "#policy", "#view-policy");
+    const pill = page.locator("#rulelist button.act-pill").first();
+    await expect.poll(() => pill.count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    const name = ((await pill.textContent()) ?? "").trim();
+    await pill.click();
+    await expect.poll(() => page.locator("#view-reference").isVisible()).toBe(true);
+    expect(await page.locator("#ref-title").textContent()).toBe(name);
+    expect(await page.locator("#ref-article .ref-kicker").textContent()).toContain("Action");
+    await page.close();
+  });
+
+  it("opens on the entry a link names, and follows the links between entries", async () => {
+    const page = await open(1440, "#reference?r=detector:cadence", "#view-reference");
+    await expect.poll(() => page.locator("#ref-title").textContent()).toBe("cadence");
+    // The write-up compares itself with rate-anomaly by name, and the name is a way there.
+    await page.locator("#ref-article .ref-body button.ref-link", { hasText: /^rate-anomaly$/ }).first().click();
+    await expect.poll(() => page.locator("#ref-title").textContent()).toBe("rate-anomaly");
+    await page.close();
+  });
+
+  it("filters the index without losing what is typed to a redraw", async () => {
+    const page = await open(1440, "#reference", "#view-reference");
+    await expect.poll(() => page.locator("#ref-index .ref-item").count(), { timeout: 15_000 }).toBeGreaterThan(40);
+    await page.locator("#ref-filter").fill("drop");
+    await expect.poll(() => page.locator("#ref-index li:not([hidden]) .ref-item", { hasText: /^drop$/ }).count()).toBe(1);
+    expect(await page.locator("#ref-index li:not([hidden]) .ref-id", { hasText: /^cadence$/ }).count()).toBe(0);
+    // Across a repaint of the counters, which redraw on a timer whatever screen is open.
+    await page.waitForTimeout(2600);
+    expect(await page.locator("#ref-filter").inputValue()).toBe("drop");
+    expect(await page.locator("#ref-index li:not([hidden]) .ref-item", { hasText: /^drop$/ }).count()).toBe(1);
+    await page.locator("#ref-filter").fill("zzzz-nothing");
+    await expect.poll(() => page.locator("#ref-empty").isVisible()).toBe(true);
     await page.close();
   });
 });
@@ -2195,6 +2267,7 @@ describe("acting on one actor, and having nothing to show", () => {
         ["#tab-actors", "#view-actors"],
         ["#tab-stats", "#view-stats"],
         ["#tab-policy", "#view-policy"],
+        ["#tab-reference", "#view-reference"],
         ["#tab-live", "#view-live"],
       ] as const) {
         await page.locator(tab).click();
@@ -2266,6 +2339,49 @@ describe("the policy screen's editors", () => {
       await page.locator('#ranges-body button[aria-label="Remove 198.51.100.0/24 from allowlist"]').click();
       await page.waitForTimeout(900);
       expect(own.isAllowlisted("198.51.100.7"), "and removing it reaches the server too").toBe(false);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  /**
+   * A range set can hold hundreds of entries — a crawler's published ranges, an office's
+   * whole allocation — and drawn as chips it pushed everything under it off the screen.
+   * A long one now folds to a line that still says what is in it, and opens into a filter
+   * and a bounded scroller.
+   */
+  it("folds a long range set, filters it, and still removes from it", async () => {
+    const many = Array.from({ length: 60 }, (_, i) => `198.51.${i}.0/24`);
+    const own = new BotHandler({ preset: "protect-content", allowlist: [...many, "2001:db8::/32"] });
+    const server = await own.serveDashboard({ port: 0, controls: { editRanges: true } });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
+      await page.goto(`${server.url}#policy`);
+      await page.waitForSelector("#view-policy:not([hidden])");
+      const set = page.locator("#ranges-body .rangeset", { has: page.locator(".rs-name", { hasText: /^allowlist$/ }) });
+      await expect.poll(() => set.count(), { timeout: 15_000 }).toBe(1);
+      const toggle = set.locator(".rs-toggle");
+
+      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(await set.locator(".rs-preview").textContent()).toContain("and 58 more");
+      expect(await set.locator(".rs-split").textContent()).toBe("60 IPv4 · 1 IPv6");
+      expect(await set.locator('button[aria-label^="Remove"]').count(), "folded, it draws no chips").toBe(0);
+
+      await toggle.click();
+      await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
+      const grid = set.locator(".cidrs.long");
+      expect((await grid.boundingBox())?.height ?? 0, "bounded, not a wall").toBeLessThanOrEqual(240);
+
+      await set.locator('input[aria-label="Filter allowlist"]').fill("198.51.42.");
+      await expect.poll(() => grid.locator(".cidr").count()).toBe(1);
+
+      // Clicking the chip moves focus out of the filter, which frees the panel to redraw:
+      // the filter and the open state have to survive that.
+      await set.locator('button[aria-label="Remove 198.51.42.0/24 from allowlist"]').click();
+      await expect.poll(() => own.isAllowlisted("198.51.42.9"), { timeout: 15_000 }).toBe(false);
+      await expect.poll(() => set.locator(".rs-status").textContent()).toBe("Nothing in this set matches.");
+      expect(await toggle.getAttribute("aria-expanded")).toBe("true");
       await page.close();
     } finally {
       await server.close();
@@ -2893,8 +3009,9 @@ describe("a dashboard with less on it", () => {
     const page = await openAnalyst();
     // No Policy: that section is off. Actors survives, because `sections.actors` is on
     // — a listener can perfectly well show who is hitting you without showing the
-    // evidence trail that says how each of them was recognised.
-    expect(await page.locator(".tabs .tab:not([hidden])").allInnerTexts()).toEqual(["Live feed", "Actors", "Statistics"]);
+    // evidence trail that says how each of them was recognised. Reference survives too:
+    // it is the library's documentation, and says nothing about anybody's traffic.
+    expect(await page.locator(".tabs .tab:not([hidden])").allInnerTexts()).toEqual(["Live feed", "Actors", "Statistics", "Reference"]);
     await page.close();
   });
 
@@ -3127,7 +3244,7 @@ describe("accessibility", () => {
       await page.locator("tbody tr.row .row-toggle").first().click();
       await page.waitForSelector("tr.detail");
     } else {
-      await page.waitForSelector(`#view-${hash.slice(1)}:not([hidden])`);
+      await page.waitForSelector(`#view-${hash.slice(1).split("?")[0]}:not([hidden])`);
       if (hash === "#actors") await page.waitForSelector("#actor-rows tr");
       if (hash === "#policy") await page.locator("#rulelist .rule .chev").first().click();
     }
@@ -3140,6 +3257,8 @@ describe("accessibility", () => {
     ["the actors screen", "#actors"],
     ["the statistics screen", "#stats"],
     ["the policy screen with a rule open", "#policy"],
+    ["the reference screen", "#reference"],
+    ["a reference entry", "#reference?r=detector:cadence"],
   ];
 
   for (const scheme of ["light", "dark"] as const) {
@@ -3228,7 +3347,7 @@ describe("accessibility", () => {
         };
 
         const inRow = ["badge b-proven", "badge b-suspected", "badge b-human", "badge b-unknown", "act act-deny", "act act-mitigate", "act act-allow", "act act-tag", "sub", "guard"];
-        const inDetail = ["tier t-certain", "tier t-strong", "tier t-moderate", "tier t-weak", "ev-meta", "basis", "hint"];
+        const inDetail = ["tier t-certain", "tier t-strong", "tier t-moderate", "tier t-weak", "ev-meta", "basis", "hint", "ref-link"];
         const closed = document.querySelector("tbody tr.row:not(.open) td") as HTMLElement | null;
         const opened = document.querySelector("tbody tr.row.open td") as HTMLElement | null;
         const detail = document.querySelector("tr.detail td") as HTMLElement | null;
@@ -3420,7 +3539,7 @@ describe("paging through more than fits", () => {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
       await page.goto(pagedUrl);
       await page.waitForSelector("tbody tr.row");
-      for (const tab of ["live", "actors", "stats", "policy"] as const) {
+      for (const tab of ["live", "actors", "stats", "policy", "reference"] as const) {
         await page.click(`#tab-${tab}`);
         await page.waitForTimeout(400);
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

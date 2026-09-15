@@ -302,6 +302,13 @@ button[disabled] { opacity: .5; cursor: default; }
 }
 .tab:hover { background: none; color: var(--ink); }
 .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--s1); }
+/* Five tabs are wider than a phone. Tightened first, and past that the strip scrolls on its
+   own rather than pushing the whole document sideways. */
+@media (max-width: 640px) {
+  .tabs { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { padding: 9px 7px; font-size: 12.5px; flex: none; }
+}
 
 /* --- layout ------------------------------------------------------------- */
 /* The top padding is the gap under the sticky header. At 18px the counter row sat almost
@@ -897,18 +904,95 @@ input.label-input:focus { outline: 2px solid var(--accent); outline-offset: 1px;
 #tester-panel input[type="text"] { flex: 1 1 120px; min-width: 90px; }
 .assumed { color: var(--muted); font-size: 11px; margin-top: 6px; }
 
-.rangeset { border-bottom: 1px solid var(--line-soft); padding: 10px 15px; }
+/* Range sets. A set can be two addresses or three hundred crawler ranges, so each one is a
+   folding header saying how many and of which family, and a long one opens into a filter
+   and a bounded scroller rather than a wall of chips that pushes the panel off the page. */
+.rangeset { border-bottom: 1px solid var(--line-soft); padding: 8px 15px 9px; }
 .rangeset:last-child { border-bottom: 0; }
-.rangeset h3 { margin: 0 0 6px; font-size: 12.5px; font-weight: 620; display: flex; align-items: baseline; gap: 8px; }
-.rangeset h3 span { font-weight: 400; color: var(--muted); font-size: 11.5px; }
+.rangeset h3 { margin: 0; font-size: 12.5px; font-weight: 620; display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; }
+.rs-toggle {
+  display: inline-flex; align-items: baseline; gap: 7px; min-width: 0; border: 0; background: none;
+  padding: 2px 6px 2px 2px; margin-left: -2px; font: inherit; color: var(--ink); border-radius: 6px;
+}
+.rs-toggle:hover { background: var(--surface-2); color: var(--ink); border-color: transparent; }
+.rs-toggle .chev { color: var(--muted); display: inline-block; width: 9px; }
+.rs-name { overflow-wrap: anywhere; white-space: normal; text-align: left; }
+.rs-count { font-weight: 400; color: var(--muted); font-size: 11.5px; }
+.rs-split { margin-left: auto; font-weight: 400; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.rs-preview {
+  margin: 3px 0 0 18px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px;
+  color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rs-body { display: grid; gap: 7px; margin-top: 7px; }
+.rs-filter { width: 100%; box-sizing: border-box; font-size: 12px; }
+.rs-status { margin: 0; }
 .cidrs { display: flex; gap: 5px; flex-wrap: wrap; }
+.cidrs.long {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 4px; align-content: start;
+  max-height: 236px; overflow-y: auto; overscroll-behavior: contain; padding: 6px;
+  border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface-2);
+}
 .cidr {
-  display: inline-flex; align-items: center; gap: 5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px; background: color-mix(in srgb, var(--ink) 6%, transparent); border-radius: 999px; padding: 2px 4px 2px 9px;
 }
+.cidrs.long .cidr { justify-content: space-between; border-radius: 6px; }
+.cidr-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cidr button { border: 0; background: none; padding: 0 4px; font-size: 12px; line-height: 1; color: var(--muted); border-radius: 999px; }
 .cidr button:hover { background: none; color: var(--crit-text); }
 .cidr.readonly { padding-right: 9px; }
+/* The Reference screen. The article is set for reading rather than scanning: a longer
+   measure, a larger size and more leading than the panels around it, because it is the
+   one place on the page somebody reads paragraphs. */
+.ref-layout { display: grid; gap: 16px; grid-template-columns: minmax(230px, 300px) minmax(0, 1fr); align-items: start; }
+@container dash (max-width: 820px) { .ref-layout { grid-template-columns: minmax(0, 1fr); } }
+.ref-search { padding: 10px 15px; border-bottom: 1px solid var(--line-soft); }
+.ref-search input { width: 100%; box-sizing: border-box; }
+#ref-index { max-height: min(72vh, 900px); overflow: auto; padding-bottom: 8px; }
+@container dash (max-width: 820px) { #ref-index { max-height: 40vh; } }
+.ref-group h3 { margin: 12px 15px 4px; font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.ref-group ul { list-style: none; margin: 0; padding: 0; }
+.ref-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; border: 0; border-radius: 0; background: none;
+  padding: 5px 15px; text-align: left; font-size: 12px; color: var(--ink-2);
+}
+.ref-item:hover { background: var(--surface-2); border-color: transparent; }
+.ref-item[aria-current="true"] { background: color-mix(in srgb, var(--s1) 12%, var(--surface)); color: var(--ink); box-shadow: inset 2px 0 0 var(--s1); }
+.ref-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ref-tag { font-size: 10.5px; color: var(--good-text); }
+.ref-article header { padding: 18px 22px 14px; border-bottom: 1px solid var(--line-soft); }
+.ref-kicker { font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 4px; }
+.ref-article h2 { margin: 0; font-size: 19px; font-weight: 650; color: var(--ink); }
+.ref-article h2:focus { outline: none; }
+.ref-lede { margin: 8px 0 0; color: var(--ink-2); font-size: 13px; }
+.ref-facts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.ref-fact { font-size: 11px; padding: 2px 9px; border-radius: 999px; background: color-mix(in srgb, var(--ink) 7%, transparent); color: var(--ink-2); }
+.ref-fact.on { background: color-mix(in srgb, var(--good-text) 14%, transparent); color: var(--good-text); }
+.ref-fact.off { color: var(--muted); }
+.ref-body { padding: 6px 22px 8px; font-size: 13.5px; line-height: 1.65; color: var(--ink); max-width: 80ch; }
+.ref-body p { margin: 11px 0; }
+.ref-body h3 { margin: 22px 0 4px; font-size: 13.5px; font-weight: 650; }
+.ref-body ul { margin: 8px 0; padding-left: 20px; }
+.ref-body li { margin: 3px 0; }
+.ref-body code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em; background: color-mix(in srgb, var(--ink) 7%, transparent); padding: 1px 5px; border-radius: 5px; }
+.ref-body pre { background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px 13px; overflow-x: auto; font-size: 12px; line-height: 1.55; }
+.ref-body pre code { background: none; padding: 0; font-size: inherit; }
+.ref-table { overflow-x: auto; margin: 10px 0; }
+.ref-table table { border-collapse: collapse; font-size: 12.5px; line-height: 1.45; }
+.ref-table th, .ref-table td { text-align: left; padding: 5px 12px 5px 0; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+.ref-table th { color: var(--muted); font-weight: 600; }
+.ref-source { padding: 0 22px 14px; margin: 4px 0 0; font-size: 11.5px; color: var(--muted); }
+.ref-body .ref-source { padding: 0; }
+/* A name elsewhere on the page that opens its entry here. Dotted rather than solid so a
+   screen full of them still reads as data first. */
+.ref-link {
+  display: inline; border: 0; border-bottom: 1px dotted color-mix(in srgb, currentColor 55%, transparent); border-radius: 0;
+  background: none; padding: 0; margin: 0; font: inherit; line-height: inherit; color: inherit; white-space: inherit; text-align: inherit; cursor: pointer;
+}
+.ref-link:hover { background: none; color: var(--ink); border-color: transparent transparent currentColor; }
+.ref-body .ref-link { border-bottom-color: color-mix(in srgb, var(--s1) 70%, transparent); }
+button.act-pill { border: 0; line-height: inherit; }
+button.act-pill:hover { text-decoration: underline; }
 .toasts { position: fixed; right: 18px; bottom: 18px; z-index: 60; display: grid; gap: 8px; max-width: 380px; }
 .toast {
   background: var(--raised); border: 1px solid var(--line); border-left: 3px solid var(--s1);
@@ -963,6 +1047,7 @@ export const DASHBOARD_MARKUP = String.raw`
       <button class="tab" id="tab-actors" role="tab" aria-selected="false" aria-controls="view-actors">Actors</button>
       <button class="tab" id="tab-stats" role="tab" aria-selected="false" aria-controls="view-stats">Statistics</button>
       <button class="tab" id="tab-policy" role="tab" aria-selected="false" aria-controls="view-policy">Policy<span id="notice-badge" class="pill" hidden></span></button>
+      <button class="tab" id="tab-reference" role="tab" aria-selected="false" aria-controls="view-reference">Reference</button>
     </div>
     <div class="facts" id="chips"></div>
     <div class="peers" id="peers"></div>
@@ -1251,6 +1336,18 @@ export const DASHBOARD_MARKUP = String.raw`
         <h2>robots.txt this policy implies</h2>
         <div class="editor"><pre class="code" id="robots-preview"></pre><div id="robots-notes"></div></div>
       </section>
+    </div>
+  </div>
+
+  <div id="view-reference" role="tabpanel" aria-labelledby="tab-reference" class="stack" hidden>
+    <div class="ref-layout">
+      <section class="panel ref-index-panel" aria-labelledby="ref-index-title">
+        <h2 id="ref-index-title">Detectors and actions <span class="sub" id="ref-count"></span></h2>
+        <div class="ref-search"><input type="search" id="ref-filter" placeholder="Filter by name or what it does" aria-label="Filter detectors and actions" autocomplete="off" spellcheck="false"></div>
+        <nav id="ref-index" aria-label="Detectors and actions"></nav>
+        <div class="note" id="ref-empty" hidden>Nothing matches that filter.</div>
+      </section>
+      <article class="panel ref-article" id="ref-article"></article>
     </div>
   </div>
 </main>

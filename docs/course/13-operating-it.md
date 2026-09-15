@@ -25,7 +25,7 @@ console.log(dashboard.url);
 That is the whole integration: it listens on a port of its own, subscribes to the handler
 you called it on, and returns a handle with a `close()`.
 
-Four screens — the live feed, actors, statistics, and the policy editor. Open a row and you
+Five screens — the live feed, actors, statistics, the policy editor, and a reference to every detector and action. Open a row and you
 see the evidence that produced the verdict; that is the view that answers "why was this
 customer challenged?".
 

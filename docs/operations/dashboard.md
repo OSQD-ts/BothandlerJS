@@ -22,7 +22,7 @@ console.log(dashboard.url);   // http://127.0.0.1:9674/
 That is the whole integration. It listens on a port of its own, subscribes to the
 handler you called it on, and returns a handle with the URL and a `close()`.
 
-### Four screens
+### Five screens
 
 **Live feed** — one row per request: when it happened, method and path, the actor, the
 User-Agent, the verdict, the score, the action and the rule that chose it. Filter by
@@ -210,6 +210,14 @@ scroll past in a log nobody reads.
 
 The counters come from the same `metrics()` snapshot as the Prometheus endpoint, so
 the numbers on the screen and the numbers in your alerting agree by construction.
+
+**Reference** — how every detector and action works, in the words of these documents,
+which the build reads into the page. Every detector and action named elsewhere on the
+dashboard — in a request's evidence, on the counters, in the installed-detector list and
+in the rule editor — is a link to its entry here, so the question "what does
+`crawl-breadth` actually look at" is answered next to the verdict that raised it. Detectors
+installed on this handler are marked, and one of your own appears with the description it
+gives itself. `sections: { reference: false }` leaves it out.
 
 ### Trying a policy before you mean it
 
@@ -493,7 +501,7 @@ traffic chart, the score distribution and the latency histogram now each have a
 description naming their totals, their bands and — for traffic — the runtime changes
 marked on them.
 
-`npm run test:browser` runs axe against all four screens on every change and fails on
+`npm run test:browser` runs axe against all five screens on every change and fails on
 anything it rates serious or critical. It is what found the two defects above.
 
 ### One dashboard, one process — and the others

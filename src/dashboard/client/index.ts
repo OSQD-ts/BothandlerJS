@@ -10,6 +10,7 @@ import { drawLatency, drawScores, drawTraffic } from "./charts.js";
 import { applyActorScope, applyActorsQuery, drawActors, initActorScope, initActorsSearch, trackActors } from "./registry.js";
 import { drawPolicyTab, initPolicy, loadPolicy } from "./policy.js";
 import { loadRanges } from "./ranges.js";
+import { drawReference, initReference, selectedReference, setSelectedReference } from "./reference.js";
 import { initTester } from "./tester.js";
 import { drawRetention, initRetention } from "./retention.js";
 import type { FilterName } from "./query.js";
@@ -21,6 +22,7 @@ const TABS: Array<[id: string, name: TabName, enabled: boolean]> = [
   ["tab-actors", "actors", SECTIONS.registry],
   ["tab-stats", "stats", SECTIONS.statistics],
   ["tab-policy", "policy", SECTIONS.policy],
+  ["tab-reference", "reference", SECTIONS.reference],
 ];
 
 const available = TABS.filter(([, , enabled]) => enabled);
@@ -167,13 +169,16 @@ function syncUrl(replace = true): void {
   if (state.search !== "") params.set("q", state.search);
   if (state.actorScope !== "tracked") params.set("a", state.actorScope);
   if (state.actorsQuery !== "") params.set("aq", state.actorsQuery);
+  // Only on the screen it belongs to: carried onto every other tab it would make two
+  // links to the same view look different.
+  if (state.tab === "reference" && selectedReference() !== "") params.set("r", selectedReference());
   const query = params.toString();
   const hash = `#${state.tab}${query === "" ? "" : `?${query}`}`;
   if (location.hash === hash) return;
   history[replace ? "replaceState" : "pushState"]({ tab: state.tab }, "", hash);
 }
 
-function readUrl(): { tab: TabName; filter: FilterName; search: string; actorScope: "tracked" | "feed"; actorsQuery: string } {
+function readUrl(): { tab: TabName; filter: FilterName; search: string; actorScope: "tracked" | "feed"; actorsQuery: string; reference: string } {
   // And it is not ours to read either: a host page using hash routing would otherwise
   // decide which tab this opens on.
   const embedded = isEmbedded();
@@ -196,6 +201,7 @@ function readUrl(): { tab: TabName; filter: FilterName; search: string; actorSco
     // a hand-edited URL should land somewhere, and this is the somewhere it lands.
     actorScope: (params.get("a") ?? view.actorScope) === "feed" ? "feed" : "tracked",
     actorsQuery: params.get("aq") ?? view.actorsQuery ?? "",
+    reference: params.get("r") ?? "",
   };
 }
 
@@ -247,6 +253,7 @@ function initTabs(): void {
     reflectFilterButtons();
     applyActorScope(url.actorScope);
     applyActorsQuery(url.actorsQuery);
+    setSelectedReference(url.reference);
     showTab(url.tab, { push: false });
   });
 }
@@ -295,9 +302,9 @@ function initKeyboard(): void {
       search.select();
       return;
     }
-    // 1-2-3-4 for the views, the way every tabbed console does it. They index the tabs
+    // 1 to 5 for the views, the way every tabbed console does it. They index the tabs
     // this listener actually has, so a dashboard with two of them has two shortcuts.
-    const digit = ["1", "2", "3", "4"].indexOf(event.key);
+    const digit = ["1", "2", "3", "4", "5"].indexOf(event.key);
     if (digit !== -1 && digit < available.length) {
       event.preventDefault();
       showTab(available[digit]?.[1] ?? FIRST, { focus: true, replace: false });
@@ -385,10 +392,12 @@ function draw(): void {
     drawScores();
     drawStatsPanels();
     if (SECTIONS.audit) drawAudit();
-  } else {
+  } else if (state.tab === "policy") {
     drawPolicyTab();
     if (SECTIONS.notices) drawNotices();
     if (SECTIONS.changes) drawChanges();
+  } else {
+    drawReference();
   }
 }
 
@@ -442,6 +451,7 @@ function start(): void {
   initTester();
   initRetention();
   initPolicy();
+  initReference();
 
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   addEventListener("resize", () => {
@@ -464,6 +474,7 @@ function start(): void {
   if (SECTIONS.feed) reflectFilterButtons();
   applyActorScope(url.actorScope);
   applyActorsQuery(url.actorsQuery);
+  setSelectedReference(url.reference);
   showTab(url.tab, { replace: true });
 
   suspendScrollAnchoring();

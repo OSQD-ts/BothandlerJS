@@ -1566,6 +1566,7 @@ function resolveSections(sections: DashboardSections | undefined): Required<Dash
     guard: policy && on(sections?.guard),
     robots: policy && on(sections?.robots),
     ranges: policy && on(sections?.ranges),
+    reference: on(sections?.reference),
   };
 }
 

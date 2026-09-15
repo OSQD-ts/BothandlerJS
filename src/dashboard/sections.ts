@@ -90,4 +90,13 @@ export interface DashboardSections {
   guard?: boolean;
   /** The `robots.txt` the policy implies. Default true. */
   robots?: boolean;
+  /**
+   * The Reference tab: how every detector and action works, in the words of the
+   * documentation that ships with the library. Default true.
+   *
+   * Nothing on it is about your traffic, so it withholds nothing when it is on. It is a
+   * section so that a dashboard narrowed to one job can leave it out, and so that the
+   * names elsewhere on the page stop being links into a tab that is not there.
+   */
+  reference?: boolean;
 }
