@@ -67,8 +67,11 @@ export async function buildClient(reference) {
         name: "reference-data",
         setup(bundler) {
           // Resolved by hand as well as loaded, so a checkout where the file has not been
-          // written yet still bundles.
-          bundler.onResolve({ filter: /reference\.generated\.js$/ }, () => ({ path: referenceTarget, namespace: "reference-data" }));
+          // written yet still bundles. The path is relative on purpose: esbuild writes a
+          // module's path into the bundle as a comment, and an absolute one made the
+          // committed bundle depend on where the repository was checked out — CI rebuilt
+          // it under a different directory and refused it as out of date.
+          bundler.onResolve({ filter: /reference\.generated\.js$/ }, () => ({ path: "src/dashboard/client/reference.generated.ts", namespace: "reference-data" }));
           bundler.onLoad({ filter: /.*/, namespace: "reference-data" }, () => ({ contents: reference, loader: "ts", resolveDir: dirname(referenceTarget) }));
         },
       },
