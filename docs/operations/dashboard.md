@@ -182,7 +182,14 @@ never had; the assessment-latency histogram with mean, p95 and max; and the **sc
 distribution with your `suspectThreshold` marked on it**, which is the chart that
 answers "how close does ordinary traffic run to the line?" before you move it.
 
-That chart takes a scope, and the reason is worth stating: half this screen counts the
+The screen is grouped by what each panel counts, under four headings. **Traffic** is the
+two charts over time and score. **Since start** is verdicts, actions, bot classes and
+detector firings for every request this process has assessed. **In the window** is the
+rules that fired, guard stops, identities, busiest and denied paths — only the requests
+the feed still holds. **Health** is whether detection is running, the latency histogram,
+challenges, bypasses and the audit. Every installed detector is listed at the foot.
+
+The score chart takes a scope, and the reason is worth stating: half this screen counts the
 few hundred requests still in the feed's ring and half counts since the process
 started. Those are different populations — on a busy server the ring can be ninety
 seconds of a three-week run — and they used to wear the same grey subtitle. Every
@@ -202,11 +209,15 @@ Beside them, the **audit panel**: the window against its baseline, measure by me
 with the ratio between them and the checks that are installed. See
 [The audit](audit.md).
 
-**Policy** — the rules as JSON, the guard settings (read-only unless you opted in — see
-[Changing the guard](#changing-the-guard-behind-its-own-flag)), a `robots.txt` preview
-generated from the rules that decline crawlers, and the notices panel: startup
-warnings, audit anomalies, and anything else the engine has raised, which otherwise
-scroll past in a log nobody reads.
+**Policy** — laid out by what each part is for. The main column is the work: the rules
+editor, with the shipped presets to preview under it, and then **Limits** — the guard
+settings (read-only unless you opted in — see
+[Changing the guard](#changing-the-guard-behind-its-own-flag)) beside the range sets.
+The column beside it is what the running policy is doing: the notices panel first —
+startup warnings, audit anomalies, and anything else the engine has raised, which
+otherwise scroll past in a log nobody reads, with a repeated notice counted on one row
+rather than drawn again — then the changes made at runtime, and **Running now**: the
+rules in evaluation order and the `robots.txt` they imply.
 
 The counters come from the same `metrics()` snapshot as the Prometheus endpoint, so
 the numbers on the screen and the numbers in your alerting agree by construction.

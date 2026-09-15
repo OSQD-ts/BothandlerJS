@@ -429,6 +429,9 @@ function applySections(): void {
     const node = rootNode().querySelector<HTMLElement>(`#${id}`);
     if (node !== null && !enabled) node.remove();
   }
+  // The Limits heading introduces two panels, and with both of them gone it would be
+  // introducing nothing.
+  if (!SECTIONS.guard && !SECTIONS.ranges) rootNode().querySelector("#limits-group")?.remove();
 }
 
 function start(): void {

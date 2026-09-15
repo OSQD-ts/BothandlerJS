@@ -741,6 +741,78 @@ tbody tr.row:focus-visible td.edge { border-left-color: var(--focus); }
 .hdr td.v { overflow-wrap: anywhere; }
 .hdr td.v.red { color: var(--muted); font-style: italic; }
 
+/* The Policy screen, arranged by what each part is for. The work — the rules, and the
+   limits no rule can pass — is the main column, read top to bottom. What the running
+   policy is doing — notices, changes, the order it evaluates in and the robots.txt it
+   implies — is a narrower column beside it, with the notices first because they are what
+   the badge on the tab is pointing at. */
+.policy-layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); align-items: start; }
+@container dash (max-width: 1080px) { .policy-layout { grid-template-columns: minmax(0, 1fr); } }
+.policy-group, .stat-group { display: grid; gap: 10px; }
+/* The Statistics screen, grouped by the population each panel counts. "Since start" and
+   "in the window" are different questions answered over different requests, and the
+   panels answering them used to be interleaved row by row, so two numbers side by side
+   could disagree for no reason a reader could see. Panels of uneven height flow into
+   balanced columns instead of rows that pad every short panel to its tallest neighbour. */
+.stat-pair { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); align-items: stretch; }
+/* The two charts are read as a pair, so they share a height: when one legend wraps to a
+   second line the other panel grows with it, and its legend stays on the bottom edge
+   rather than floating under a shorter chart. */
+.stat-pair > .panel { display: flex; flex-direction: column; }
+.stat-pair > .panel > .legend { margin-top: auto; }
+/* Panels in one row share a height, so a short list does not leave its neighbour's
+   bottom edge hanging below it. The long lists — detector firings, paths — get a row of
+   their own and run in columns, rather than one of them standing alone under three
+   short ones with a screen of nothing beside it. */
+.stat-rows { display: grid; gap: 16px; }
+/* Grid items will not shrink below their content unless told they may. The chart panels'
+   headings carry a row of range buttons, and at 375px that was enough to hold both charts
+   seven pixels wider than the screen. */
+.stat-pair > *, .stat-trio > *, .stat-duo > *, .policy-pair > *, .policy-layout > * { min-width: 0; }
+.stat-trio { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); }
+.stat-duo { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
+.bars.cols { display: block; columns: 2 240px; column-gap: 28px; }
+.bars.cols.wide { columns: 4 260px; }
+.bars.cols > .bar { break-inside: avoid; margin-bottom: 8px; }
+.bars.cols > .bar:last-child { margin-bottom: 0; }
+/* A short list in two columns reads as two lists, so a half-width panel waits until there is
+   enough to fill them. A full-width one never does: one column across the whole screen
+   stretches six bars to a length nobody can read along. */
+.bars.cols:not(.wide):not(:has(> .bar:nth-child(7))) { columns: auto; }
+.stat-flow { columns: 3 320px; column-gap: 16px; margin-bottom: -16px; }
+.stat-flow > .panel { break-inside: avoid; margin-bottom: 16px; }
+/* The list closes the screen and is not one of the groups above it, so it gets the same
+   breathing room a group heading would give it rather than butting against Health. */
+.detectors-panel { margin-top: 18px; }
+.detector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); }
+.detector-grid .det { border-right: 1px solid var(--line-soft); }
+.group-head { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; padding: 6px 2px 0; }
+.group-head h2 { margin: 0; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-2); }
+.group-head p { margin: 0; font-size: 12px; color: var(--muted); }
+/* The guard's form puts its rows straight into the panel, so the panel's inset has to
+   come from here or the labels sit on the border. */
+#stat-policy > .field, #stat-policy > .field-row { padding: 5px 15px; }
+.policy-pair { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
+.panel-sub { margin: 0; padding: 12px 15px 0; font-size: 11px; font-weight: 650; color: var(--muted); }
+/* Bounded, so a flood of different notices cannot push the rest of the column away. It
+   scrolls, so it is a focusable region: a list a keyboard cannot scroll is a list half of
+   it cannot be read from. */
+#stat-notices { max-height: 460px; overflow-y: auto; }
+#robots-panel { border-top: 1px solid var(--line-soft); margin-top: 4px; }
+#robots-notes .ev-meta { margin-top: 4px; }
+.preset-row { gap: 6px 10px; border-bottom: 0; border-top: 1px solid var(--line); }
+.preset-label { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.preset-buttons { display: flex; gap: 5px; flex-wrap: wrap; }
+.preset-buttons button { font-size: 11.5px; padding: 3px 9px; }
+.preset-row .hint { flex-basis: 100%; }
+/* A result box that has nothing to say should not leave its padding behind. Only the
+   wrapper that holds nothing else: the request tester's .editor holds its form as well,
+   and hiding that whenever there was no result yet hid the tester entirely. */
+.result-wrap:has(> .result[hidden]) { display: none; }
+.rule-order { margin: 0; padding: 6px 15px 12px 40px; font-size: 12px; line-height: 1.6; }
+.rule-order li { break-inside: avoid; overflow-wrap: anywhere; }
+.rule-order li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
+.note.aside { font-size: 11.5px; color: var(--muted); padding-top: 0; }
 .tools { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
 .tools button { font-size: 11.5px; padding: 4px 9px; }
 
@@ -771,6 +843,11 @@ pre.code {
 }
 .notice { display: grid; grid-template-columns: 74px 1fr; gap: 10px; padding: 8px 15px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
 .notice:last-child { border-bottom: 0; }
+/* Repeats are counted on the row rather than drawn again. The count sits in the time
+   column's grid track so the message keeps its full width. */
+.notice { position: relative; }
+.notice-count { position: absolute; right: 15px; top: 8px; font-size: 10.5px; font-weight: 650; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.notice:has(.notice-count) > div:last-child { padding-right: 44px; }
 .notice .when { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .notice.warning .tag { color: var(--warn-text); font-weight: 600; }
 .notice.error .tag { color: var(--crit-text); font-weight: 600; }
@@ -1187,159 +1264,188 @@ export const DASHBOARD_MARKUP = String.raw`
   </div>
 
   <div id="view-stats" role="tabpanel" aria-labelledby="tab-stats" class="stack" hidden>
-    <div class="two">
-      <section class="panel">
-        <h2>Traffic <span class="range" id="traffic-range"></span><span class="sub" id="traffic-window"></span></h2>
-        <div class="chart" id="traffic-chart"><svg id="traffic" role="img" aria-labelledby="traffic-alt"></svg><div class="tip" id="traffic-tip"></div></div>
-        <p class="sr-only" id="traffic-alt"></p>
-        <div class="legend" id="traffic-legend"></div>
-      </section>
-      <section class="panel">
-        <h2>Assessment latency <span class="sub">since start</span></h2>
-        <div class="chart" id="latency-chart"><svg id="latency" role="img" aria-labelledby="latency-alt"></svg><div class="tip" id="latency-tip"></div></div>
-        <p class="sr-only" id="latency-alt"></p>
-        <div class="legend"><span id="latency-summary"></span></div>
-      </section>
-    </div>
-
-    <div class="two">
-      <section class="panel">
-        <h2>Score distribution <span class="range" id="score-scope"></span><span class="sub" id="score-window"></span></h2>
-        <div class="chart" id="score-chart"><svg id="scores" role="img" aria-labelledby="score-alt"></svg><div class="tip" id="score-tip"></div></div>
-        <p class="sr-only" id="score-alt"></p>
-        <div class="legend" id="score-legend"></div>
-      </section>
-      <section class="panel">
-        <h2>Guard stops by rule <span class="sub win"></span></h2>
-        <div class="bars" id="stat-guard"></div>
-      </section>
-    </div>
-
-    <div class="grid3">
-      <section class="panel"><h2>Verdicts <span class="sub">since start</span></h2><div class="bars" id="stat-verdicts"></div></section>
-      <section class="panel"><h2>Actions taken <span class="sub">since start</span></h2><div class="bars" id="stat-actions"></div></section>
-      <section class="panel"><h2>Bot classes <span class="sub">since start</span></h2><div class="bars" id="stat-classes"></div></section>
-    </div>
-
-    <div class="grid3">
-      <section class="panel"><h2>Detector firings <span class="sub">since start</span></h2><div class="bars" id="stat-detectors"></div></section>
-      <section class="panel">
-        <h2>Challenges</h2>
-        <div id="stat-challenges"></div>
-      </section>
-      <section class="panel">
-        <h2>Health</h2>
-        <div id="stat-health"></div>
-      </section>
-    </div>
-
-    <div class="two">
-      <section class="panel" id="audit-panel">
-        <h2>Audit <span class="sub" id="audit-spans"></span></h2>
-        <div id="audit-body"></div>
-      </section>
-      <section class="panel" id="audit-checks-panel">
-        <h2>Checks installed</h2>
-        <div class="detectors" id="audit-checks"></div>
-      </section>
-    </div>
-
-    <div class="grid3">
-      <section class="panel" id="identities-panel"><h2>Identities seen <span class="sub win"></span></h2><div class="bars" id="stat-identities"></div></section>
-      <section class="panel"><h2>Busiest paths <span class="sub win"></span></h2><div class="bars" id="stat-paths"></div></section>
-      <section class="panel"><h2>Denied paths <span class="sub win"></span></h2><div class="bars" id="stat-denied-paths"></div></section>
-    </div>
-
-    <div class="two">
-      <section class="panel">
-        <h2>Installed detectors <span class="sub" id="detector-count"></span></h2>
-        <div class="detectors" id="stat-detector-list"></div>
-      </section>
-      <div class="stack">
+    <div class="stat-group">
+      <div class="group-head">
+        <h2>Traffic</h2>
+        <p>What arrived over time, and where the scored requests landed against the threshold.</p>
+      </div>
+      <div class="stat-pair">
         <section class="panel">
-          <h2>Rules that fired <span class="sub win"></span></h2>
-          <div class="bars" id="stat-rule-hits"></div>
+          <h2>Traffic <span class="range" id="traffic-range"></span><span class="sub" id="traffic-window"></span></h2>
+          <div class="chart" id="traffic-chart"><svg id="traffic" role="img" aria-labelledby="traffic-alt"></svg><div class="tip" id="traffic-tip"></div></div>
+          <p class="sr-only" id="traffic-alt"></p>
+          <div class="legend" id="traffic-legend"></div>
+        </section>
+        <section class="panel">
+          <h2>Score distribution <span class="range" id="score-scope"></span><span class="sub" id="score-window"></span></h2>
+          <div class="chart" id="score-chart"><svg id="scores" role="img" aria-labelledby="score-alt"></svg><div class="tip" id="score-tip"></div></div>
+          <p class="sr-only" id="score-alt"></p>
+          <div class="legend" id="score-legend"></div>
+        </section>
+      </div>
+    </div>
+
+    <div class="stat-group">
+      <div class="group-head">
+        <h2>Since start</h2>
+        <p>Every request this process has assessed, whatever the feed still holds.</p>
+      </div>
+      <div class="stat-rows">
+        <div class="stat-trio">
+          <section class="panel"><h2>Verdicts <span class="sub">since start</span></h2><div class="bars" id="stat-verdicts"></div></section>
+          <section class="panel"><h2>Actions taken <span class="sub">since start</span></h2><div class="bars" id="stat-actions"></div></section>
+          <section class="panel"><h2>Bot classes <span class="sub">since start</span></h2><div class="bars" id="stat-classes"></div></section>
+        </div>
+        <section class="panel"><h2>Detector firings <span class="sub">since start</span></h2><div class="bars cols wide" id="stat-detectors"></div></section>
+      </div>
+    </div>
+
+    <div class="stat-group">
+      <div class="group-head">
+        <h2>In the window</h2>
+        <p>Only the requests the feed still holds — what is happening now rather than since start.</p>
+      </div>
+      <div class="stat-rows">
+        <div class="stat-duo">
+          <section class="panel"><h2>Busiest paths <span class="sub win"></span></h2><div class="bars cols" id="stat-paths"></div></section>
+          <section class="panel"><h2>Denied paths <span class="sub win"></span></h2><div class="bars cols" id="stat-denied-paths"></div></section>
+        </div>
+        <div class="stat-trio">
+          <section class="panel">
+            <h2>Rules that fired <span class="sub win"></span></h2>
+            <div class="bars" id="stat-rule-hits"></div>
+          </section>
+          <section class="panel">
+            <h2>Guard stops by rule <span class="sub win"></span></h2>
+            <div class="bars" id="stat-guard"></div>
+          </section>
+          <section class="panel" id="identities-panel"><h2>Identities seen <span class="sub win"></span></h2><div class="bars" id="stat-identities"></div></section>
+        </div>
+      </div>
+    </div>
+
+    <div class="stat-group">
+      <div class="group-head">
+        <h2>Health</h2>
+        <p>Whether detection is running, what it costs, and how the window compares with its baseline.</p>
+      </div>
+      <div class="stat-flow">
+        <section class="panel">
+          <h2>Health</h2>
+          <div id="stat-health"></div>
+        </section>
+        <section class="panel">
+          <h2>Assessment latency <span class="sub">since start</span></h2>
+          <div class="chart" id="latency-chart"><svg id="latency" role="img" aria-labelledby="latency-alt"></svg><div class="tip" id="latency-tip"></div></div>
+          <p class="sr-only" id="latency-alt"></p>
+          <div class="legend"><span id="latency-summary"></span></div>
+        </section>
+        <section class="panel">
+          <h2>Challenges</h2>
+          <div id="stat-challenges"></div>
         </section>
         <section class="panel">
           <h2>Bypassed <span class="sub">detection never ran</span></h2>
           <div class="bars" id="stat-bypassed"></div>
         </section>
+        <section class="panel" id="audit-panel">
+          <h2>Audit <span class="sub" id="audit-spans"></span></h2>
+          <div id="audit-body"></div>
+        </section>
+        <section class="panel" id="audit-checks-panel">
+          <h2>Checks installed</h2>
+          <div class="detectors" id="audit-checks"></div>
+        </section>
       </div>
     </div>
+
+    <section class="panel detectors-panel">
+      <h2>Installed detectors <span class="sub" id="detector-count"></span></h2>
+      <div class="detectors detector-grid" id="stat-detector-list"></div>
+    </section>
   </div>
 
   <div id="view-policy" role="tabpanel" aria-labelledby="tab-policy" class="stack" hidden>
-    <div class="two">
-      <section class="panel" id="editor-panel">
-        <h2>Rules <span class="sub" id="policy-mode"></span></h2>
-        <div class="bar-actions">
-          <div class="seg" id="editor-mode">
-            <button id="mode-gui" aria-pressed="true">Editor</button>
-            <button id="mode-json" aria-pressed="false">JSON</button>
-          </div>
-          <button id="policy-preview">Preview</button>
-          <button id="policy-apply" class="primary" hidden>Apply</button>
-          <button id="policy-revert">Revert</button>
-          <span class="grow"></span>
-          <button id="policy-import">Import…</button>
-          <button id="policy-export">Export</button>
-          <span class="dirty" id="policy-dirty" hidden>unsaved</span>
-        </div>
-        <div id="editor-gui">
-          <div class="rulelist" id="rulelist"></div>
+    <div class="policy-layout">
+      <div class="stack policy-main">
+        <section class="panel" id="editor-panel">
+          <h2>Rules <span class="sub" id="policy-mode"></span></h2>
           <div class="bar-actions">
-            <button id="rule-add">+ Add rule</button>
-            <button id="rule-expand">Expand all</button>
-            <span class="hint" id="policy-note"></span>
+            <div class="seg" id="editor-mode">
+              <button id="mode-gui" aria-pressed="true">Editor</button>
+              <button id="mode-json" aria-pressed="false">JSON</button>
+            </div>
+            <button id="policy-preview">Preview</button>
+            <button id="policy-apply" class="primary" hidden>Apply</button>
+            <button id="policy-revert">Revert</button>
+            <span class="grow"></span>
+            <button id="policy-import">Import…</button>
+            <button id="policy-export">Export</button>
+            <span class="dirty" id="policy-dirty" hidden>unsaved</span>
+          </div>
+          <div id="editor-gui">
+            <div class="rulelist" id="rulelist"></div>
+            <div class="bar-actions">
+              <button id="rule-add">+ Add rule</button>
+              <button id="rule-expand">Expand all</button>
+              <span class="hint" id="policy-note"></span>
+            </div>
+          </div>
+          <div class="editor" id="editor-json" hidden>
+            <textarea id="policy-json" spellcheck="false" autocomplete="off" aria-label="Policy rules as JSON"></textarea>
+          </div>
+          <div class="bar-actions preset-row">
+            <span class="preset-label" id="preset-label">Preview a shipped preset</span>
+            <div class="preset-buttons" id="preset-buttons" role="group" aria-labelledby="preset-label"></div>
+            <span class="hint">Runs it against the requests in the window. Nothing is applied.</span>
+          </div>
+          <div class="editor result-wrap"><div class="result" id="policy-result" hidden></div></div>
+          <input type="file" id="policy-file" accept="application/json,.json" hidden>
+        </section>
+
+        <div class="policy-group" id="limits-group">
+          <div class="group-head">
+            <h2>Limits</h2>
+            <p>What no rule can go past, and which addresses are never judged at all.</p>
+          </div>
+          <div class="policy-pair">
+            <section class="panel" id="guard-panel">
+              <h2>Guard <span class="sub" id="guard-mode"></span></h2>
+              <div id="stat-policy"></div>
+              <div class="note" id="guard-note"></div>
+            </section>
+            <section class="panel" id="ranges-panel">
+              <h2>Range sets <span class="sub" id="ranges-mode"></span></h2>
+              <div id="ranges-body"></div>
+              <div class="note aside" id="ranges-note"></div>
+            </section>
           </div>
         </div>
-        <div class="editor" id="editor-json" hidden>
-          <textarea id="policy-json" spellcheck="false" autocomplete="off" aria-label="Policy rules as JSON"></textarea>
-        </div>
-        <div class="editor"><div class="result" id="policy-result" hidden></div></div>
-        <input type="file" id="policy-file" accept="application/json,.json" hidden>
-      </section>
+      </div>
 
-      <div class="stack">
-        <section class="panel" id="guard-panel">
-          <h2>Guard <span class="sub" id="guard-mode"></span></h2>
-          <div id="stat-policy"></div>
-          <div class="note" id="guard-note"></div>
-        </section>
-        <section class="panel" id="ranges-panel">
-          <h2>Range sets <span class="sub" id="ranges-mode"></span></h2>
-          <div id="ranges-body"></div>
-          <div class="note" id="ranges-note"></div>
-        </section>
-        <section class="panel">
-          <h2>Preview a shipped preset</h2>
-          <div class="rules" id="preset-buttons"></div>
-          <div class="note">Runs the preset against the requests still in the window and shows what would change. Nothing is applied.</div>
+      <div class="stack policy-side">
+        <section class="panel" id="notices-panel">
+          <h2 id="notices-title">Notices <span class="sub" id="notice-count"></span></h2>
+          <div id="stat-notices" tabindex="0" role="region" aria-labelledby="notices-title"></div>
         </section>
         <section class="panel" id="changes-panel">
           <h2>Changes <span class="sub" id="change-count"></span></h2>
           <div id="stat-changes"></div>
-          <div class="note">What was applied to this process at runtime, and by whom when the dashboard's
-             <code>auth</code> could say. Bounded and in memory: the durable copy is the
-             <code>policy-change</code>, <code>guard-change</code>, <code>range-change</code> and
-             <code>actor-change</code> events.</div>
+          <div class="note aside">What was applied to this process at runtime, and by whom when the dashboard's
+               <code>auth</code> could say. Bounded and in memory: the durable copy is the
+               <code>policy-change</code>, <code>guard-change</code>, <code>range-change</code> and
+               <code>actor-change</code> events.</div>
         </section>
-        <section class="panel" id="notices-panel">
-          <h2>Notices <span class="sub" id="notice-count"></span></h2>
-          <div id="stat-notices"></div>
+        <section class="panel" id="running-panel">
+          <h2>Running now</h2>
+          <h3 class="panel-sub">Rules, first match wins</h3>
+          <div id="stat-rules"></div>
+          <div id="robots-panel">
+            <h3 class="panel-sub">The robots.txt they imply</h3>
+            <div class="editor"><pre class="code" id="robots-preview"></pre><div id="robots-notes"></div></div>
+          </div>
         </section>
       </div>
-    </div>
-
-    <div class="two">
-      <section class="panel">
-        <h2>Rules, in evaluation order</h2>
-        <div class="rules" id="stat-rules"></div>
-      </section>
-      <section class="panel" id="robots-panel">
-        <h2>robots.txt this policy implies</h2>
-        <div class="editor"><pre class="code" id="robots-preview"></pre><div id="robots-notes"></div></div>
-      </section>
     </div>
   </div>
 

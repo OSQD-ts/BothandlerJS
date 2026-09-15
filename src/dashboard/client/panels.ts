@@ -383,7 +383,17 @@ export function drawNotices(): void {
     box.appendChild(el("div", "note", "Nothing to report: no startup warnings, no detector errors."));
     return;
   }
-  for (const notice of notices.slice().reverse().slice(0, 40)) {
+  // The same notice raised again is one row with a count, not another row. A rule that
+  // cannot be honoured says so on every request it matches, and a hundred copies of that
+  // one sentence buried the startup warning under it that said something different.
+  const grouped = new Map<string, { notice: (typeof notices)[number]; count: number }>();
+  for (const notice of notices.slice().reverse()) {
+    const key = `${notice.kind}\u0000${notice.source ?? ""}\u0000${notice.message}`;
+    const seen = grouped.get(key);
+    if (seen === undefined) grouped.set(key, { notice, count: 1 });
+    else seen.count++;
+  }
+  for (const { notice, count } of [...grouped.values()].slice(0, 40)) {
     const row = el("div", `notice ${notice.kind}`);
     const when = el("div", "when");
     when.appendChild(el("div", "tag", notice.kind));
@@ -391,7 +401,9 @@ export function drawNotices(): void {
     row.appendChild(when);
     const body = el("div");
     body.appendChild(el("div", null, notice.message));
-    if (notice.source !== undefined) body.appendChild(el("div", "ev-meta", notice.source));
+    const meta = [notice.source, count > 1 ? `${n(count)} times, most recently at ${clockTime(notice.at)}` : undefined].filter((part) => part !== undefined);
+    if (meta.length > 0) body.appendChild(el("div", "ev-meta", meta.join(" · ")));
+    if (count > 1) row.appendChild(el("span", "notice-count", `×${n(count)}`));
     row.appendChild(body);
     box.appendChild(row);
   }

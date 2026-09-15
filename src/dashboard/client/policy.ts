@@ -425,7 +425,11 @@ export function drawPolicyTab(): void {
   clear(rules);
   const installed = state.snapshot?.rules ?? [];
   if (installed.length === 0) rules.appendChild(el("div", "note", "No rules configured — every request takes the default action."));
-  else installed.forEach((rule, index) => rules.appendChild(el("span", "chip", `${index + 1}. ${rule}`)));
+  else {
+    const list = el("ol", "rule-order");
+    for (const rule of installed) list.appendChild(el("li", "mono", rule));
+    rules.appendChild(list);
+  }
 }
 
 /**
