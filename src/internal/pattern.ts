@@ -1,12 +1,14 @@
+// Kept identical in hackerpot and bothandlerjs. Change both, or neither.
+
 /**
- * Path patterns supplied by an operator, made safe to reuse.
+ * Regex patterns supplied by an operator or a library caller, made safe to reuse.
  *
  * `RegExp.test` is stateful when the pattern carries `g` or `y`: it resumes from
- * `lastIndex` and resets only on a failed match, so the same pattern tested against
- * the same string answers `true`, `false`, `true`, `false`. Nothing here matches a
- * path more than once, so neither flag can express anything anyone wanted — but both
- * turn a rule into a coin flip, and the symptom (a bot blocked, served, blocked,
- * served) reads as a bug anywhere except in the flag that caused it.
+ * `lastIndex` and resets only on a failed match, so the same pattern tested against the
+ * same string answers `true`, `false`, `true`, `false`. Nothing here tests a value more than
+ * once per request, so neither flag can express anything anyone wanted — but either turns a
+ * rule or a detector into a coin flip, and the symptom (blocked, served, blocked, served)
+ * reads as a bug anywhere except in the flag that caused it.
  */
 
 /** The pattern with `g` and `y` removed. Returns strings and stateless regexes unchanged. */

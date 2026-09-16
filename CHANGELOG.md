@@ -31,6 +31,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The internal clock, LRU, emitter, deadline, pattern and DNS helpers are the same files as
+  hackerpot's,** byte for byte, each merged from the better of the two copies. What that brings
+  here: `ManualClock` accepts a `Date` and refuses to run backwards; the emitter catches a
+  rejected `async` listener, and a listener that unsubscribes during an event no longer changes
+  the set being iterated; `cachingResolver` takes a `clock` and evicts least-recently-used
+  rather than oldest-inserted; and a contradicted forward confirmation now names the PTR
+  `hostname` it is about.
 - **The npm scripts are fewer, and named the way hackerpot names them.** 52 became 29, in the same
   names and order as hackerpot's. One `simulate:<scenario>` alias per scenario is gone — `npm run
   simulate <scenario>` always did the same — as are `simulate:list` (`npm run simulate -- --list`),

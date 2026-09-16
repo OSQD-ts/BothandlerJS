@@ -161,6 +161,15 @@ export function normalizeIp(value: string): string | null {
   return bytes ? formatIp(bytes) : null;
 }
 
+/**
+ * Whether two strings name the same IP address, however each is spelled. False when either does
+ * not parse. The shared DNS module asks every host library for this, from this file.
+ */
+export function sameAddress(a: string, b: string): boolean {
+  const left = normalizeIp(a);
+  return left !== null && left === normalizeIp(b);
+}
+
 export interface Cidr {
   readonly bytes: IpBytes;
   readonly prefix: number;
