@@ -400,6 +400,21 @@ button.tile:hover { border-color: var(--focus); }
 .load-skipped:disabled { opacity: .5; cursor: default; }
 
 /* Prev/next under a table. Quiet: it is navigation for a list, not an action on it. */
+/* How the feed is arranged, beside what it is filtered to. */
+.arrange { display: flex; gap: 6px; align-items: center; }
+.arrange label { font-size: 11.5px; color: var(--muted); }
+.arrange select { font-size: 12px; padding: 4px 6px; }
+/* A group's heading row. It is a table heading rather than a styled cell, so a screen
+   reader announces the rows under it as belonging to something. */
+tbody tr.grp th {
+  text-align: left; padding: 9px 10px 6px; font-size: 11.5px; font-weight: 650;
+  color: var(--ink-2); background: color-mix(in srgb, var(--ink) 4%, transparent);
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line-soft);
+}
+tbody tr.grp:first-child th { border-top: 0; }
+.grp-key { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.grp-n { color: var(--muted); font-weight: 400; margin-left: 10px; font-variant-numeric: tabular-nums; }
+
 .pager {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 9px 2px 2px; font-size: 12px; color: var(--muted);
@@ -1212,6 +1227,27 @@ export const DASHBOARD_MARKUP = String.raw`
           <div class="timeframe retention" id="retention" hidden>
             <label for="retention-pick">Keep</label>
             <select id="retention-pick"></select>
+          </div>
+          <div class="arrange">
+            <label for="feed-order">Order</label>
+            <select id="feed-order">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="score-high">Highest score</option>
+              <option value="score-low">Lowest score</option>
+              <option value="slowest">Slowest</option>
+              <option value="fastest">Fastest</option>
+            </select>
+            <label for="feed-group">Group</label>
+            <select id="feed-group">
+              <option value="none">No grouping</option>
+              <option value="actor">Actor</option>
+              <option value="verdict">Verdict</option>
+              <option value="action">Action</option>
+              <option value="class">Bot class</option>
+              <option value="rule">Rule</option>
+              <option value="path">Path</option>
+            </select>
           </div>
           <button id="feed-export" title="Download every request matching this filter as replay JSONL">Export</button>
           <div class="pager pager-inline" id="feed-pager-top" hidden></div>

@@ -2910,6 +2910,124 @@ describe("finding things in the feed", () => {
   });
 
   /**
+   * The two controls that arrange the feed.
+   *
+   * Both rearrange everything the query matches rather than the page on screen, which is
+   * the part worth pinning: a group scattered across page boundaries, or an ordering that
+   * only sorted the fifty rows already rendered, would look almost right.
+   */
+  it("orders the feed the other way round, and says so in the URL", async () => {
+    const page = await open();
+    const newestFirst = await page.locator("tbody tr.row").first().getAttribute("data-request");
+    await page.selectOption("#feed-order", "oldest");
+    await expect.poll(() => new URL(page.url()).hash).toContain("o=oldest");
+    await expect.poll(() => page.locator("tbody tr.row").first().getAttribute("data-request")).not.toBe(newestFirst);
+
+    const stamps = await page.evaluate(() => Array.from(document.querySelectorAll("tbody tr.row td.when")).map((cell) => cell.getAttribute("title") ?? ""));
+    expect(stamps.length).toBeGreaterThan(1);
+    expect([...stamps].sort(), "oldest first runs the other way").toEqual(stamps);
+    await page.close();
+  });
+
+  it("groups the rows under headings that count what is in them", async () => {
+    const page = await open();
+    await page.selectOption("#feed-group", "verdict");
+    await expect.poll(() => new URL(page.url()).hash).toContain("g=verdict");
+    await expect.poll(() => page.locator("tbody tr.grp").count(), { timeout: 10_000 }).toBeGreaterThan(0);
+
+    const headings = await page.locator("tbody tr.grp .grp-key").allInnerTexts();
+    // Each group is contiguous, so no heading is drawn twice on one page.
+    expect(new Set(headings).size, "every group appears once").toBe(headings.length);
+    expect((await page.locator("tbody tr.grp .grp-n").first().innerText())).toMatch(/\d+ requests?$/);
+
+    // The first row after a heading belongs to that group: grouping by action is the
+    // readable case, because the action is on the row.
+    await page.selectOption("#feed-group", "action");
+    await expect.poll(() => page.locator("tbody tr.grp").count(), { timeout: 10_000 }).toBeGreaterThan(0);
+    const shape = await page.evaluate(() =>
+      Array.from(document.querySelectorAll("#rows tr")).map((row) =>
+        row.classList.contains("grp") ? `group:${(row.querySelector(".grp-key")?.textContent ?? "").trim()}` : `row:${(row.querySelector("td:nth-child(5)")?.textContent ?? "").trim()}`,
+      ),
+    );
+    let heading = "";
+    for (const line of shape) {
+      if (line.startsWith("group:")) heading = line.slice("group:".length);
+      else if (heading !== "" && heading !== "assessed only") expect(line, `under ${heading}`).toContain(heading);
+    }
+    await page.close();
+  });
+
+  /**
+   * The order the button leaves behind.
+   *
+   * What it fetches is the ring in full, oldest first, merged into a feed already holding
+   * the newest few — so the merge has to interleave by time rather than append. Pinned
+   * because the failure would be a quiet one: every row present, in an order that reads as
+   * the feed having lost its place.
+   */
+  it("loads the skipped requests in the order they happened", async () => {
+    const own = new BotHandler({ preset: "protect-content", onWarning: () => {} });
+    // One event a second keeps a burst out of the stream and in the ring, which is the
+    // state this button exists for.
+    const server = await own.serveDashboard({ port: 0, maxEventsPerSecond: 1 });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 950 } });
+      await page.goto(server.url);
+      await page.waitForTimeout(800);
+      for (let i = 0; i < 60; i++) {
+        await own.handle(createFacts({ method: "GET", url: `/ordered/${i}/x`, headers: { host: "shop.test", "user-agent": "curl/8.4.0", accept: "*/*" }, ip: "203.0.113.77" }));
+      }
+      await expect.poll(() => page.locator("#feed-load-skipped").isVisible(), { timeout: 15_000 }).toBe(true);
+      await page.locator("#feed-load-skipped").click();
+      await expect.poll(() => page.locator("tbody tr.row").count(), { timeout: 15_000 }).toBeGreaterThan(10);
+
+      const numbers = await page.evaluate(() =>
+        Array.from(document.querySelectorAll("tbody tr.row td.req")).map((cell) => {
+          const match = /\/ordered\/(\d+)\//.exec(cell.textContent ?? "");
+          return match === null ? -1 : Number(match[1]);
+        }),
+      );
+      expect(numbers, "every row's path could be read").not.toContain(-1);
+      expect([...numbers].sort((a, b) => b - a), "newest first, in the order they happened").toEqual(numbers);
+      await page.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  /**
+   * Leaving the name box saves; it used to lose the filter without a word.
+   *
+   * The box stayed on screen holding the typed name, nothing was posted and nothing said
+   * so — which is indistinguishable from having saved it. Somebody who names a filter and
+   * clicks back into the feed has said what they want it called.
+   */
+  it("saves a filter when the name box is left rather than submitted", async () => {
+    const page = await open();
+    await page.locator("#search").fill("ua:curl");
+    await page.locator("#saved-filters button", { hasText: /^Save$/ }).first().click();
+    const name = page.locator("#saved-filters input.saved-name");
+    await expect.poll(() => name.count()).toBe(1);
+    await name.fill("left-the-box");
+    // Focus goes back to the query box, the way it does when somebody carries on working.
+    await page.locator("#search").click();
+    await expect.poll(() => page.locator("#saved-filters select option", { hasText: "left-the-box" }).count(), { timeout: 10_000 }).toBe(1);
+    await page.close();
+  });
+
+  it("keeps nothing when the naming is cancelled", async () => {
+    const page = await open();
+    await page.locator("#saved-filters button", { hasText: /^Save$/ }).first().click();
+    const name = page.locator("#saved-filters input.saved-name");
+    await expect.poll(() => name.count()).toBe(1);
+    await name.fill("never-wanted");
+    await name.press("Escape");
+    await expect.poll(() => name.count()).toBe(0);
+    expect(await page.locator("#saved-filters select option", { hasText: "never-wanted" }).count()).toBe(0);
+    await page.close();
+  });
+
+  /**
    * Saving a filter, the whole way round.
    *
    * Nothing tested this before, which is how both of its bugs shipped: Save asked for a

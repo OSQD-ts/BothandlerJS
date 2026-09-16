@@ -10,6 +10,25 @@ const MAX_ROWS = 1000;
 /** Rows built into the table at once. Beyond this a feed is scrolled past, not read. */
 export const FEED_LIMIT = 300;
 
+/**
+ * How the feed is ordered.
+ *
+ * "Newest first" is the feed's own order and the only one that costs nothing: the rows are
+ * already held that way, so it is a walk rather than a sort. The rest are a sort of what
+ * matches, which is bounded by what this page holds.
+ */
+export type FeedOrder = "newest" | "oldest" | "score-high" | "score-low" | "slowest" | "fastest";
+
+/**
+ * What the feed is grouped by, or `none`.
+ *
+ * Applied to the whole matching list rather than to a page of it, so a group is contiguous
+ * wherever it falls — group a thousand requests by actor and page through them, and each
+ * actor's requests stay together rather than being scattered by where the page boundaries
+ * happen to land.
+ */
+export type FeedGroup = "none" | "actor" | "verdict" | "action" | "class" | "rule" | "path";
+
 export interface State {
   rows: Row[];
   byId: Map<string, Row>;
@@ -54,6 +73,10 @@ export interface State {
   search: string;
   /** The parsed search. A tree, so `$or` means something. */
   query: Filter;
+  /** How the rows are ordered. See {@link FeedOrder}. */
+  order: FeedOrder;
+  /** What the rows are grouped by, if anything. See {@link FeedGroup}. */
+  group: FeedGroup;
   tab: TabName;
   open: Set<string>;
   actor: string | undefined;
@@ -138,6 +161,8 @@ export const state: State = {
   actors: [],
   labels: new Map(),
   labelSwitches: new Map(),
+  order: "newest",
+  group: "none",
   showHidden: false,
   actorsTracked: 0,
   actorScope: "tracked",
@@ -318,12 +343,95 @@ export function matches(row: Row): boolean {
  * "what I am looking at" rather than "the first page of it".
  */
 export function matchingRows(limit = Number.POSITIVE_INFINITY): Row[] {
-  const shown: Row[] = [];
-  for (let i = state.rows.length - 1; i >= 0 && shown.length < limit; i--) {
-    const row = state.rows[i];
-    if (row !== undefined && matches(row)) shown.push(row);
+  // The feed's own order, and the common case: the rows are already held oldest first, so
+  // newest first is a walk backwards and no sort at all. Kept as its own path because it
+  // runs on every frame of a live feed.
+  if (state.order === "newest" && state.group === "none") {
+    const shown: Row[] = [];
+    for (let i = state.rows.length - 1; i >= 0 && shown.length < limit; i--) {
+      const row = state.rows[i];
+      if (row !== undefined && matches(row)) shown.push(row);
+    }
+    return shown;
   }
-  return shown;
+
+  const shown: Row[] = [];
+  for (const row of state.rows) if (matches(row)) shown.push(row);
+  shown.sort(comparatorFor(state.order));
+  const arranged = state.group === "none" ? shown : groupRows(shown, state.group);
+  return limit === Number.POSITIVE_INFINITY ? arranged : arranged.slice(0, limit);
+}
+
+/** Two rows in the chosen order. Ties fall back to newest first, then to the server's sequence. */
+function comparatorFor(order: FeedOrder): (a: Row, b: Row) => number {
+  const newest = (a: Row, b: Row): number => b.entry.at - a.entry.at || b.entry.seq - a.entry.seq;
+  switch (order) {
+    case "oldest":
+      return (a, b) => a.entry.at - b.entry.at || a.entry.seq - b.entry.seq;
+    case "score-high":
+      return (a, b) => b.entry.score - a.entry.score || newest(a, b);
+    case "score-low":
+      return (a, b) => a.entry.score - b.entry.score || newest(a, b);
+    case "slowest":
+      return (a, b) => b.entry.durationMs - a.entry.durationMs || newest(a, b);
+    case "fastest":
+      return (a, b) => a.entry.durationMs - b.entry.durationMs || newest(a, b);
+    default:
+      return newest;
+  }
+}
+
+/**
+ * The rows again, with each group's rows together.
+ *
+ * Groups appear in the order their first row does, and the rows inside one keep the order
+ * they arrived in — so grouping rearranges the list without ever contradicting the sort
+ * above it.
+ */
+function groupRows(rows: readonly Row[], group: FeedGroup): Row[] {
+  const buckets = new Map<string, Row[]>();
+  for (const row of rows) {
+    const key = groupKeyOf(row, group);
+    const bucket = buckets.get(key);
+    if (bucket === undefined) buckets.set(key, [row]);
+    else bucket.push(row);
+  }
+  const out: Row[] = [];
+  for (const bucket of buckets.values()) out.push(...bucket);
+  return out;
+}
+
+/** Which group a row belongs to. Stable and printable: it is also what the header says. */
+export function groupKeyOf(row: Row, group: FeedGroup = state.group): string {
+  const entry = row.entry;
+  switch (group) {
+    case "actor":
+      return entry.actor;
+    case "verdict":
+      return entry.verdict;
+    case "action":
+      return entry.action ?? "assessed only";
+    case "class":
+      return entry.botClass;
+    case "rule":
+      return entry.rule ?? "no rule matched";
+    case "path":
+      return entry.path;
+    default:
+      return "";
+  }
+}
+
+/** How many matching rows each group holds, for the headers. */
+export function groupCounts(group: FeedGroup = state.group): Map<string, number> {
+  const counts = new Map<string, number>();
+  if (group === "none") return counts;
+  for (const row of state.rows) {
+    if (!matches(row)) continue;
+    const key = groupKeyOf(row, group);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
 }
 
 /** The rows the feed would draw, newest first. Also what "export what I am looking at" means. */

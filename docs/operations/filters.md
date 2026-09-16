@@ -127,11 +127,29 @@ The row of buttons — **All**, **Proven**, **Suspected**, **Human**, **Guard st
 rather than replacing it. Picking **Denied** and typing `path:/api` gives you denials on
 `/api`.
 
+## Order and grouping
+
+Beside the query box, **Order** and **Group** say how the matching requests are arranged.
+Order takes newest or oldest first, the highest or lowest scores, or the slowest and fastest
+assessments. Group puts the rows under a heading — by actor, verdict, action, bot class,
+rule or path — with the number of matching requests in each.
+
+Both apply to everything the query matches rather than to the page on screen, so a group is
+contiguous wherever the page boundaries fall, and the heading repeats when a group carries
+onto the next page. Changing either returns you to the first page: page four of one ordering
+is not page four of another. Both travel in the URL, so "the slowest requests on `/api`,
+grouped by actor" is a view you can send somebody, and **Export** writes the rows in the
+order you are looking at them.
+
 ## Saved filters
 
 Anything you can type can be saved by name and recalled from the dropdown beside the box.
-Press **Save**, type a name, press Enter. Choose one from the list to load it, and **Delete**
-appears beside it. A filter records the query *and* the chip, because it is usually both.
+Press **Save** and type a name. Enter saves it, so does the **Save** button beside the box,
+and so does simply leaving it — clicking back into the query or tabbing on saves under the
+name you typed. **Escape** and **Cancel** discard it. Leaving the box used to discard it as
+well, without a word, which looked exactly like having saved it. Choose one from the list to
+load it, and **Delete** appears beside it. A filter records the query *and* the chip, because
+it is usually both.
 
 **The dashboard keeps them**, one list per listener, so a saved filter is there after a
 reload, in another browser, and on a dashboard embedded in a page of your own. By default the

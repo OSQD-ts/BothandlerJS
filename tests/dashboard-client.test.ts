@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseRequest } from "../src/dashboard/parse-request.js";
 import { corpusCase, replayFile, replayLine } from "../src/dashboard/client/replay.js";
 import { draftRule } from "../src/dashboard/client/draft.js";
 import { FIELD_NAMES, OPERATORS, matches as matchesFilterExpression, matchesFilter, parseFilter, searchableText, suggestFor } from "../src/dashboard/client/query.js";
 import { actionKind, outcome, provenBots, verdictBadge } from "../src/dashboard/client/outcome.js";
-import { clearFeed, feedPage, goToFeedPage, ingest, matches, resetPaging, setSearch, setTimeframe, sortRows, state } from "../src/dashboard/client/store.js";
+import { clearFeed, feedPage, goToFeedPage, groupCounts, groupKeyOf, ingest, matches, matchingRows, resetPaging, setSearch, setTimeframe, sortRows, state } from "../src/dashboard/client/store.js";
 import { clockDate, clockStamp, clockTime, n, pct, rangeLabel, uptime, windowLabel } from "../src/dashboard/client/format.js";
 import type { DashboardEntry } from "../src/dashboard/types.js";
 
@@ -777,5 +777,80 @@ describe("exclusions and the timeframe", () => {
     setTimeframe(at + 180_000, at);
     expect(state.rows.filter(matches)).toHaveLength(0);
     setTimeframe(undefined, undefined);
+  });
+});
+
+/**
+ * How the feed is arranged, which is a question about the list rather than about any row.
+ *
+ * Worth testing here rather than in a browser: both are pure rearrangements of what
+ * matches, and the properties that matter — every row still present, groups contiguous,
+ * the ordering inside a group unchanged — are ones a browser test would only ever check by
+ * eye.
+ */
+describe("ordering and grouping the feed", () => {
+  const ids = (): string[] => matchingRows().map((row) => row.entry.requestId);
+
+  beforeEach(() => {
+    clearFeed();
+    state.order = "newest";
+    state.group = "none";
+    // Four requests, deliberately disagreeing about which is "first" under each ordering.
+    ingest(entry({ requestId: "one", seq: 1, at: 1_000, score: 90, durationMs: 0.4, verdict: "confirmed-bot", actor: "203.0.113.1", action: "block", path: "/a" }));
+    ingest(entry({ requestId: "two", seq: 2, at: 2_000, score: 10, durationMs: 9.5, verdict: "unknown", actor: "203.0.113.2", action: undefined, path: "/b" }));
+    ingest(entry({ requestId: "three", seq: 3, at: 3_000, score: 70, durationMs: 1.2, verdict: "confirmed-bot", actor: "203.0.113.1", action: "block", path: "/a" }));
+    ingest(entry({ requestId: "four", seq: 4, at: 4_000, score: 40, durationMs: 4.0, verdict: "suspected-bot", actor: "203.0.113.2", action: "challenge", path: "/c" }));
+    sortRows();
+  });
+
+  afterEach(() => {
+    state.order = "newest";
+    state.group = "none";
+  });
+
+  it("puts the newest first by default, and the oldest first when asked", () => {
+    expect(ids()).toEqual(["four", "three", "two", "one"]);
+    state.order = "oldest";
+    expect(ids()).toEqual(["one", "two", "three", "four"]);
+  });
+
+  it("orders by score and by how long the assessment took", () => {
+    state.order = "score-high";
+    expect(ids()).toEqual(["one", "three", "four", "two"]);
+    state.order = "score-low";
+    expect(ids()).toEqual(["two", "four", "three", "one"]);
+    state.order = "slowest";
+    expect(ids()).toEqual(["two", "four", "three", "one"]);
+    state.order = "fastest";
+    expect(ids()).toEqual(["one", "three", "four", "two"]);
+  });
+
+  it("keeps a group together, in the order its first row appeared", () => {
+    state.group = "actor";
+    // Newest first puts .2 first, so that actor's group leads; neither group loses a row
+    // and neither is reordered inside itself.
+    expect(ids()).toEqual(["four", "two", "three", "one"]);
+    expect(groupCounts()).toEqual(new Map([["203.0.113.2", 2], ["203.0.113.1", 2]]));
+  });
+
+  it("groups under the same ordering it was given", () => {
+    state.order = "oldest";
+    state.group = "verdict";
+    expect(ids()).toEqual(["one", "three", "two", "four"]);
+  });
+
+  it("rearranges without losing or duplicating a row", () => {
+    for (const group of ["actor", "verdict", "action", "class", "rule", "path"] as const) {
+      state.group = group;
+      const rows = ids();
+      expect(rows.length, group).toBe(4);
+      expect(new Set(rows).size, group).toBe(4);
+    }
+  });
+
+  it("names the group a row with nothing to group by belongs to", () => {
+    const assessedOnly = matchingRows().find((row) => row.entry.requestId === "two");
+    expect(assessedOnly && groupKeyOf(assessedOnly, "action")).toBe("assessed only");
+    expect(assessedOnly && groupKeyOf(assessedOnly, "rule")).toBe("no rule matched");
   });
 });

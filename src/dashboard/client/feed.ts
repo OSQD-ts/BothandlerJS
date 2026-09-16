@@ -1,6 +1,7 @@
 import { $, byId, clear, cssEscape, el, rootNode } from "./dom.js";
 import { referenceLink } from "./reference.js";
-import { feedPage, goToFeedPage, hiddenCount, ingest, labelOf, matchingCount, matchingRows, refreshFrozenPage, resetPaging, setSearch, setTimeframe, sortRows, state } from "./store.js";
+import { feedPage, goToFeedPage, groupCounts, groupKeyOf, hiddenCount, ingest, labelOf, matchingCount, matchingRows, refreshFrozenPage, resetPaging, setSearch, setTimeframe, sortRows, state } from "./store.js";
+import type { FeedGroup, FeedOrder } from "./store.js";
 import { deleteFilter, refreshSavedFilters, saveFilter, savedFilters } from "./saved.js";
 import { suggestFor } from "./query.js";
 import { getJson } from "./api.js";
@@ -88,6 +89,7 @@ export function initFeed(): void {
   initSuggestions(search);
   initTimeframe();
   initSavedFilters(search);
+  initArrangement();
 
   // Downloading the window is the bulk half of what the per-row buttons do one request
   // at a time. It exports what is on screen rather than everything held, because the
@@ -164,6 +166,48 @@ export async function loadSkipped(): Promise<void> {
   );
 }
 
+
+/**
+ * The two controls that say how the feed is arranged.
+ *
+ * Both are plain selects rather than clickable column headings, for the same reason the
+ * filter chips are buttons: a row is one control that opens and closes, and a heading that
+ * sorts is a second thing to click on a table where clicking already means something.
+ */
+function initArrangement(): void {
+  const order = byId<HTMLSelectElement>("feed-order");
+  const group = byId<HTMLSelectElement>("feed-group");
+  order.value = state.order;
+  group.value = state.group;
+  order.addEventListener("change", () => {
+    state.order = order.value as FeedOrder;
+    rearranged();
+  });
+  group.addEventListener("change", () => {
+    state.group = group.value as FeedGroup;
+    rearranged();
+  });
+}
+
+/** Reflects order and grouping that arrived in the URL rather than from a click. */
+export function reflectArrangement(): void {
+  const order = byId<HTMLSelectElement>("feed-order");
+  const group = byId<HTMLSelectElement>("feed-group");
+  if (order.value !== state.order) order.value = state.order;
+  if (group.value !== state.group) group.value = state.group;
+}
+
+/**
+ * Back to the first page on a change of arrangement.
+ *
+ * Page four of one ordering is not page four of another, so staying put would leave
+ * somebody on a page they never chose, reading rows they were not looking at.
+ */
+function rearranged(): void {
+  resetPaging();
+  app.syncUrl();
+  app.drawNow();
+}
 
 /**
  * Completion for the filter box.
@@ -323,16 +367,29 @@ function initSavedFilters(input: HTMLInputElement): void {
       const cancel = el("button", null, "Cancel") as HTMLButtonElement;
       cancel.type = "button";
 
+      // Whether this naming has already been settled, so a blur that follows Enter or the
+      // button does not save the same filter twice.
+      let finished = false;
+      // Which control the pointer went down on, because a button does not take focus on
+      // click in every engine — so "where did focus go" cannot be the test for whether
+      // somebody was reaching for Cancel.
+      let leavingFor: "cancel" | "confirm" | undefined;
       const done = (): void => {
+        finished = true;
         naming = false;
         redraw();
       };
-      const commit = (): void => {
+      const commit = (options: { fromBlur?: boolean } = {}): void => {
+        if (finished) return;
         const chosen = name.value.trim();
         if (chosen === "") {
-          name.focus();
+          // Nothing typed. Pressing the button means "I meant to type something"; leaving
+          // the box means "never mind".
+          if (options.fromBlur === true) done();
+          else name.focus();
           return;
         }
+        finished = true;
         void saveFilter({ name: chosen, query: input.value.trim(), filter: state.filter }).then((result) => {
           selected = chosen;
           done();
@@ -349,7 +406,38 @@ function initSavedFilters(input: HTMLInputElement): void {
           done();
         }
       });
-      confirm.addEventListener("click", commit);
+      /**
+       * Leaving the box with a name in it saves under that name.
+       *
+       * It used to do nothing whatsoever: the box stayed on screen holding the name, no
+       * request was made and nothing was said — which looks exactly like having saved it.
+       * Somebody who types a name and clicks back into the feed, or tabs on, has said what
+       * they want the filter called; the only readings of that are "save it" and "lose it
+       * silently".
+       *
+       * Escape and Cancel still cancel, and the pointer-down flag is what tells them apart:
+       * a button does not take focus on click in WebKit, so the blur cannot be judged by
+       * where focus landed.
+       */
+      cancel.addEventListener("pointerdown", () => {
+        leavingFor = "cancel";
+      });
+      confirm.addEventListener("pointerdown", () => {
+        leavingFor = "confirm";
+      });
+      name.addEventListener("blur", () => {
+        // After the click that caused the blur has been handled, the way the suggestion
+        // list below this one already does it.
+        setTimeout(() => {
+          if (finished) return;
+          if (leavingFor !== undefined) {
+            leavingFor = undefined;
+            return;
+          }
+          commit({ fromBlur: true });
+        }, 140);
+      });
+      confirm.addEventListener("click", () => commit());
       cancel.addEventListener("click", done);
       host.append(name, confirm, cancel);
       name.focus();
@@ -591,7 +679,21 @@ export function drawFeed(): void {
     index++;
   };
 
+  // Group headings, when the feed is grouped. The count is of every matching row in the
+  // group rather than of the ones on this page, because "this actor made 212 requests" is
+  // the fact worth having; a group carried onto another page repeats its heading, so a
+  // page never opens on rows belonging to something unnamed.
+  const counts = state.group === "none" ? undefined : groupCounts();
+  let lastGroup: string | undefined;
+
   for (const row of shown) {
+    if (counts !== undefined) {
+      const key = groupKeyOf(row);
+      if (key !== lastGroup) {
+        lastGroup = key;
+        place(groupHeading(key, counts.get(key) ?? 0));
+      }
+    }
     const id = row.entry.requestId;
     const open = state.open.has(id);
     const label = labelOf(row.entry.actor);
@@ -682,6 +784,29 @@ export function drawFeed(): void {
 /** Drops every cached node. Used when the feed is cleared under the page's feet. */
 export function resetFeedCache(): void {
   rendered.clear();
+  headings.clear();
+}
+
+/** The heading rows, cached like the rows are: a group that has not changed is not rebuilt. */
+const headings = new Map<string, { node: HTMLTableRowElement; count: number; label: string | undefined }>();
+
+function groupHeading(key: string, count: number): HTMLTableRowElement {
+  // An actor with a name is named here too — the key is what a rule would have to match,
+  // and the name is what the person reading it calls that client.
+  const label = state.group === "actor" ? labelOf(key) : undefined;
+  const cached = headings.get(key);
+  if (cached !== undefined && cached.count === count && cached.label === label) return cached.node;
+
+  const row = el("tr", "grp");
+  const cell = el("th");
+  cell.colSpan = 6;
+  cell.scope = "colgroup";
+  const name = el("span", "grp-key", label === undefined ? key : `${label} (${key})`);
+  cell.appendChild(name);
+  cell.appendChild(el("span", "grp-n", `${n(count)} request${count === 1 ? "" : "s"}`));
+  row.appendChild(cell);
+  headings.set(key, { node: row, count, label });
+  return row;
 }
 
 function buildRow(entry: DashboardEntry, open: boolean): HTMLTableRowElement {

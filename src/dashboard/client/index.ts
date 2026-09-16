@@ -5,7 +5,7 @@ import { clearFeed, setSearch, state } from "./store.js";
 import { drawActor, initActor } from "./actor.js";
 import { connectStream, loadInitialSnapshot } from "./stream.js";
 import { drawAudit, drawChanges, drawChips, drawLivePanels, drawNoticeBadge, drawNotices, drawPeers, drawStatsPanels, drawTiles, updateWindowLabels } from "./panels.js";
-import { drawFeed, initFeed, reflectFilterButtons, resetFeedCache } from "./feed.js";
+import { drawFeed, initFeed, reflectArrangement, reflectFilterButtons, resetFeedCache } from "./feed.js";
 import { drawLatency, drawScores, drawTraffic } from "./charts.js";
 import { applyActorScope, applyActorsQuery, drawActors, initActorScope, initActorsSearch, trackActors } from "./registry.js";
 import { drawPolicyTab, initPolicy, loadPolicy } from "./policy.js";
@@ -15,6 +15,7 @@ import { drawChallengeTab, initChallenge, leaveChallengeTab } from "./challenge.
 import { initTester } from "./tester.js";
 import { drawRetention, initRetention } from "./retention.js";
 import type { FilterName } from "./query.js";
+import type { FeedGroup, FeedOrder } from "./store.js";
 import type { TabName } from "./types.js";
 
 /** The views this listener has, in tab-strip order. Sections decide which exist. */
@@ -26,6 +27,10 @@ const TABS: Array<[id: string, name: TabName, enabled: boolean]> = [
   ["tab-challenge", "challenge", SECTIONS.challenge],
   ["tab-reference", "reference", SECTIONS.reference],
 ];
+
+/** What the URL may name. Anything else is the default; see `readUrl`. */
+const ORDERS = new Set(["newest", "oldest", "score-high", "score-low", "slowest", "fastest"]);
+const GROUPS = new Set(["none", "actor", "verdict", "action", "class", "rule", "path"]);
 
 const available = TABS.filter(([, , enabled]) => enabled);
 const FIRST: TabName = available[0]?.[1] ?? "live";
@@ -171,6 +176,11 @@ function syncUrl(replace = true): void {
   if (state.search !== "") params.set("q", state.search);
   if (state.actorScope !== "tracked") params.set("a", state.actorScope);
   if (state.actorsQuery !== "") params.set("aq", state.actorsQuery);
+  // How the feed is arranged travels too: "the slowest requests on /api, grouped by actor"
+  // is a view worth sending somebody, and a link that drops half of it is a link to
+  // something else.
+  if (state.order !== "newest") params.set("o", state.order);
+  if (state.group !== "none") params.set("g", state.group);
   // Only on the screen it belongs to: carried onto every other tab it would make two
   // links to the same view look different.
   if (state.tab === "reference" && selectedReference() !== "") params.set("r", selectedReference());
@@ -180,7 +190,7 @@ function syncUrl(replace = true): void {
   history[replace ? "replaceState" : "pushState"]({ tab: state.tab }, "", hash);
 }
 
-function readUrl(): { tab: TabName; filter: FilterName; search: string; actorScope: "tracked" | "feed"; actorsQuery: string; reference: string } {
+function readUrl(): { tab: TabName; filter: FilterName; search: string; actorScope: "tracked" | "feed"; actorsQuery: string; reference: string; order: FeedOrder; group: FeedGroup } {
   // And it is not ours to read either: a host page using hash routing would otherwise
   // decide which tab this opens on.
   const embedded = isEmbedded();
@@ -204,6 +214,10 @@ function readUrl(): { tab: TabName; filter: FilterName; search: string; actorSco
     actorScope: (params.get("a") ?? view.actorScope) === "feed" ? "feed" : "tracked",
     actorsQuery: params.get("aq") ?? view.actorsQuery ?? "",
     reference: params.get("r") ?? "",
+    // Anything unreadable reads as the default rather than as an error, the way the
+    // actor scope above does: a hand-edited URL should land somewhere.
+    order: ORDERS.has(params.get("o") ?? "") ? (params.get("o") as FeedOrder) : "newest",
+    group: GROUPS.has(params.get("g") ?? "") ? (params.get("g") as FeedGroup) : "none",
   };
 }
 
@@ -257,6 +271,9 @@ function initTabs(): void {
     reflectFilterButtons();
     applyActorScope(url.actorScope);
     applyActorsQuery(url.actorsQuery);
+    state.order = url.order;
+    state.group = url.group;
+    if (SECTIONS.feed) reflectArrangement();
     setSelectedReference(url.reference);
     showTab(url.tab, { push: false });
   });
@@ -484,6 +501,9 @@ function start(): void {
   if (SECTIONS.feed) reflectFilterButtons();
   applyActorScope(url.actorScope);
   applyActorsQuery(url.actorsQuery);
+  state.order = url.order;
+  state.group = url.group;
+  if (SECTIONS.feed) reflectArrangement();
   setSelectedReference(url.reference);
   showTab(url.tab, { replace: true });
 
