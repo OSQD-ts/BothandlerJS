@@ -63,8 +63,8 @@ jobs:
       - name: Test the dashboard in a browser
         run: |
           npm run test:browser
-          npm run test:browser:firefox
-          npm run test:browser:webkit
+          BROWSER_ENGINE=firefox npm run test:browser
+          BROWSER_ENGINE=webkit npm run test:browser
       - name: This library depends on nothing
         run: |
           count=$(node -p "Object.keys(require('./package.json').dependencies ?? {}).length")

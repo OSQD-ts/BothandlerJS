@@ -71,14 +71,14 @@ Four rows are worth reading twice:
 
 The simulator speaks raw HTTP over a socket rather than using `fetch`, because
 `fetch` normalises the header set and fixes the order — the exact properties several
-detectors read. Run one scenario at a time with `npm run simulate:curl`,
-`npm run simulate:trap`, and so on; `npm run simulate:list` prints them all.
+detectors read. Run one scenario at a time with `npm run simulate curl`,
+`npm run simulate trap`, and so on; `npm run simulate -- --list` prints them all.
 
 ### Replaying the whole corpus over the wire
 
 ```bash
 npm run simulate:corpus                              # all 548 cases
-npm run simulate:corpus:human                        # only the people
+npm run simulate:corpus -- --audience human          # only the people
 npm run simulate -- --corpus --tag known-cost        # only the awkward ones
 npm run simulate -- --corpus --case browse-chrome-windows --verbose
 ```

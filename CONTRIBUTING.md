@@ -103,10 +103,9 @@ memory note in the README.
 ## Before opening a PR
 
 ```bash
-npm run typecheck
-npm test
+npm run check          # typecheck, lint, tests and the docs link check
 npm run build
-npm run test:browser   # if you touched the dashboard page or its client
+npm run test:browser   # if you touched the dashboard page or its client (BROWSER_ENGINE=firefox|webkit for the others)
 npm run bench:guard    # if you touched anything on the assess path
 ```
 

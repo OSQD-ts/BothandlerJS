@@ -31,6 +31,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The npm scripts are fewer, and named the way hackerpot names them.** 52 became 29, in the same
+  names and order as hackerpot's. One `simulate:<scenario>` alias per scenario is gone — `npm run
+  simulate <scenario>` always did the same — as are `simulate:list` (`npm run simulate -- --list`),
+  `simulate:corpus:human` (`npm run simulate:corpus -- --audience human`), `test:browser:firefox`
+  and `:webkit` (`BROWSER_ENGINE=firefox npm run test:browser`), and `example:fetch` and
+  `example:notify` (`npx tsx examples/<file>.ts`). New: `npm run check`, which runs the
+  typecheck, lint, tests and docs link check in one go. None of this touches the published package.
 - **The theme button says which scheme it switches to.** It read "Theme" and announced
   "Switch between light and dark", which told nobody the direction. It now reads Light or Dark
   and is announced as "Switch to the light colour scheme", the way hackerpot's dashboard
