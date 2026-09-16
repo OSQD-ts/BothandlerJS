@@ -6,6 +6,8 @@ import { parseCookies, serializeCookie } from "../src/internal/http.js";
 import { TtlLru } from "../src/internal/lru.js";
 import { ManualClock } from "../src/internal/clock.js";
 import { MultiPatternMatcher } from "../src/internal/matcher.js";
+import { BotHandler } from "../src/index.js";
+import { CHROME_HEADERS, failingResolver, makeFacts } from "./helpers.js";
 
 describe("createFacts", () => {
   const base = { headers: { Host: "example.test" }, ip: "203.0.113.1" };
@@ -224,5 +226,68 @@ describe("cookies split across header fields", () => {
     });
     expect(facts.headers["accept"]).toBe("text/html, application/json");
     expect(facts.headers["x-thing"]).toBe("a, b");
+  });
+});
+
+describe("header order as the caller supplied it", () => {
+  // `rawHeaders` accepts Node's alternating name/value array or a plain list of names.
+  // Any name-only list of even length used to be read as the alternating shape, so
+  // every second name was silently discarded from a fingerprint.
+  it("reads a name-only list without dropping half of it", () => {
+    const headers = { host: "example.test", "user-agent": "curl/8.4.0", accept: "*/*", "accept-encoding": "gzip" };
+    const names = Object.keys(headers);
+    expect(makeFacts({ headers, headerOrder: names }).headerOrder).toEqual(names);
+  });
+
+  it("reads Node's alternating array as names only", () => {
+    const headers = { host: "example.test", "user-agent": "curl/8.4.0", accept: "*/*", "accept-encoding": "gzip" };
+    const raw = Object.entries(headers).flat();
+    expect(makeFacts({ headers, headerOrder: raw }).headerOrder).toEqual(Object.keys(headers));
+  });
+
+  it("reads a single-header alternating pair, where the shape alone is ambiguous", () => {
+    expect(makeFacts({ headers: { host: "example.test" }, headerOrder: ["Host", "example.test"] }).headerOrder).toEqual(["host"]);
+  });
+
+  it("preserves an order that differs from the map's own", () => {
+    const headers = { host: "example.test", "user-agent": "curl/8.4.0", accept: "*/*", "accept-encoding": "gzip" };
+    const wire = ["accept", "host", "accept-encoding", "user-agent"];
+    expect(makeFacts({ headers, headerOrder: wire }).headerOrder).toEqual(wire);
+  });
+});
+
+describe("partial header sets", () => {
+  const uaOnly = { "user-agent": CHROME_HEADERS["user-agent"]! };
+
+  // A header missing from a record is not a header missing from the request.
+  it("treats a browser in a header-poor record as unknown, not as a bot", async () => {
+    const handler = new BotHandler({ resolver: failingResolver() });
+    const complete = await handler.assess(makeFacts({ headers: uaOnly, ip: "203.0.113.1" }));
+    const partial = await handler.assess(createFacts({ method: "GET", url: "/", headers: uaOnly, ip: "203.0.113.2", partialHeaders: true }));
+
+    expect(complete.verdict).toBe("suspected-bot");
+    expect(partial.verdict).toBe("unknown");
+    expect(partial.evidence).toHaveLength(0);
+  });
+
+  it("still reads evidence from headers that are present", async () => {
+    const handler = new BotHandler({ resolver: failingResolver() });
+    const assessment = await handler.assess(
+      createFacts({
+        method: "GET",
+        url: "/",
+        headers: { ...CHROME_HEADERS, "sec-ch-ua-platform": '"Windows"' },
+        ip: "203.0.113.3",
+        partialHeaders: true,
+        protocol: "https",
+      }),
+    );
+    expect(assessment.evidence.map((item) => item.detector)).toContain("client-hints");
+  });
+
+  it("does not report an absent User-Agent it was never given", async () => {
+    const handler = new BotHandler({ resolver: failingResolver() });
+    const assessment = await handler.assess(createFacts({ method: "GET", url: "/", headers: {}, ip: "203.0.113.4", partialHeaders: true }));
+    expect(assessment.evidence).toHaveLength(0);
   });
 });

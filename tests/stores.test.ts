@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ManualClock } from "../src/internal/clock.js";
 import { MemoryStore } from "../src/stores/memory.js";
-import { RedisStore } from "../src/stores/redis.js";
-import type { RedisLike } from "../src/stores/redis.js";
+import { RedisStore, type RedisLike } from "../src/stores/redis.js";
 
 /**
  * The shared store.
@@ -259,5 +258,63 @@ describe("the memory store keeps the same promises", () => {
     const store = new MemoryStore({ maxCounters: 8, clock: new ManualClock(0) });
     for (let i = 0; i < 200; i++) await store.increment(`k${i}`, 60_000);
     expect(await store.increment("k0", 60_000), "the oldest counters are gone, not merely stale").toBe(1);
+  });
+});
+
+describe("RedisStore", () => {
+  function recorder() {
+    const calls: string[] = [];
+    const client: RedisLike = {
+      incr: async () => 1,
+      get: async () => null,
+      del: async () => 1,
+      set: async (key, value, _mode, _ttl, condition) => {
+        calls.push(`${key}=${value}${condition ? ` ${condition}` : ""}`);
+        return "OK";
+      },
+    };
+    return { calls, store: new RedisStore(client) };
+  }
+
+  // `set` with NX is a no-op after the first write, so a value could never be updated.
+  it("overwrites on set", async () => {
+    const { calls, store } = recorder();
+    await store.set("k", "first", 1000);
+    await store.set("k", "second", 1000);
+    expect(calls).toEqual(["bh:v:k=first", "bh:v:k=second"]);
+  });
+
+  it("keeps NX for the single-use claim, which is what makes replay protection work", async () => {
+    const { calls, store } = recorder();
+    await store.consumeOnce("nonce", 1000);
+    expect(calls[0]).toMatch(/NX$/);
+  });
+});
+
+describe("in-memory store", () => {
+  it("counts within a fixed window", async () => {
+    const store = new MemoryStore();
+    expect(await store.increment("k", 60_000)).toBe(1);
+    expect(await store.increment("k", 60_000)).toBe(2);
+  });
+
+  it("claims a single-use key exactly once", async () => {
+    const store = new MemoryStore();
+    expect(await store.consumeOnce("n", 1000)).toBe(true);
+    expect(await store.consumeOnce("n", 1000)).toBe(false);
+  });
+});
+
+describe("single-use claims", () => {
+  // `consumeOnce(key, ttlMs)` used to discard the caller's window entirely.
+  it("honours the caller's window rather than the store's own", async () => {
+    const clock = new ManualClock(0);
+    const store = new MemoryStore({ clock });
+    expect(await store.consumeOnce("nonce", 120_000)).toBe(true);
+    expect(await store.consumeOnce("nonce", 120_000)).toBe(false);
+    clock.advance(119_000);
+    expect(await store.consumeOnce("nonce", 120_000)).toBe(false);
+    clock.advance(2_000);
+    expect(await store.consumeOnce("nonce", 120_000)).toBe(true);
   });
 });

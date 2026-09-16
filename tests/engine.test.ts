@@ -13,6 +13,8 @@ function engine(overrides: ConstructorParameters<typeof BotHandler>[0] = {}) {
   return new BotHandler({ resolver: failingResolver(), clock: new ManualClock(1_700_000_000_000), ...overrides });
 }
 
+vi.setConfig({ testTimeout: 20_000 });
+
 describe("assess", () => {
   it("leaves a genuine browser request alone", async () => {
     const assessment = await engine().assess(makeFacts({ headerOrder: CHROME_HEADER_ORDER }));
@@ -408,8 +410,6 @@ describe("performance", () => {
   });
 });
 
-vi.setConfig({ testTimeout: 20_000 });
-
 describe("regressions", () => {
   const ELECTRON_UA =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Code/1.95.3 Chrome/128.0.6613.36 Electron/32.2.1 Safari/537.36";
@@ -542,5 +542,113 @@ describe("bounding work that may not come back", () => {
     }
     expect(timers.length).toBe(1);
     expect(timers[0]?.unrefCalled).toBe(true);
+  });
+});
+
+/**
+ * Acting on one client rather than on a class of request.
+ *
+ * Three operations that existed in the engine and were reachable from nothing: the
+ * dashboard could show you an actor and could not do anything about one. Each is
+ * announced, because each is somebody overriding the engine by hand and that is exactly
+ * what an audit trail is for.
+ */
+describe("acting on an actor", () => {
+  it("forgets one actor without touching anybody else", async () => {
+    const handler = new BotHandler({ resolver: failingResolver() });
+    await handler.assess(makeFacts({ ip: "203.0.113.5", headers: { host: "x", "user-agent": "curl/8.4.0" } }));
+    await handler.assess(makeFacts({ ip: "198.51.100.5", headers: { host: "x", "user-agent": "curl/8.4.0" } }));
+    expect(handler.registry.peek("203.0.113.5")).toBeDefined();
+
+    handler.forgetActor("203.0.113.5");
+    expect(handler.registry.peek("203.0.113.5")).toBeUndefined();
+    // The whole point: the cure for one false positive used to be `registry.clear()`,
+    // which throws away everybody's history to fix one person's.
+    expect(handler.registry.peek("198.51.100.5")).toBeDefined();
+  });
+
+  it("clears an actor as human, and says until when", () => {
+    const handler = new BotHandler();
+    const events: unknown[] = [];
+    handler.on("actor-change", (event) => events.push(event));
+    handler.clearActor("203.0.113.5", 60_000, { by: "ada@example.com" });
+
+    expect(handler.registry.peek("203.0.113.5")?.snapshot(Date.now()).cleared).toBe(true);
+    expect(events).toEqual([{ key: "203.0.113.5", action: "clear", until: expect.any(Number), by: "ada@example.com" }]);
+  });
+
+  it("names who did it, wherever the change is announced", () => {
+    const warnings: string[] = [];
+    const handler = new BotHandler({ onWarning: (message) => warnings.push(message) });
+    handler.forgetActor("203.0.113.5", { by: "ada@example.com" });
+    handler.updateRanges("allowlist", ["203.0.113.0/24"], { by: "ada@example.com" });
+    handler.updatePolicy([{ id: "tag-all", match: {}, action: "tag" }], { by: "ada@example.com" });
+    handler.updateGuard({ falsePositivePolicy: "balanced" }, { by: "ada@example.com" });
+
+    expect(warnings.filter((message) => message.includes("by ada@example.com"))).toHaveLength(4);
+  });
+
+  /**
+   * One warning, one delivery. `warn()` emits the event *and* calls `config.onWarning`,
+   * and `onWarning` used to be registered as a listener as well — so the one channel
+   * most likely to be wired to a pager was the one that double-fired.
+   */
+  it("delivers a warning to onWarning exactly once", () => {
+    const warnings: string[] = [];
+    const handler = new BotHandler({ onWarning: (message) => warnings.push(message) });
+    handler.forgetActor("203.0.113.5");
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("reads as a sentence when nobody could say who", () => {
+    const warnings: string[] = [];
+    const handler = new BotHandler({ onWarning: (message) => warnings.push(message) });
+    handler.forgetActor("203.0.113.5");
+    expect(warnings[0]).toBe('Actor "203.0.113.5" was forgotten at runtime.');
+  });
+});
+
+/**
+ * A dry run.
+ *
+ * The engine's opinion about a request that is not happening — a support ticket, a rule
+ * being drafted, the dashboard's request tester. The verdict is real and the decision
+ * is real; what must not happen is any trace of the question in the answer to "what is
+ * my traffic doing?".
+ */
+describe("assessing without recording", () => {
+  it("returns a real verdict", async () => {
+    const handler = new BotHandler({ resolver: failingResolver() });
+    const assessment = await handler.assess(makeFacts({ headers: { host: "x", "user-agent": "curl/8.4.0" } }), { record: false });
+    expect(assessment.verdict).toBe("confirmed-bot");
+    expect(assessment.certain).toBe(true);
+  });
+
+  it("moves no counter, no actor and no event", async () => {
+    const handler = new BotHandler({ resolver: failingResolver() });
+    const seen: unknown[] = [];
+    handler.on("assessment", (assessment) => seen.push(assessment));
+
+    await handler.assess(makeFacts({ ip: "203.0.113.9", headers: { host: "x", "user-agent": "curl/8.4.0" } }), { record: false });
+
+    expect(handler.metrics()!.requests).toBe(0);
+    expect(handler.registry.peek("203.0.113.9")).toBeUndefined();
+    expect(seen).toEqual([]);
+  });
+
+  it("does not inflate the actor a real request would have moved", async () => {
+    const handler = new BotHandler({ resolver: failingResolver() });
+    const facts = () => makeFacts({ ip: "203.0.113.9", headers: { host: "x", "user-agent": "curl/8.4.0" } });
+    await handler.assess(facts());
+    for (let i = 0; i < 5; i++) await handler.assess(facts(), { record: false });
+    // One request, however many times somebody asked about it.
+    expect(handler.registry.peek("203.0.113.9")?.snapshot(Date.now()).requests).toBe(1);
+  });
+
+  it("still refuses to assess what it was told to ignore", async () => {
+    const handler = new BotHandler({ allowlist: ["203.0.113.0/24"] });
+    const assessment = await handler.assess(makeFacts({ ip: "203.0.113.9" }), { record: false });
+    expect(assessment.bypass).toBe("allowlist");
+    expect(handler.metrics()!.requests).toBe(0);
   });
 });

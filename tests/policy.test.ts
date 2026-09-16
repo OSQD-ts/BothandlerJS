@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { Policy } from "../src/policy/policy.js";
 import { PRESETS, allowCrawlers, declineAiTraining, indexersOnly, protectApi, protectContent, underAttack } from "../src/policy/presets.js";
-import { makeFacts } from "./helpers.js";
+import { makeFacts, failingResolver } from "./helpers.js";
 import type { Assessment, Verdict } from "../src/types.js";
 import type { Decision } from "../src/policy/types.js";
+import { BotHandler } from "../src/index.js";
 
 function assessment(overrides: Partial<Assessment> = {}): Assessment {
   const facts = makeFacts();
@@ -458,5 +459,33 @@ describe("what each preset is for", () => {
     const decision = policy.decide(assessment({ verdict: "suspected-bot", score: 95, certain: false }));
     expect(decision.action).toBe("challenge");
     expect(decision.downgradedFrom).toBeUndefined();
+  });
+});
+
+describe("patterns an operator wrote", () => {
+  // The same stateful-regex trap as `ignorePaths`, but on a policy rule, where the
+  // consequence is a bot blocked, served, blocked, served on identical requests.
+  it("keeps a global regex in a rule from matching only every other time", async () => {
+    const handler = new BotHandler({
+      resolver: failingResolver(),
+      rules: [{ id: "block-api", match: { certain: true, path: /\/api\//g }, action: "block" }],
+    });
+    const actions: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const { decision } = await handler.handle(
+        makeFacts({ path: "/api/products", headers: { host: "x", "user-agent": "curl/8.4.0" } }),
+      );
+      actions.push(decision.action);
+    }
+    expect(actions).toEqual(["block", "block", "block", "block"]);
+  });
+
+  it("still applies a rule regex exactly where it was written to", async () => {
+    const handler = new BotHandler({
+      resolver: failingResolver(),
+      rules: [{ id: "block-api", match: { certain: true, path: /^\/api\//g }, action: "block" }],
+    });
+    const { decision } = await handler.handle(makeFacts({ path: "/docs/api/", headers: { host: "x", "user-agent": "curl/8.4.0" } }));
+    expect(decision.action).not.toBe("block");
   });
 });

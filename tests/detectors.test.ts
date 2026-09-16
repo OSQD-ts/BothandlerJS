@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BotHandler, createFacts } from "../src/index.js";
+import { BotHandler, createFacts, MemoryStore, type Assessment } from "../src/index.js";
 import { BOT_CATEGORIES, BOT_SIGNATURES } from "../src/detectors/known-bots.js";
 import { acceptSignatureDetector } from "../src/detectors/accept-signature.js";
 import { cadenceDetector } from "../src/detectors/cadence.js";
@@ -7,7 +7,7 @@ import { crawlBreadthDetector } from "../src/detectors/crawl-breadth.js";
 import { parameterSweepDetector } from "../src/detectors/parameter-sweep.js";
 import { transportCoherenceDetector } from "../src/detectors/transport-coherence.js";
 import { defaultDetectors } from "../src/detectors/index.js";
-import { DEFAULT_TRAP_PATHS, renderTrapField, renderTrapLink, trapRobotsEntries } from "../src/detectors/trap.js";
+import { DEFAULT_TRAP_PATHS, renderTrapField, renderTrapLink, trapRobotsEntries, TRAP_FIELD_SOURCE, trapDetector } from "../src/detectors/trap.js";
 import { __payloadInternals } from "../src/detectors/probe-signature.js";
 import type { RequestFacts } from "../src/types.js";
 import type { BotHandlerConfig } from "../src/config.js";
@@ -20,10 +20,10 @@ import { ipIntelligenceDetector } from "../src/detectors/ip-intelligence.js";
 import { identityRotationDetector } from "../src/detectors/identity-rotation.js";
 import { rateAnomalyDetector } from "../src/detectors/rate-anomaly.js";
 import { selfIdentifiedDetector } from "../src/detectors/self-identified.js";
-import { TRAP_FIELD_SOURCE, trapDetector } from "../src/detectors/trap.js";
-import { MAX_TRACKED_ARRIVALS, MAX_TRACKED_PATHS, MAX_TRACKED_USER_AGENTS } from "../src/state.js";
-import { ActorState } from "../src/state.js";
+import { MAX_TRACKED_ARRIVALS, MAX_TRACKED_PATHS, MAX_TRACKED_USER_AGENTS, ActorState } from "../src/state.js";
 import { CHROME_HEADERS, collect, fakeResolver, failingResolver, makeContext, makeFacts } from "./helpers.js";
+import { MultiPatternMatcher } from "../src/internal/matcher.js";
+import { cachingResolver, forwardConfirmedReverseDns, type DnsResolver } from "../src/internal/dns.js";
 
 const GOOGLEBOT_UA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
 
@@ -1382,5 +1382,264 @@ describe("the markup the trap helpers hand an operator", () => {
     // them has to be site-relative or it could not be a trap in the first place.
     expect(trapRobotsEntries().startsWith("User-agent: *\n")).toBe(true);
     expect(DEFAULT_TRAP_PATHS.every((path) => path.startsWith("/"))).toBe(true);
+  });
+});
+
+/**
+ * Proof travels between replicas; suspicion stays home.
+ *
+ * Behavioural state is process-local by design, because a round trip per request would
+ * buy accuracy for signals that may only raise suspicion. A confirmation is not one of
+ * those: `confirmed-bot` is a proven verdict, and behind eight replicas a fact
+ * established on one of them was unknown to the other seven.
+ */
+describe("sharing confirmations across replicas", () => {
+  const hit = (handler: BotHandler, ip = "203.0.113.9"): Promise<Assessment> =>
+    handler.assess(makeFacts({ ip, headers: { host: "x", "user-agent": "curl/8.4.0" } }));
+  const settle = (): Promise<void> => new Promise((resolve) => setImmediate(() => setImmediate(() => resolve())));
+
+  it("tells another instance what this one proved", async () => {
+    const store = new MemoryStore();
+    const [a, b] = [new BotHandler({ store, shareConfirmations: true }), new BotHandler({ store, shareConfirmations: true })];
+
+    for (let i = 0; i < 3; i++) await hit(a);
+    await settle();
+
+    // B has never seen this actor. The read happens on first sight, so the second
+    // request is the first that can carry the answer.
+    await hit(b);
+    await settle();
+    expect((await hit(b)).actor.priorConfirmations).toBeGreaterThanOrEqual(3);
+  });
+
+  it("does nothing at all unless it is asked for", async () => {
+    const store = new MemoryStore();
+    const [a, b] = [new BotHandler({ store }), new BotHandler({ store })];
+    for (let i = 0; i < 3; i++) await hit(a);
+    await settle();
+    await hit(b);
+    await settle();
+    expect((await hit(b)).actor.priorConfirmations).toBe(1);
+  });
+
+  /** One read per actor per instance, not one per request. That is what makes it affordable. */
+  it("asks the store once per actor, however many requests arrive", async () => {
+    const store = new MemoryStore();
+    let reads = 0;
+    // Delegating explicitly rather than spreading: a class instance's methods live on
+    // its prototype, so `{ ...store }` produces an object with no methods at all and a
+    // spy that silently tests nothing.
+    const counted = {
+      increment: (key: string, windowMs: number) => store.increment(key, windowMs),
+      consumeOnce: (key: string, ttlMs: number) => store.consumeOnce(key, ttlMs),
+      set: (key: string, value: string, ttlMs: number) => store.set(key, value, ttlMs),
+      delete: (key: string) => store.delete(key),
+      get: (key: string) => {
+        reads++;
+        return store.get(key);
+      },
+    };
+
+    const handler = new BotHandler({ store: counted, shareConfirmations: true });
+    for (let i = 0; i < 10; i++) await hit(handler);
+    await settle();
+    expect(reads).toBe(1);
+  });
+
+  it("falls back to what this process saw when the store is unavailable", async () => {
+    const broken = {
+      increment: () => Promise.reject(new Error("down")),
+      consumeOnce: () => Promise.reject(new Error("down")),
+      get: () => Promise.reject(new Error("down")),
+      set: () => Promise.reject(new Error("down")),
+      delete: () => Promise.reject(new Error("down")),
+    };
+    const handler = new BotHandler({ store: broken, shareConfirmations: true });
+    for (let i = 0; i < 3; i++) await hit(handler);
+    await settle();
+    expect((await hit(handler)).actor.priorConfirmations).toBe(3);
+  });
+});
+
+describe("signature matching", () => {
+  // `extraSignatures` is a documented extension point, and both of these used to
+  // compile into an entry that matched nothing at all — indistinguishable from a
+  // crawler that simply never visited.
+  it("matches a signature token that is not lowercase ASCII", () => {
+    const matcher = new MultiPatternMatcher<string>([
+      ["MyCorpBot", "cased"],
+      ["яндекс", "cyrillic"],
+      ["curl", "plain"],
+    ]);
+    expect(matcher.matchAll("mozilla/5.0 mycorpbot/2.0")).toEqual(["cased"]);
+    expect(matcher.matchAll("mozilla/5.0 (compatible; яндекс/1.0)")).toEqual(["cyrillic"]);
+    expect(matcher.matchAll("curl/8.4.0")).toEqual(["plain"]);
+    expect(matcher.matchAll("mozilla/5.0 (macintosh)")).toEqual([]);
+  });
+});
+
+describe("DNS verification under an unreliable resolver", () => {
+  const PTR = "crawl-66-249-66-1.googlebot.com";
+  const IP = "66.249.66.1";
+  const absent = (): never => {
+    throw Object.assign(new Error("not found"), { code: "ENOTFOUND" });
+  };
+  const unreachable = (): never => {
+    throw Object.assign(new Error("timeout"), { code: "ETIMEOUT" });
+  };
+
+  // The distinction the whole module is built on: an answer that contradicts a claim
+  // versus no answer at all. The cache used to erase it, throwing an unlabelled error
+  // on every hit, so a forged crawler was proven once and shrugged at thereafter.
+  it("replays a cached absence as an absence, not as a shrug", async () => {
+    let lookups = 0;
+    const cached = cachingResolver({
+      reverse: async () => {
+        lookups++;
+        return absent();
+      },
+      resolveAddresses: async () => [],
+    });
+
+    for (const attempt of [1, 2, 3]) {
+      const outcome = await forwardConfirmedReverseDns(cached, "203.0.113.5", ["googlebot.com"]);
+      expect(outcome.status, `attempt ${attempt}`).toBe("contradicted");
+    }
+    expect(lookups, "the cache must still spare the repeat lookups").toBe(1);
+  });
+
+  /**
+   * A lookup that never answers must not poison the key for ever.
+   *
+   * Callers share an in-flight query so a burst from one crawler costs one lookup, and
+   * sharing a promise means sharing its fate. Nothing above notices a hang: the detector
+   * timeout resolves the *detector*, not the query underneath it. So a single lookup that
+   * never settled used to be handed to every later caller for the life of the process —
+   * and that crawler could never be verified again, which under a preset that refuses
+   * what it cannot verify means refusing a real Googlebot permanently.
+   */
+  it("stops sharing a lookup that never answers", async () => {
+    let started = 0;
+    const cached = cachingResolver(
+      {
+        reverse: async () => {
+          started++;
+          // Never settles. Not slow — never.
+          return new Promise<string[]>(() => {});
+        },
+        resolveAddresses: async () => [],
+      },
+      { inFlightTtlMs: 20 },
+    );
+
+    // Two callers during the window share one query, which is the optimisation working.
+    void cached.reverse("203.0.113.5").catch(() => undefined);
+    void cached.reverse("203.0.113.5").catch(() => undefined);
+    expect(started, "a burst costs one lookup").toBe(1);
+
+    // Past the bound, a new caller starts its own rather than joining a query that is
+    // never going to answer.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    void cached.reverse("203.0.113.5").catch(() => undefined);
+    expect(started, "the key is not poisoned").toBe(2);
+  });
+
+  it("replays a cached timeout as indeterminate", async () => {
+    const cached = cachingResolver({
+      reverse: async () => unreachable(),
+      resolveAddresses: async () => [],
+    });
+    for (const attempt of [1, 2]) {
+      const outcome = await forwardConfirmedReverseDns(cached, "203.0.113.5", ["googlebot.com"]);
+      expect(outcome.status, `attempt ${attempt}`).toBe("indeterminate");
+    }
+  });
+
+  // A crawler's requests arrive in bursts, so the miss that costs is the one a
+  // hundred of them take at the same moment.
+  it("collapses concurrent lookups of the same name into one query", async () => {
+    let lookups = 0;
+    const cached = cachingResolver({
+      reverse: async () => {
+        lookups++;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return [PTR];
+      },
+      resolveAddresses: async () => [IP],
+    });
+    const outcomes = await Promise.all(Array.from({ length: 25 }, () => forwardConfirmedReverseDns(cached, IP, ["googlebot.com"])));
+    for (const outcome of outcomes) expect(outcome.status).toBe("verified");
+    expect(lookups).toBe(1);
+  });
+
+  // The expensive direction to get wrong: a resolver blip must never read as proof
+  // that a real crawler is forging its identity.
+  it("does not accuse a crawler when the forward lookup merely fails", async () => {
+    const outcome = await forwardConfirmedReverseDns(
+      { reverse: async () => [PTR], resolveAddresses: async () => unreachable() },
+      IP,
+      ["googlebot.com"],
+    );
+    expect(outcome.status).toBe("indeterminate");
+  });
+
+  it("still contradicts when the PTR name authoritatively has no address", async () => {
+    const outcome = await forwardConfirmedReverseDns(
+      { reverse: async () => [PTR], resolveAddresses: async () => absent() },
+      IP,
+      ["googlebot.com"],
+    );
+    // Asserted on `cause`, not on the prose: a caller that branches on the sentence
+    // silently changes behaviour the next time someone improves the wording.
+    expect(outcome).toMatchObject({ status: "contradicted", cause: "no-forward-record" });
+  });
+
+  it("distinguishes the reasons a claim was refuted", async () => {
+    const wrongDomain = await forwardConfirmedReverseDns(
+      { reverse: async () => ["vps-1234.cheap-hosting.example"], resolveAddresses: async () => [IP] },
+      IP,
+      ["googlebot.com"],
+    );
+    expect(wrongDomain).toMatchObject({ status: "contradicted", cause: "wrong-domain" });
+
+    const mismatch = await forwardConfirmedReverseDns(
+      { reverse: async () => [PTR], resolveAddresses: async () => ["8.8.8.8"] },
+      IP,
+      ["googlebot.com"],
+    );
+    expect(mismatch).toMatchObject({ status: "contradicted", cause: "address-mismatch" });
+
+    const noPtr = await forwardConfirmedReverseDns({ reverse: async () => absent(), resolveAddresses: async () => [] }, IP, ["googlebot.com"]);
+    expect(noPtr).toMatchObject({ status: "contradicted", cause: "no-ptr" });
+  });
+});
+
+describe("treatMissingPtrAsForgery", () => {
+  // The option was implemented by searching the human-readable reason for "no PTR
+  // record", so rewording that sentence would have turned the opt-out into a no-op.
+  const claimsGooglebot = (resolver: DnsResolver) =>
+    makeContext({ headers: { "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" }, ip: "66.249.66.1", resolver });
+  const noPtr: DnsResolver = {
+    reverse: () => Promise.reject(Object.assign(new Error("not found"), { code: "ENOTFOUND" })),
+    resolveAddresses: () => Promise.resolve([]),
+  };
+
+  it("accuses a claimed crawler with no PTR record by default", async () => {
+    const evidence = await collect(crawlerVerificationDetector(), claimsGooglebot(noPtr));
+    expect(evidence[0]?.botClass).toBe("impersonator");
+  });
+
+  it("stands down when the operator has switched that off", async () => {
+    const evidence = await collect(crawlerVerificationDetector({ treatMissingPtrAsForgery: false }), claimsGooglebot(noPtr));
+    expect(evidence).toEqual([]);
+  });
+
+  it("still accuses a PTR under the wrong domain either way", async () => {
+    const wrong: DnsResolver = {
+      reverse: () => Promise.resolve(["vps-1234.cheap-hosting.example"]),
+      resolveAddresses: () => Promise.resolve(["66.249.66.1"]),
+    };
+    const evidence = await collect(crawlerVerificationDetector({ treatMissingPtrAsForgery: false }), claimsGooglebot(wrong));
+    expect(evidence[0]?.botClass).toBe("impersonator");
   });
 });

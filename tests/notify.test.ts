@@ -6,6 +6,8 @@ import { consoleNotifier, notifyJsNotifier, slackNotifier, webhookNotifier } fro
 import { redactEvent } from "../src/notify/redact.js";
 import type { Assessment } from "../src/types.js";
 import type { BotEvent } from "../src/notify/types.js";
+import { BotHandler } from "../src/index.js";
+import { failingResolver, makeFacts } from "./helpers.js";
 
 /**
  * The notification path, whose failures are all of the same shape: something that
@@ -14,6 +16,7 @@ import type { BotEvent } from "../src/notify/types.js";
  */
 
 const SECRET_COOKIE = "session=super-secret-value";
+
 const SECRET_TOKEN = "abc123-secret-reset-token";
 
 function assessment(): Assessment {
@@ -382,5 +385,66 @@ describe("headers that hold a secret, on the way out", () => {
 
     const guessless = JSON.stringify(redactEvent(event, { guessSecretHeaders: false }));
     expect(guessless).toContain("guessedvalue");
+  });
+});
+
+describe("notification redaction", () => {
+  it("masks IPv6 to a /64, including compressed forms", async () => {
+    const seen: string[] = [];
+    for (const ip of ["2001:db8:1:2:3:4:5:6", "2001:db8::1", "fe80::abcd", "203.0.113.55"]) {
+      const handler = new BotHandler({
+        resolver: failingResolver(),
+        preset: "monitor-only",
+        notifications: { sinks: [{ id: "t", notify: (event) => void seen.push(event.assessment!.facts.ip) }], filter: { types: ["detection"], minScore: 0 } },
+      });
+      await handler.assess(makeFacts({ ip, headers: { host: "x", "user-agent": "curl/8.4.0" } }));
+    }
+    expect(seen).toEqual(["2001:db8:1:2::/64", "2001:db8::/64", "fe80::/64", "203.0.113.0/24"]);
+  });
+
+  // Removing a header from the map is not the same as removing it from the event.
+  // Detectors quote what they saw, so a stripped header reappeared a few fields away.
+  it("does not leak a stripped header back through what a detector quoted", async () => {
+    const secrets: string[] = [];
+    const handler = new BotHandler({
+      resolver: failingResolver(),
+      preset: "monitor-only",
+      notifications: {
+        redaction: { dropUserAgent: true },
+        sinks: [{ id: "t", notify: (event) => void secrets.push(JSON.stringify(event)) }],
+        filter: { types: ["detection"], minScore: 0 },
+      },
+    });
+    const headless = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/122.0.0.0 Safari/537.36";
+    await handler.assess(
+      makeFacts({
+        ip: "203.0.113.55",
+        path: "/reset?token=abc123-secret-reset-token",
+        headers: { host: "x", "user-agent": headless, cookie: "session=super-secret-value" },
+      }),
+    );
+    const delivered = secrets.join("");
+    expect(delivered, "the event must have been delivered at all").not.toBe("");
+    expect(delivered).not.toContain("HeadlessChrome/122");
+    expect(delivered).not.toContain("super-secret-value");
+    // A query string is where reset tokens and session ids actually live.
+    expect(delivered).not.toContain("abc123-secret-reset-token");
+    expect(delivered, "parameter names are what make an alert legible").toContain("token");
+  });
+
+  it("keeps the event useful when nothing needs stripping", async () => {
+    const events: string[] = [];
+    const handler = new BotHandler({
+      resolver: failingResolver(),
+      preset: "monitor-only",
+      notifications: {
+        redaction: { maskQuery: false },
+        sinks: [{ id: "t", notify: (event) => void events.push(JSON.stringify(event)) }],
+        filter: { types: ["detection"], minScore: 0 },
+      },
+    });
+    await handler.assess(makeFacts({ ip: "203.0.113.55", path: "/list?page=2", headers: { host: "x", "user-agent": "curl/8.4.0" } }));
+    expect(events.join("")).toContain("curl/8.4.0");
+    expect(events.join("")).toContain('"page":"2"');
   });
 });

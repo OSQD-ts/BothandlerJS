@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { IpRangeSet, formatIp, isSpecialUse, maskAddresses, networkKey, normalizeIp, parseCidr, parseIp, stripPort } from "../src/internal/ip.js";
-import { BotHandler } from "../src/index.js";
+import { BotHandler, resolveClientIp } from "../src/index.js";
+
+const OFF = { trustProxy: false, hops: 1, header: "x-forwarded-for", trustedProxies: undefined };
 
 describe("parseIp", () => {
   it("parses plain IPv4", () => {
@@ -228,5 +230,24 @@ describe("masking the addresses in a piece of text", () => {
     ]) {
       expect(maskAddresses(text), text).toBe(text);
     }
+  });
+});
+
+describe("client IP resolution", () => {
+  // A chain shorter than the configured hop count means the request did not come
+  // through the expected topology, so every entry in it is client-controlled.
+  it("falls back to the socket address rather than a client-chosen entry", () => {
+    const proxy = { ...OFF, trustProxy: true, hops: 5 };
+    expect(resolveClientIp("10.0.0.1", { "x-forwarded-for": "6.6.6.6, 203.0.113.9" }, proxy)).toBe("10.0.0.1");
+  });
+
+  it("still reads the right hop when the chain is long enough", () => {
+    const proxy = { ...OFF, trustProxy: true, hops: 2 };
+    expect(resolveClientIp("10.0.0.1", { "x-forwarded-for": "6.6.6.6, 203.0.113.9, 10.0.0.2" }, proxy)).toBe("203.0.113.9");
+  });
+
+  it("ignores a chain of junk rather than trusting it", () => {
+    const proxy = { ...OFF, trustProxy: true, hops: 1 };
+    expect(resolveClientIp("10.0.0.1", { "x-forwarded-for": "nonsense, also-nonsense" }, proxy)).toBe("10.0.0.1");
   });
 });
