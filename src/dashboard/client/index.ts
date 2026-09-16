@@ -82,11 +82,13 @@ function initHeader(): void {
     stored = null;
   }
   if (stored === "dark" || stored === "light") themeElement().setAttribute("data-theme", stored);
+  labelThemeButton();
+  // Following the system scheme, the button's destination changes when the system's does.
+  if (typeof matchMedia === "function") matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", labelThemeButton);
   $("theme").addEventListener("click", () => {
-    let current = themeElement().getAttribute("data-theme");
-    if (current === null) current = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    const next = current === "dark" ? "light" : "dark";
+    const next = currentScheme() === "dark" ? "light" : "dark";
     themeElement().setAttribute("data-theme", next);
+    labelThemeButton();
     try {
       localStorage.setItem("bothandler-dashboard-theme", next);
     } catch {
@@ -550,6 +552,24 @@ function settleScrollAnchoring(): void {
       html.classList.remove("settling");
     });
   });
+}
+
+
+function currentScheme(): "dark" | "light" {
+  const explicit = themeElement().getAttribute("data-theme");
+  if (explicit === "dark" || explicit === "light") return explicit;
+  return typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+/**
+ * Named for where it goes, the way hackerpot's dashboard names it. "Theme" said a scheme would
+ * change without saying to which, and a screen reader heard only that there was a switch.
+ */
+function labelThemeButton(): void {
+  const button = $("theme");
+  const next = currentScheme() === "dark" ? "light" : "dark";
+  button.textContent = next === "dark" ? "Dark" : "Light";
+  button.setAttribute("aria-label", `Switch to the ${next} colour scheme`);
 }
 
 start();

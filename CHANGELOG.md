@@ -22,6 +22,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The theme button says which scheme it switches to.** It read "Theme" and announced
+  "Switch between light and dark", which told nobody the direction. It now reads Light or Dark
+  and is announced as "Switch to the light colour scheme", the way hackerpot's dashboard
+  labels the same button, and follows the system scheme when no choice has been stored.
 - **A release that fails can no longer leave a tag behind.** The publish workflow used to
   commit, tag and push the version first and only then build, check and publish, so any
   failure after the push stranded a tag on main for a version the registry never got — and

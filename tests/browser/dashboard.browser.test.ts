@@ -579,6 +579,9 @@ describe("the toolbar", () => {
     const second = await themeOf();
     expect(second, "the toggle actually moves").not.toBe(first);
     expect(["light", "dark"]).toContain(second);
+    // Named for where it goes next, so the label is never a guess about which way it switches.
+    expect(await page.locator("#theme").textContent()).toBe(second === "dark" ? "Light" : "Dark");
+    expect(await page.locator("#theme").getAttribute("aria-label")).toBe(`Switch to the ${second === "dark" ? "light" : "dark"} colour scheme`);
 
     // Kept in this browser, because it is a preference belonging to whoever is reading
     // rather than a fact about the server.

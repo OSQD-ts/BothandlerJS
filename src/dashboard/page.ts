@@ -1183,7 +1183,7 @@ export const DASHBOARD_MARKUP = String.raw`
     <div class="grow"></div>
     <nav class="head-links" id="links" aria-label="Related"></nav>
     <div class="head-actions">
-      <button id="theme" aria-label="Switch between light and dark">Theme</button>
+      <button id="theme" type="button">Theme</button>
       <button id="pause" aria-pressed="false">Pause</button>
       <button id="reset" class="danger" hidden>Reset</button>
     </div>
