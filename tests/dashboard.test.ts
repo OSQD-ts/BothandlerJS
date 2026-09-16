@@ -1071,6 +1071,21 @@ describe("refusal modes", () => {
     });
   }
 
+  /**
+   * A response as the comparison should see it: everything but the second it was written.
+   *
+   * The four probes below go out one after another, and `Date` is a whole second's
+   * resolution — so a run that straddles a tick compared two refusals that were identical
+   * in every respect this test is about and differed only in the clock. That failed a CI
+   * run on one Node version while eight other jobs passed, which is the signature of a
+   * test that is wrong rather than a server that is.
+   */
+  const withoutTheClock = (answer: { status: number; body: string; headers: Record<string, string | string[] | undefined> } | { dropped: true }): unknown => {
+    if (!("headers" in answer)) return answer;
+    const { date: _written, ...headers } = answer.headers;
+    return { ...answer, headers };
+  };
+
   const TOKEN = { token: "a-token-long-enough-to-be-accepted" };
 
   it("says 401 by default, and says which refusal it was", async () => {
@@ -1092,7 +1107,7 @@ describe("refusal modes", () => {
     const unknownPath = await probe(port, { path: "/nope", headers: { authorization: `Bearer ${TOKEN.token}` } });
 
     for (const answer of [noCredentials, wrongHost, crossSite]) {
-      expect(answer).toEqual(unknownPath);
+      expect(withoutTheClock(answer)).toEqual(withoutTheClock(unknownPath));
     }
     expect(unknownPath).toMatchObject({ status: 404 });
   });
