@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`notifyJsNotifier` never reached a NotifyJS hub.** It posted `{ topic, priority, data }`
+  to `<endpoint>/publish` — a route and a payload shape no version of the hub has ever
+  served. Every delivery was refused, and because the refusal was reported as a generic
+  rejection, a hub that was working looked exactly like one that was not. It now posts to
+  `POST /api/notify` with the fields the hub reads (`title`, `body`, `channel`, `severity`,
+  `tags`, `data`, `dedupeKey`), authenticates with a `Bearer` ingest token, and treats the
+  hub's `202` as success. Severities come from the hub's own vocabulary rather than a
+  `priority` it does not have, one alert is sent per actor via `dedupeKey`, and each refusal
+  names the fix it needs — `404` means ingest is switched off, `421` a bearer token over
+  plain HTTP, `401` a revoked token, `403` a role that cannot publish. `topic` is now
+  `channel`, the field the hub actually takes.
+
 ### Changed
 
 - **A release that fails can no longer leave a tag behind.** The publish workflow used to

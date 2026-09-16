@@ -186,25 +186,44 @@ export function slackNotifier(options: SlackNotifierOptions): Notifier {
 export interface NotifyJsOptions {
   /** Base URL of your NotifyJS hub. */
   endpoint: string;
-  /** Hub API token. */
+  /** An ingest token (`njs_…`), minted with `notifyjs token create`. */
   token: string;
-  /** Channel or topic to publish under. Default "bothandler". */
-  topic?: string;
+  /** Channel to publish under. Default "bothandler". */
+  channel?: string;
   timeoutMs?: number;
   fetch?: typeof globalThis.fetch;
 }
 
+/** Longest title and body sent. Both carry client-chosen text, and this lands on a lock screen. */
+const MAX_NOTIFY_TITLE = 120;
+const MAX_NOTIFY_BODY = 400;
+
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
 /**
- * Publishes to a NotifyJS hub, so bot alerts arrive on the same devices as the rest
- * of your operational notifications.
+ * Publishes to a NotifyJS hub, so bot alerts arrive on the same devices as the rest of
+ * your operational notifications.
  *
- * Written against the hub's HTTP surface rather than importing the client, so this
- * adds no dependency and works whichever version of the hub you run.
+ * Written against the hub's HTTP surface rather than importing the client, so this adds no
+ * dependency and works whichever version of the hub you run — and written against the surface
+ * the hub *actually serves*, which is `POST /api/notify` taking
+ * `{ title, body, channel, severity, tags, data, dedupeKey }` and answering 202. This sink
+ * previously posted `{ topic, priority, data }` to `/publish`, a route and a payload shape no
+ * version of the hub has ever served: every delivery was refused, and because the refusal was
+ * reported as a generic rejection, a hub that was working looked the same as one that was not.
+ *
+ * Ingest is **off** on a hub until you turn it on — `notifyjs serve --ingest`, then
+ * `notifyjs token create --role oncall` — and a hub with it off answers 404 rather than
+ * confirming the feature exists. Each refusal is reported as itself below, because a disabled
+ * feature, a revoked token and a role that cannot publish are three different fixes.
  */
 export function notifyJsNotifier(options: NotifyJsOptions): Notifier {
-  const doFetch = options.fetch ?? globalThis.fetch;
-  const topic = options.topic ?? "bothandler";
+  const url = `${options.endpoint.replace(/\/+$/, "")}/api/notify`;
+  const channel = options.channel ?? "bothandler";
   const timeoutMs = options.timeoutMs ?? 5000;
+  const doFetch = options.fetch ?? globalThis.fetch;
 
   return {
     id: "notifyjs",
@@ -213,35 +232,56 @@ export function notifyJsNotifier(options: NotifyJsOptions): Notifier {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       (timer as { unref?: () => void }).unref?.();
-      // An `anomaly` carries no request, so the message is built from the window it
-      // describes instead.
-      const title = assessment === undefined ? (anomaly?.id ?? "anomaly") : `${assessment.verdict}${assessment.identity ? ` — ${assessment.identity}` : ""}`;
+
+      // An `anomaly` carries no request, so the message is built from the window it describes.
+      const title = assessment === undefined ? `bothandler: ${anomaly?.id ?? "anomaly"}` : `bothandler: ${assessment.verdict}${assessment.identity ? ` — ${assessment.identity}` : ""}`;
       const body = assessment === undefined ? (anomaly?.summary ?? "") : (assessment.evidence[0]?.summary ?? `${assessment.facts.method} ${assessment.facts.path}`);
-      const priority = event.type === "error" || anomaly?.severity === "critical" ? "high" : assessment?.certain || anomaly !== undefined ? "normal" : "low";
-      const data = assessment === undefined
-        ? { anomaly: anomaly?.id, metric: anomaly?.metric, value: anomaly?.value, baseline: anomaly?.baseline }
-        : { requestId: assessment.requestId, score: assessment.score, actor: assessment.actor.key };
+      // The hub's own vocabulary: debug | info | success | warning | error | critical. An
+      // unknown value would be coerced to "info" on arrival, which would silently flatten
+      // exactly the distinctions worth paging on.
+      const severity =
+        event.type === "error" || anomaly?.severity === "critical"
+          ? "error"
+          : anomaly !== undefined
+            ? "warning"
+            : assessment?.certain === true
+              ? "warning"
+              : "info";
+
       try {
-        const response = await doFetch(`${options.endpoint.replace(/\/$/, "")}/publish`, {
+        const response = await doFetch(url, {
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${options.token}` },
           body: JSON.stringify({
-            topic,
-            title,
-            body,
-            priority,
-            data,
+            title: clip(title, MAX_NOTIFY_TITLE),
+            body: clip(body, MAX_NOTIFY_BODY),
+            channel,
+            severity,
+            tags: ["bothandler", event.type],
+            // One alert per actor, however many requests they make.
+            dedupeKey: assessment === undefined ? `bothandler:${anomaly?.id ?? event.type}` : `bothandler:${event.type}:${assessment.actor.key}`,
+            data: assessment === undefined ? { anomaly: anomaly?.id, metric: anomaly?.metric, value: anomaly?.value, baseline: anomaly?.baseline } : { requestId: assessment.requestId, score: assessment.score, verdict: assessment.verdict },
           }),
           signal: controller.signal,
         });
-        // As with Slack: an expired hub token is a 401, and silence about it is
-        // indistinguishable from a quiet week.
-        if (!response.ok) throw new Error(`NotifyJS hub rejected the notification with ${response.status}`);
+        // 202 is the hub's success for an accepted notification.
+        if (!response.ok) throw new Error(notifyJsRefusal(response.status));
       } finally {
         clearTimeout(timer);
       }
     },
   };
+}
+
+/** What a refusal from the hub means, in the words of its own contract. */
+function notifyJsRefusal(status: number): string {
+  if (status === 404) return "the NotifyJS hub has HTTP ingest switched off (start it with `notifyjs serve --ingest`); a disabled feature answers 404 rather than confirming it exists";
+  if (status === 421) return "the hub refused a bearer token over plain HTTP from off-box; put TLS in front of it, or run the hub on loopback behind a reverse proxy";
+  if (status === 401) return "the NotifyJS ingest token is unknown or revoked";
+  if (status === 403) return "this ingest token's role cannot publish notifications (`notify.send`)";
+  if (status === 429) return "the hub is rate-limiting this ingest token";
+  if (status === 413) return "the hub refused the notification as too large";
+  return `the NotifyJS hub rejected the notification with ${status}`;
 }
 
 function delay(ms: number): Promise<void> {

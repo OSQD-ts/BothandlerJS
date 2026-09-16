@@ -23,7 +23,13 @@ notifications: {
 | `consoleNotifier()` | development, and a reasonable default in a container |
 | `webhookNotifier({ url, secret })` | HMAC-signed, with the timestamp *inside* the signed payload; retries with backoff; per-attempt timeout |
 | `slackNotifier({ url })` | an incoming webhook |
-| `notifyJsNotifier({ ... })` | the sibling [NotifyJS](https://github.com/OSQD-ts) hub |
+| `notifyJsNotifier({ endpoint, token, channel })` | the sibling [NotifyJS](https://github.com/OSQD-ts) hub, over its HTTP ingest |
+
+Ingest is **off** on a NotifyJS hub until you turn it on — `notifyjs serve --ingest`, then
+`notifyjs token create --role oncall` for the token — and a hub with it off answers `404`
+rather than confirming the feature exists. Each refusal is reported as the fix it needs:
+`421` is a bearer token over plain HTTP from off-box, `401` an unknown or revoked token,
+`403` a token whose role cannot `notify.send`, `429` its rate limit.
 
 Your own is one method — implement `Notifier`. If you want the raw event with no batching
 at all, take it from [the events](index.md#events-and-hooks) instead.

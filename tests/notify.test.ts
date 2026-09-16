@@ -147,13 +147,45 @@ describe("sinks that used to fail silently", () => {
     await expect(sink.notify(event())).rejects.toThrow("404");
   });
 
-  it("reports a rejection from a NotifyJS hub", async () => {
+  it("reports a rejection from a NotifyJS hub as the fix it needs", async () => {
     const sink = notifyJsNotifier({
       endpoint: "https://hub.example",
       token: "t",
       fetch: (async () => new Response("unauthorized", { status: 401 })) as typeof globalThis.fetch,
     });
-    await expect(sink.notify(event())).rejects.toThrow("401");
+    // A status number tells somebody to go and look it up. A disabled feature, a revoked token
+    // and a role that cannot publish are three different fixes, so each says which it is.
+    await expect(sink.notify(event())).rejects.toThrow(/unknown or revoked/);
+  });
+
+  it("posts what the hub actually serves", async () => {
+    // The shape this sink sent for its whole life — `{ topic, priority, data }` to `/publish` —
+    // is a route and a payload no version of the hub has ever served, so every delivery was
+    // refused and the generic rejection made a working hub look like a broken one. Pinned here
+    // so it cannot drift back.
+    const sent: Array<{ url: string; init: { method?: string; headers?: Record<string, string>; body?: string } }> = [];
+    const sink = notifyJsNotifier({
+      endpoint: "https://hub.example/",
+      token: "njs_abc",
+      fetch: (async (url: string | URL, init: unknown) => {
+        sent.push({ url: String(url), init: init as { method?: string; headers?: Record<string, string>; body?: string } });
+        return new Response(JSON.stringify({ ok: true, id: "n1" }), { status: 202 });
+      }) as unknown as typeof globalThis.fetch,
+    });
+
+    await sink.notify(event());
+
+    expect(sent[0]?.url).toBe("https://hub.example/api/notify");
+    expect(sent[0]?.init.method).toBe("POST");
+    expect(sent[0]?.init.headers?.["authorization"]).toBe("Bearer njs_abc");
+    const body = JSON.parse(sent[0]?.init.body as string) as Record<string, unknown>;
+    // The hub builds its notification field by field and ignores anything it does not name.
+    expect(typeof body["title"]).toBe("string");
+    expect(body["channel"]).toBe("bothandler");
+    expect(["debug", "info", "success", "warning", "error", "critical"]).toContain(body["severity"]);
+    expect(typeof body["dedupeKey"]).toBe("string");
+    expect(body["topic"]).toBeUndefined();
+    expect(body["priority"]).toBeUndefined();
   });
 
   it("says nothing when delivery succeeds", async () => {
