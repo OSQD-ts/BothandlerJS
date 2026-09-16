@@ -407,13 +407,26 @@ button.tile:hover { border-color: var(--focus); }
 /* A group's heading row. It is a table heading rather than a styled cell, so a screen
    reader announces the rows under it as belonging to something. */
 tbody tr.grp th {
-  text-align: left; padding: 9px 10px 6px; font-size: 11.5px; font-weight: 650;
+  text-align: left; padding: 4px 10px 4px 6px; font-size: 11.5px; font-weight: 650;
   color: var(--ink-2); background: color-mix(in srgb, var(--ink) 4%, transparent);
   border-top: 1px solid var(--line); border-bottom: 1px solid var(--line-soft);
 }
 tbody tr.grp:first-child th { border-top: 0; }
+/* The heading is the control: a chevron on a row this wide is a small target, and there is
+   nothing else on the row to click. */
+.grp-toggle {
+  display: inline-flex; align-items: baseline; gap: 8px; border: 0; background: none; border-radius: 6px;
+  padding: 4px 8px; font: inherit; font-weight: 650; color: var(--ink-2); text-align: left;
+}
+.grp-toggle:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); border-color: transparent; }
+.grp-toggle .chev { color: var(--muted); width: 9px; display: inline-block; }
+.grp-only {
+  border: 0; background: none; padding: 3px 8px; font-size: 11px; color: var(--muted); border-radius: 6px; opacity: 0;
+}
+tr.grp:hover .grp-only, .grp-only:focus-visible { opacity: 1; }
+.grp-only:hover { background: color-mix(in srgb, var(--s1) 14%, transparent); color: var(--ink); border-color: transparent; }
 .grp-key { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.grp-n { color: var(--muted); font-weight: 400; margin-left: 10px; font-variant-numeric: tabular-nums; }
+.grp-n { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 
 .pager {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -1248,6 +1261,7 @@ export const DASHBOARD_MARKUP = String.raw`
               <option value="rule">Rule</option>
               <option value="path">Path</option>
             </select>
+            <button id="feed-roll" type="button" aria-pressed="false" hidden>Roll up all</button>
           </div>
           <button id="feed-export" title="Download every request matching this filter as replay JSONL">Export</button>
           <div class="pager pager-inline" id="feed-pager-top" hidden></div>

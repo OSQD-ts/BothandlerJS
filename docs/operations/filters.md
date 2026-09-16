@@ -134,9 +134,22 @@ Order takes newest or oldest first, the highest or lowest scores, or the slowest
 assessments. Group puts the rows under a heading — by actor, verdict, action, bot class,
 rule or path — with the number of matching requests in each.
 
+Every heading rolls up: press it and the group keeps its line and gives up its rows, which
+is how a thousand requests become a dozen actors you can read down and open one at a time.
+**Roll up all** beside the Group control does the lot, and becomes **Expand all**. Rolling
+up is a view, not a filter — the rows are still matched, still counted and still exported.
+
+Each heading also offers **Only**, which narrows the feed to that group by writing the
+query for it — `verdict:confirmed-bot`, `actor:203.0.113.4`. It is an ordinary query from
+then on, so you can add to it, and it travels in the URL like any other. The two headings
+that stand for an absence, `assessed only` and `no rule matched`, have no button: one term
+cannot say "no action at all", and a button that quietly meant something else would be
+worse than none.
+
 Both apply to everything the query matches rather than to the page on screen, so a group is
 contiguous wherever the page boundaries fall, and the heading repeats when a group carries
-onto the next page. Changing either returns you to the first page: page four of one ordering
+onto the next page. A rolled-up group takes one line of a page rather than all of its rows,
+so paging follows what is on screen. Changing either returns you to the first page: page four of one ordering
 is not page four of another. Both travel in the URL, so "the slowest requests on `/api`,
 grouped by actor" is a view you can send somebody, and **Export** writes the rows in the
 order you are looking at them.

@@ -2958,6 +2958,67 @@ describe("finding things in the feed", () => {
   });
 
   /**
+   * Rolling a group up, which is how a busy feed becomes navigable.
+   *
+   * The rows go and the heading stays, so the count is still there to open. It is a view
+   * rather than a filter — what matched still matches — and the pager follows the lines on
+   * screen rather than the rows behind them.
+   */
+  it("rolls a group up from its heading and opens it again", async () => {
+    const page = await open();
+    await page.selectOption("#feed-group", "verdict");
+    await expect.poll(() => page.locator("tbody tr.grp").count(), { timeout: 10_000 }).toBeGreaterThan(0);
+
+    const heading = page.locator("tbody tr.grp").first();
+    const key = ((await heading.locator(".grp-key").innerText()) ?? "").trim();
+    const before = await page.locator("tbody tr.row").count();
+    expect(before).toBeGreaterThan(0);
+
+    await heading.locator(".grp-toggle").click();
+    await expect.poll(() => page.locator("tbody tr.grp .grp-toggle").first().getAttribute("aria-expanded")).toBe("false");
+    // The heading is still there, naming the same group.
+    expect(((await page.locator("tbody tr.grp .grp-key").first().innerText()) ?? "").trim()).toBe(key);
+    await expect.poll(() => page.locator("tbody tr.row").count()).toBeLessThan(before);
+
+    await page.locator("tbody tr.grp .grp-toggle").first().click();
+    await expect.poll(() => page.locator("tbody tr.grp .grp-toggle").first().getAttribute("aria-expanded")).toBe("true");
+    await page.close();
+  });
+
+  it("rolls every group up at once, and back", async () => {
+    const page = await open();
+    await page.selectOption("#feed-group", "action");
+    await expect.poll(() => page.locator("tbody tr.grp").count(), { timeout: 10_000 }).toBeGreaterThan(0);
+
+    await page.locator("#feed-roll").click();
+    await expect.poll(() => page.locator("tbody tr.row").count()).toBe(0);
+    await expect.poll(() => page.locator("tbody tr.grp").count()).toBeGreaterThan(0);
+    expect(await page.locator("#feed-roll").innerText()).toBe("Expand all");
+
+    await page.locator("#feed-roll").click();
+    await expect.poll(() => page.locator("tbody tr.row").count()).toBeGreaterThan(0);
+    await page.close();
+  });
+
+  it("narrows to one group from its heading", async () => {
+    const page = await open();
+    await page.selectOption("#feed-group", "verdict");
+    await expect.poll(() => page.locator("tbody tr.grp").count(), { timeout: 10_000 }).toBeGreaterThan(0);
+
+    const heading = page.locator("tbody tr.grp").first();
+    const key = ((await heading.locator(".grp-key").innerText()) ?? "").trim();
+    await heading.locator(".grp-only").click();
+
+    // It writes the feed's own query, so it is editable afterwards and travels in the URL.
+    await expect.poll(() => page.locator("#search").inputValue()).toBe(`verdict:${key}`);
+    await expect.poll(() => new URL(page.url()).hash).toContain("q=verdict");
+    // One group left, and every row in it belongs to that group.
+    await expect.poll(() => page.locator("tbody tr.grp").count()).toBe(1);
+    expect(((await page.locator("tbody tr.grp .grp-key").innerText()) ?? "").trim()).toBe(key);
+    await page.close();
+  });
+
+  /**
    * The order the button leaves behind.
    *
    * What it fetches is the ring in full, oldest first, merged into a feed already holding

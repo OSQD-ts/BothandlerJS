@@ -77,6 +77,14 @@ export interface State {
   order: FeedOrder;
   /** What the rows are grouped by, if anything. See {@link FeedGroup}. */
   group: FeedGroup;
+  /**
+   * Groups that are rolled up, by key.
+   *
+   * A view state rather than a filter: the rows are still matching, still counted and still
+   * exported. Rolling the feed up is how a thousand requests become twelve actors you can
+   * read down, and opening one is how you get back to the requests.
+   */
+  collapsed: Set<string>;
   tab: TabName;
   open: Set<string>;
   actor: string | undefined;
@@ -163,6 +171,7 @@ export const state: State = {
   labelSwitches: new Map(),
   order: "newest",
   group: "none",
+  collapsed: new Set(),
   showHidden: false,
   actorsTracked: 0,
   actorScope: "tracked",
@@ -446,8 +455,55 @@ export function visibleRows(limit = FEED_LIMIT): Row[] {
  * was when the reader left page zero, because a feed that renumbers itself under somebody
  * paging through it is a feed they cannot read.
  */
-export function feedPage(size: number): { rows: Row[]; page: number; pages: number; total: number } {
-  const all = state.feedPage === 0 || state.feedFrozen === undefined ? matchingRows() : state.feedFrozen;
+/**
+ * One line of the feed: a group's heading, or a request.
+ *
+ * Paging runs over these rather than over rows, which is what makes rolling a group up
+ * mean something. A collapsed group keeps its heading and gives up its rows, so a page of
+ * fifty is fifty things somebody can see rather than fifty rows of which forty are hidden.
+ */
+export type FeedItem = { kind: "heading"; key: string; count: number; collapsed: boolean } | { kind: "row"; row: Row };
+
+/** Whether this group is rolled up. Ungrouped feeds have no groups to roll. */
+export function isCollapsed(key: string): boolean {
+  return state.group !== "none" && state.collapsed.has(key);
+}
+
+/** Rolls one group up, or opens it. */
+export function toggleGroup(key: string): void {
+  if (state.collapsed.has(key)) state.collapsed.delete(key);
+  else state.collapsed.add(key);
+}
+
+/** Every group in the matching rows, in the order they appear. */
+export function groupKeys(): string[] {
+  return [...groupCounts().keys()];
+}
+
+/** Rolls every group up, or opens every one. */
+export function setAllGroups(collapsed: boolean): void {
+  state.collapsed = collapsed ? new Set(groupKeys()) : new Set();
+}
+
+/** The rows as lines: headings inserted, and the rows of a rolled-up group left out. */
+function itemsFrom(rows: readonly Row[]): FeedItem[] {
+  if (state.group === "none") return rows.map((row) => ({ kind: "row", row }) as FeedItem);
+  const counts = groupCounts();
+  const items: FeedItem[] = [];
+  let heading: string | undefined;
+  for (const row of rows) {
+    const key = groupKeyOf(row);
+    if (key !== heading) {
+      heading = key;
+      items.push({ kind: "heading", key, count: counts.get(key) ?? 0, collapsed: state.collapsed.has(key) });
+    }
+    if (!state.collapsed.has(key)) items.push({ kind: "row", row });
+  }
+  return items;
+}
+
+export function feedPage(size: number): { items: FeedItem[]; page: number; pages: number; total: number } {
+  const all = itemsFrom(state.feedPage === 0 || state.feedFrozen === undefined ? matchingRows() : state.feedFrozen);
   // Sized by what the server can still produce, not by what this browser happens to hold.
   //
   // Two different numbers live above this screen and only one of them belongs here. How
@@ -460,14 +516,17 @@ export function feedPage(size: number): { rows: Row[]; page: number; pages: numb
   // Only when nothing is filtering. A query narrows the feed in *this browser* and the
   // server has never seen it, so neither of the server's numbers says anything about how
   // many rows match.
-  const unfiltered = matchingCount() === state.rows.length;
+  // The server's count describes requests, so it can only size the pages while a line is a
+  // request: grouped or rolled up, this page is counting something the server has never
+  // seen.
+  const unfiltered = state.group === "none" && matchingCount() === state.rows.length;
   const reachable = unfiltered && state.window !== undefined ? Math.max(all.length, state.window.retained) : all.length;
   const pages = Math.max(1, Math.ceil(reachable / size));
   // A filter that narrows while somebody is on the last page must not leave them past the
   // end looking at nothing.
   const page = Math.min(Math.max(0, state.feedPage), pages - 1);
   if (page !== state.feedPage) state.feedPage = page;
-  return { rows: all.slice(page * size, page * size + size), page, pages, total: reachable };
+  return { items: all.slice(page * size, page * size + size), page, pages, total: reachable };
 }
 
 /**

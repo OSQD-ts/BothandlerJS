@@ -4,7 +4,7 @@ import { corpusCase, replayFile, replayLine } from "../src/dashboard/client/repl
 import { draftRule } from "../src/dashboard/client/draft.js";
 import { FIELD_NAMES, OPERATORS, matches as matchesFilterExpression, matchesFilter, parseFilter, searchableText, suggestFor } from "../src/dashboard/client/query.js";
 import { actionKind, outcome, provenBots, verdictBadge } from "../src/dashboard/client/outcome.js";
-import { clearFeed, feedPage, goToFeedPage, groupCounts, groupKeyOf, ingest, matches, matchingRows, resetPaging, setSearch, setTimeframe, sortRows, state } from "../src/dashboard/client/store.js";
+import { clearFeed, feedPage, goToFeedPage, groupCounts, groupKeyOf, ingest, matches, matchingRows, resetPaging, setAllGroups, setSearch, setTimeframe, sortRows, state, toggleGroup } from "../src/dashboard/client/store.js";
 import { clockDate, clockStamp, clockTime, n, pct, rangeLabel, uptime, windowLabel } from "../src/dashboard/client/format.js";
 import type { DashboardEntry } from "../src/dashboard/types.js";
 
@@ -562,6 +562,8 @@ describe("counting proven bots", () => {
  * follows the feed; every other page reads the list as it was when they left page zero.
  */
 describe("paging the feed", () => {
+  /** The requests on a page. Ungrouped, every line is one; grouped, the headings are not. */
+  const rowIds = (page: ReturnType<typeof feedPage>): string[] => page.items.flatMap((item) => (item.kind === "row" ? [item.row.entry.requestId] : []));
   const fill = (count: number): void => {
     clearFeed();
     state.rows = [];
@@ -577,35 +579,35 @@ describe("paging the feed", () => {
     const first = feedPage(50);
     expect(first.total).toBe(120);
     expect(first.pages).toBe(3);
-    expect(first.rows).toHaveLength(50);
+    expect(rowIds(first)).toHaveLength(50);
     // Newest first: the last ingested is the top row.
-    expect(first.rows[0]?.entry.requestId).toBe("r119");
+    expect(rowIds(first)[0]).toBe("r119");
 
     goToFeedPage(1);
     const second = feedPage(50);
     expect(second.page).toBe(1);
-    expect(second.rows[0]?.entry.requestId).toBe("r69");
+    expect(rowIds(second)[0]).toBe("r69");
 
     goToFeedPage(2);
     const last = feedPage(50);
-    expect(last.rows).toHaveLength(20);
-    expect(last.rows[19]?.entry.requestId).toBe("r0");
+    expect(rowIds(last)).toHaveLength(20);
+    expect(rowIds(last)[19]).toBe("r0");
   });
 
   it("holds a page still while the feed grows under it", () => {
     fill(120);
     resetPaging();
     goToFeedPage(1);
-    const before = feedPage(50).rows.map((row) => row.entry.requestId);
+    const before = rowIds(feedPage(50));
 
     for (let i = 0; i < 10; i++) ingest(entry({ requestId: `late${i}`, at: 1_700_000_001_000 + i }));
 
-    expect(feedPage(50).rows.map((row) => row.entry.requestId)).toEqual(before);
+    expect(rowIds(feedPage(50))).toEqual(before);
     // And the new ones are there the moment the reader comes back to the front.
     goToFeedPage(0);
     const live = feedPage(50);
     expect(live.total).toBe(130);
-    expect(live.rows[0]?.entry.requestId).toBe("late9");
+    expect(rowIds(live)[0]).toBe("late9");
   });
 
   it("does not strand a reader past the end when the list shrinks", () => {
@@ -617,7 +619,7 @@ describe("paging the feed", () => {
     fill(10);
     const clamped = feedPage(50);
     expect(clamped.page).toBe(0);
-    expect(clamped.rows).toHaveLength(10);
+    expect(rowIds(clamped)).toHaveLength(10);
   });
 
   it("puts a merged backlog back in time order", () => {
@@ -629,7 +631,7 @@ describe("paging the feed", () => {
     sortRows();
     expect(state.rows[0]?.entry.requestId).toBe("older");
     resetPaging();
-    expect(feedPage(50).rows[0]?.entry.requestId).toBe("r2");
+    expect(rowIds(feedPage(50))[0]).toBe("r2");
   });
 });
 
@@ -806,6 +808,7 @@ describe("ordering and grouping the feed", () => {
   afterEach(() => {
     state.order = "newest";
     state.group = "none";
+    state.collapsed = new Set();
   });
 
   it("puts the newest first by default, and the oldest first when asked", () => {
@@ -846,6 +849,46 @@ describe("ordering and grouping the feed", () => {
       expect(rows.length, group).toBe(4);
       expect(new Set(rows).size, group).toBe(4);
     }
+  });
+
+  it("gives a rolled-up group its heading and none of its rows", () => {
+    state.group = "actor";
+    const lines = feedPage(50).items;
+    expect(lines.filter((line) => line.kind === "heading").map((line) => (line.kind === "heading" ? line.key : ""))).toEqual(["203.0.113.2", "203.0.113.1"]);
+    expect(lines.filter((line) => line.kind === "row")).toHaveLength(4);
+
+    toggleGroup("203.0.113.2");
+    const rolled = feedPage(50).items;
+    // The heading stays, with its count: rolling up is a view, not a filter.
+    const heading = rolled.find((line) => line.kind === "heading" && line.key === "203.0.113.2");
+    expect(heading && heading.kind === "heading" && heading.collapsed).toBe(true);
+    expect(heading && heading.kind === "heading" && heading.count).toBe(2);
+    // And that group's rows are gone from the page, while the other group keeps its own.
+    expect(rolled.filter((line) => line.kind === "row")).toHaveLength(2);
+  });
+
+  it("rolls every group up and opens them again", () => {
+    state.group = "verdict";
+    setAllGroups(true);
+    const rolled = feedPage(50).items;
+    expect(rolled.every((line) => line.kind === "heading"), "nothing but headings").toBe(true);
+    expect(rolled).toHaveLength(3);
+
+    setAllGroups(false);
+    expect(feedPage(50).items.filter((line) => line.kind === "row")).toHaveLength(4);
+  });
+
+  it("pages over lines rather than rows, so a rolled-up group costs one line", () => {
+    state.group = "actor";
+    // Two groups of two: heading, row, row, heading, row, row.
+    expect(feedPage(3).items.map((line) => line.kind)).toEqual(["heading", "row", "row"]);
+    expect(feedPage(3).pages).toBe(2);
+
+    setAllGroups(true);
+    // Rolled up, the whole feed is two lines and fits on one page.
+    resetPaging();
+    expect(feedPage(3).items.map((line) => line.kind)).toEqual(["heading", "heading"]);
+    expect(feedPage(3).pages).toBe(1);
   });
 
   it("names the group a row with nothing to group by belongs to", () => {

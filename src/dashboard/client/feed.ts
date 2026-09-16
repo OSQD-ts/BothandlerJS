@@ -1,6 +1,6 @@
 import { $, byId, clear, cssEscape, el, rootNode } from "./dom.js";
 import { referenceLink } from "./reference.js";
-import { feedPage, goToFeedPage, groupCounts, groupKeyOf, hiddenCount, ingest, labelOf, matchingCount, matchingRows, refreshFrozenPage, resetPaging, setSearch, setTimeframe, sortRows, state } from "./store.js";
+import { feedPage, goToFeedPage, hiddenCount, ingest, labelOf, matchingCount, matchingRows, refreshFrozenPage, resetPaging, setAllGroups, setSearch, setTimeframe, sortRows, state, toggleGroup } from "./store.js";
 import type { FeedGroup, FeedOrder } from "./store.js";
 import { deleteFilter, refreshSavedFilters, saveFilter, savedFilters } from "./saved.js";
 import { suggestFor } from "./query.js";
@@ -90,6 +90,7 @@ export function initFeed(): void {
   initTimeframe();
   initSavedFilters(search);
   initArrangement();
+  reflectRollUp();
 
   // Downloading the window is the bulk half of what the per-row buttons do one request
   // at a time. It exports what is on screen rather than everything held, because the
@@ -185,8 +186,25 @@ function initArrangement(): void {
   });
   group.addEventListener("change", () => {
     state.group = group.value as FeedGroup;
+    // A grouping somebody has just chosen opens: rolled up, it would be a list of headings
+    // for groups they have not seen yet.
+    state.collapsed = new Set();
     rearranged();
   });
+  const roll = byId<HTMLButtonElement>("feed-roll");
+  roll.addEventListener("click", () => {
+    setAllGroups(state.collapsed.size === 0);
+    rearranged();
+  });
+}
+
+/** Shows the roll-up control only where there is something to roll, and says which way it goes. */
+export function reflectRollUp(): void {
+  const roll = byId<HTMLButtonElement>("feed-roll");
+  roll.hidden = state.group === "none";
+  const rolled = state.collapsed.size > 0;
+  roll.textContent = rolled ? "Expand all" : "Roll up all";
+  roll.setAttribute("aria-pressed", String(rolled));
 }
 
 /** Reflects order and grouping that arrived in the URL rather than from a click. */
@@ -195,6 +213,7 @@ export function reflectArrangement(): void {
   const group = byId<HTMLSelectElement>("feed-group");
   if (order.value !== state.order) order.value = state.order;
   if (group.value !== state.group) group.value = state.group;
+  reflectRollUp();
 }
 
 /**
@@ -204,6 +223,7 @@ export function reflectArrangement(): void {
  * somebody on a page they never chose, reading rows they were not looking at.
  */
 function rearranged(): void {
+  reflectRollUp();
   resetPaging();
   app.syncUrl();
   app.drawNow();
@@ -660,7 +680,7 @@ function drawPager(paged: { page: number; pages: number; total: number }): void 
 export function drawFeed(): void {
   const body = byId<HTMLTableSectionElement>("rows");
   const paged = feedPage(state.feedPageSize);
-  const shown = paged.rows;
+  const shown = paged.items;
 
   // Keyed reconciliation against what is already in the table.
   //
@@ -679,21 +699,12 @@ export function drawFeed(): void {
     index++;
   };
 
-  // Group headings, when the feed is grouped. The count is of every matching row in the
-  // group rather than of the ones on this page, because "this actor made 212 requests" is
-  // the fact worth having; a group carried onto another page repeats its heading, so a
-  // page never opens on rows belonging to something unnamed.
-  const counts = state.group === "none" ? undefined : groupCounts();
-  let lastGroup: string | undefined;
-
-  for (const row of shown) {
-    if (counts !== undefined) {
-      const key = groupKeyOf(row);
-      if (key !== lastGroup) {
-        lastGroup = key;
-        place(groupHeading(key, counts.get(key) ?? 0));
-      }
+  for (const item of shown) {
+    if (item.kind === "heading") {
+      place(groupHeading(item.key, item.count, item.collapsed));
+      continue;
     }
+    const row = item.row;
     const id = row.entry.requestId;
     const open = state.open.has(id);
     const label = labelOf(row.entry.actor);
@@ -718,8 +729,14 @@ export function drawFeed(): void {
   // back — but not indefinitely. Anything not on screen goes once it has grown past
   // twice the visible set.
   if (rendered.size > shown.length * 2 + 100) {
-    const live = new Set(shown.map((row) => row.entry.requestId));
+    const live = new Set(shown.flatMap((item) => (item.kind === "row" ? [item.row.entry.requestId] : [])));
     for (const id of Array.from(rendered.keys())) if (!live.has(id)) rendered.delete(id);
+  }
+  // The headings are cached the same way and pruned on the same terms: a grouping somebody
+  // has moved away from should not keep its headings for the life of the page.
+  if (headings.size > 200) {
+    const live = new Set(shown.flatMap((item) => (item.kind === "heading" ? [item.key] : [])));
+    for (const key of Array.from(headings.keys())) if (!live.has(key)) headings.delete(key);
   }
 
   const total = state.rows.length;
@@ -788,24 +805,82 @@ export function resetFeedCache(): void {
 }
 
 /** The heading rows, cached like the rows are: a group that has not changed is not rebuilt. */
-const headings = new Map<string, { node: HTMLTableRowElement; count: number; label: string | undefined }>();
+const headings = new Map<string, { node: HTMLTableRowElement; count: number; label: string | undefined; collapsed: boolean }>();
 
-function groupHeading(key: string, count: number): HTMLTableRowElement {
+/**
+ * The query field each grouping corresponds to, for the button that narrows to one group.
+ *
+ * Filtering to a group writes the feed's own query rather than keeping a second kind of
+ * filter beside it: it composes with whatever else is typed, it travels in the URL, and it
+ * can be edited by hand afterwards. The two synthetic keys are absences — no action, no
+ * rule — which one term cannot say, so those headings offer no button rather than one that
+ * would quietly mean something else.
+ */
+const GROUP_FIELDS: Partial<Record<Exclude<FeedGroup, "none">, string>> = {
+  actor: "actor",
+  verdict: "verdict",
+  action: "action",
+  class: "class",
+  rule: "rule",
+  path: "path",
+};
+
+const UNFILTERABLE = new Set(["assessed only", "no rule matched"]);
+
+/** A query term for one group. Quoted where the value has a space in it. */
+function groupTerm(key: string): string | undefined {
+  const field = state.group === "none" ? undefined : GROUP_FIELDS[state.group];
+  if (field === undefined || UNFILTERABLE.has(key)) return undefined;
+  return /[\s"]/.test(key) ? `${field}:"${key.replace(/"/g, "")}"` : `${field}:${key}`;
+}
+
+function groupHeading(key: string, count: number, collapsed: boolean): HTMLTableRowElement {
   // An actor with a name is named here too — the key is what a rule would have to match,
   // and the name is what the person reading it calls that client.
   const label = state.group === "actor" ? labelOf(key) : undefined;
   const cached = headings.get(key);
-  if (cached !== undefined && cached.count === count && cached.label === label) return cached.node;
+  if (cached !== undefined && cached.count === count && cached.label === label && cached.collapsed === collapsed) return cached.node;
 
-  const row = el("tr", "grp");
+  const row = el("tr", `grp${collapsed ? " rolled" : ""}`);
   const cell = el("th");
   cell.colSpan = 6;
   cell.scope = "colgroup";
-  const name = el("span", "grp-key", label === undefined ? key : `${label} (${key})`);
-  cell.appendChild(name);
-  cell.appendChild(el("span", "grp-n", `${n(count)} request${count === 1 ? "" : "s"}`));
+
+  // The whole heading is the control that rolls the group up: a chevron alone is a small
+  // target on a row this wide, and there is nothing else on it to click.
+  const toggle = el("button", "grp-toggle");
+  toggle.type = "button";
+  toggle.setAttribute("aria-expanded", String(!collapsed));
+  toggle.appendChild(el("span", "chev", collapsed ? "▸" : "▾"));
+  toggle.appendChild(el("span", "grp-key", label === undefined ? key : `${label} (${key})`));
+  toggle.appendChild(el("span", "grp-n", `${n(count)} request${count === 1 ? "" : "s"}`));
+  toggle.addEventListener("click", () => {
+    toggleGroup(key);
+    // Back to the first page: rolling a group up changes how many lines there are, so the
+    // page somebody was on is a different page afterwards.
+    resetPaging();
+    app.drawNow();
+  });
+  cell.appendChild(toggle);
+
+  const term = groupTerm(key);
+  if (term !== undefined) {
+    const only = el("button", "grp-only", "Only");
+    only.type = "button";
+    only.title = `Show only this group — ${term}`;
+    only.addEventListener("click", () => {
+      const search = byId<HTMLInputElement>("search");
+      search.value = term;
+      setSearch(term);
+      resetPaging();
+      app.syncUrl({ replace: false });
+      app.drawNow();
+    });
+    cell.appendChild(only);
+  }
+
   row.appendChild(cell);
-  headings.set(key, { node: row, count, label });
+  headings.set(key, { node: row, count, label, collapsed });
   return row;
 }
 
