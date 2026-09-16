@@ -472,6 +472,7 @@ function start(): void {
   initSkipLink();
   initKeyboard();
   initRanges();
+  initTableToggles();
   if (SECTIONS.feed) initFeed();
   initActor();
   initActorScope();
@@ -570,6 +571,24 @@ function labelThemeButton(): void {
   const next = currentScheme() === "dark" ? "light" : "dark";
   button.textContent = next === "dark" ? "Dark" : "Light";
   button.setAttribute("aria-label", `Switch to the ${next} colour scheme`);
+}
+
+/** Each chart's "table view" shows or hides the table its draw writes. */
+function initTableToggles(): void {
+  for (const toggle of rootNode().querySelectorAll<HTMLButtonElement>(".tabletoggle")) {
+    const table = rootNode().querySelector<HTMLElement>(`#${toggle.dataset["table"] ?? ""}`);
+    if (table === null) {
+      toggle.remove();
+      continue;
+    }
+    toggle.setAttribute("aria-controls", table.id);
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.addEventListener("click", () => {
+      table.hidden = !table.hidden;
+      toggle.setAttribute("aria-expanded", String(!table.hidden));
+      toggle.textContent = table.hidden ? "table view" : "hide table";
+    });
+  }
 }
 
 start();

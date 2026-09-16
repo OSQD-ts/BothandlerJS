@@ -36,6 +36,31 @@ function tipRow(label: string, value: string, colour?: string): HTMLElement {
   return line;
 }
 
+/**
+ * Writes a chart's data as a table into its hidden `.datatable`. Rebuilt with the chart on every
+ * draw, whether or not it is showing, so opening it never shows numbers older than the bars.
+ */
+function dataTable(id: string, headers: readonly string[], rows: ReadonlyArray<readonly (string | number)[]>, empty: string): void {
+  const host = $(id);
+  clear(host);
+  if (rows.length === 0) {
+    host.appendChild(el("p", "empty-note", empty));
+    return;
+  }
+  const table = el("table");
+  const head = el("tr");
+  headers.forEach((header, index) => head.appendChild(el("th", index === 0 ? null : "num", header)));
+  table.appendChild(el("thead")).appendChild(head);
+  const body = el("tbody");
+  for (const row of rows) {
+    const tr = el("tr");
+    row.forEach((cell, index) => tr.appendChild(el("td", index === 0 ? null : "num tnum", cell)));
+    body.appendChild(tr);
+  }
+  table.appendChild(body);
+  host.appendChild(table);
+}
+
 function timeline(): Bucket[] {
   const bucketMs = state.rangeMs / BUCKETS;
   const now = Date.now();
@@ -195,6 +220,14 @@ export function drawTraffic(): void {
       : `Busiest ${Math.round(state.rangeMs / BUCKETS / 1000)}-second interval: ${n(busiest.total)} requests at ${clockTime(busiest.at)}.`) +
     (changes.length === 0 ? "" : ` ${n(changes.length)} runtime change${changes.length === 1 ? "" : "s"} in this range: ${changes.map((change) => `${change.kind}, ${change.summary}`).join("; ")}.`);
 
+  // Only the intervals something arrived in: sixty rows, most of them zero, bury the ones that matter.
+  dataTable(
+    "traffic-table",
+    [`Interval (${Math.round(state.rangeMs / BUCKETS / 1000)}s)`, "Served", "Mitigated", "Denied", "Total"],
+    buckets.filter((bucket) => bucket.total > 0).map((bucket) => [clockTime(bucket.at), n(bucket.served), n(bucket.mitigated), n(bucket.denied), n(bucket.total)]),
+    "No traffic in this range.",
+  );
+
   const legend = $("traffic-legend");
   clear(legend);
   legend.appendChild(el("span", null, `${n(total)} requests in the last ${rangeLabel(state.rangeMs)} ·`));
@@ -340,6 +373,12 @@ export function drawScores(): void {
     `Distribution of probabilistic scores ${fromRun ? "since start" : "in the retained window"}, with the suspect threshold at ${threshold}. ` +
     `${n(scored)} scored requests, ${n(over)} at or over the threshold, ${n(proven)} proven and therefore unscored. ` +
     (scored === 0 ? "Nothing scored yet." : `By ten-point band: ${buckets.map((value, index) => `${index * 10}–${index * 10 + 9}: ${n(value)}`).join(", ")}.`);
+  dataTable(
+    "score-table",
+    ["Score band", "Requests", "Share"],
+    scored === 0 ? [] : buckets.map((value, index) => [`${index * 10}–${index * 10 + 9}${index * 10 >= threshold ? " · over threshold" : ""}`, n(value), pct(value, scored)]),
+    "Nothing scored yet.",
+  );
   $("score-window").textContent = fromRun ? "since start" : windowLabel(state.rows.length, oldestAt(), Date.now());
   if (state.scoreScope === "run" && metrics === undefined) {
     legend.appendChild(el("span", null, "· counters are off on this handler, so this is the retained window"));
@@ -354,6 +393,7 @@ export function drawLatency(): void {
   if (metrics === undefined || metrics.duration.count === 0) {
     $("latency-summary").textContent = "No assessments yet.";
     $("latency-alt").textContent = "Assessment latency: no assessments yet.";
+    dataTable("latency-table", [], [], "No assessments yet.");
     svg.setAttribute("viewBox", "0 0 100 40");
     svg.setAttribute("height", "40");
     svg.appendChild(svgText({ x: 0, y: 20, fill: css("--muted"), "font-size": 11 }, "No assessments yet."));
@@ -408,6 +448,13 @@ export function drawLatency(): void {
   host.onmouseleave = (): void => {
     tip.style.opacity = "0";
   };
+
+  dataTable(
+    "latency-table",
+    ["Bucket", "Requests", "Share"],
+    counts.map((value, index) => [index < LATENCY_BOUNDS.length ? `≤ ${LATENCY_BOUNDS[index]}ms` : "over 100ms", n(value), pct(value, metrics.duration.count)]),
+    "No assessments yet.",
+  );
 
   const mean = metrics.duration.totalMs / metrics.duration.count;
   const p95 = percentile(cumulative, metrics.duration.count, 0.95);

@@ -2257,6 +2257,30 @@ describe("the statistics charts", () => {
     await page.close();
     expect(summaries).toBeGreaterThan(0);
   });
+
+  it("opens each chart's numbers as a table, and closes it again", async () => {
+    const page = await open(1440, "#stats", "#view-stats");
+    await page.waitForTimeout(1200);
+    for (const id of ["traffic-table", "score-table", "latency-table"]) {
+      const toggle = page.locator(`.tabletoggle[data-table="${id}"]`);
+      const table = page.locator(`#${id}`);
+      expect(await table.isHidden(), `#${id} starts closed`).toBe(true);
+      await toggle.click();
+      expect(await toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(await table.isVisible(), `#${id} opens`).toBe(true);
+      // Either rows of the chart's own data, or the chart's own empty sentence — never a blank box.
+      const rows = await table.locator("tbody tr").count();
+      const note = await table.locator(".empty-note").count();
+      expect(rows + note, `#${id} says something`).toBeGreaterThan(0);
+      await toggle.click();
+      expect(await table.isHidden(), `#${id} closes`).toBe(true);
+      expect(await toggle.textContent()).toBe("table view");
+    }
+    // The fixture has scored traffic, so the score table has one row per ten-point band.
+    await page.locator('.tabletoggle[data-table="score-table"]').click();
+    expect(await page.locator("#score-table tbody tr").count()).toBe(10);
+    await page.close();
+  });
 });
 
 /**

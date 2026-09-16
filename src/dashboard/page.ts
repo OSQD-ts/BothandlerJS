@@ -687,6 +687,18 @@ tr.detail > td { background: var(--surface-2); padding: 14px 15px 16px; border-b
 .chart { padding: 12px 15px 14px; position: relative; }
 .chart svg { display: block; width: 100%; overflow: visible; }
 .legend { display: flex; gap: 14px; flex-wrap: wrap; padding: 0 15px 12px; font-size: 12px; color: var(--ink-2); }
+/* Every chart's numbers as a table, one press away — the way hackerpot's dashboard offers them.
+   The sr-only sentence under each chart already reads the data to a screen reader; this is the
+   same data for somebody who can see the bars but wants the exact value of each without
+   hovering over them one at a time. */
+.panel > h2 .tabletoggle { margin-left: 10px; padding: 0; border: 0; background: none; font-size: 11px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); }
+.panel > h2 .sub + .tabletoggle { margin-left: 10px; }
+.panel > h2 .tabletoggle:hover { color: var(--ink); background: none; text-decoration: underline; }
+.datatable { padding: 0 15px 14px; max-height: 320px; overflow: auto; }
+.datatable table { font-size: 12px; }
+.datatable thead th { position: static; padding: 6px 10px; }
+.datatable tbody td { padding: 5px 10px; }
+.datatable .empty-note { margin: 0; font-size: 12px; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 /* The marker for a runtime change. A line rather than a swatch, because it is an
    instant rather than a quantity. */
@@ -1360,16 +1372,18 @@ export const DASHBOARD_MARKUP = String.raw`
       </div>
       <div class="stat-pair">
         <section class="panel">
-          <h2>Traffic <span class="range" id="traffic-range"></span><span class="sub" id="traffic-window"></span></h2>
+          <h2>Traffic <span class="range" id="traffic-range"></span><span class="sub" id="traffic-window"></span><button type="button" class="tabletoggle" data-table="traffic-table">table view</button></h2>
           <div class="chart" id="traffic-chart"><svg id="traffic" role="img" aria-labelledby="traffic-alt"></svg><div class="tip" id="traffic-tip"></div></div>
           <p class="sr-only" id="traffic-alt"></p>
           <div class="legend" id="traffic-legend"></div>
+          <div class="datatable" id="traffic-table" hidden></div>
         </section>
         <section class="panel">
-          <h2>Score distribution <span class="range" id="score-scope"></span><span class="sub" id="score-window"></span></h2>
+          <h2>Score distribution <span class="range" id="score-scope"></span><span class="sub" id="score-window"></span><button type="button" class="tabletoggle" data-table="score-table">table view</button></h2>
           <div class="chart" id="score-chart"><svg id="scores" role="img" aria-labelledby="score-alt"></svg><div class="tip" id="score-tip"></div></div>
           <p class="sr-only" id="score-alt"></p>
           <div class="legend" id="score-legend"></div>
+          <div class="datatable" id="score-table" hidden></div>
         </section>
       </div>
     </div>
@@ -1424,10 +1438,11 @@ export const DASHBOARD_MARKUP = String.raw`
           <div id="stat-health"></div>
         </section>
         <section class="panel">
-          <h2>Assessment latency <span class="sub">since start</span></h2>
+          <h2>Assessment latency <span class="sub">since start</span><button type="button" class="tabletoggle" data-table="latency-table">table view</button></h2>
           <div class="chart" id="latency-chart"><svg id="latency" role="img" aria-labelledby="latency-alt"></svg><div class="tip" id="latency-tip"></div></div>
           <p class="sr-only" id="latency-alt"></p>
           <div class="legend"><span id="latency-summary"></span></div>
+          <div class="datatable" id="latency-table" hidden></div>
         </section>
         <section class="panel">
           <h2>Challenges</h2>

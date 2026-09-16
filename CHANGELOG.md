@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Every chart on the Statistics screen has a table view.** Traffic, score distribution and
+  assessment latency each carry a "table view" button that opens the numbers behind the bars —
+  the non-empty intervals, each ten-point score band, each latency bucket — with their shares, the
+  way hackerpot's dashboard offers them. The sentence a screen reader hears was already there;
+  this is the same data for somebody who can see the chart but wants exact values without
+  hovering over each bar in turn.
+
 ### Fixed
 
 - **`notifyJsNotifier` never reached a NotifyJS hub.** It posted `{ topic, priority, data }`
