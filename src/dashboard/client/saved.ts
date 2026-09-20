@@ -32,6 +32,10 @@ export interface SavedFilter {
 }
 
 const MIRROR_KEY = "osqd.dashboard.filters";
+/* What bothandlerjs kept this under before the two dashboards shared this file. Read when the
+   key above holds nothing, and dropped once anything has been written forward, so a dashboard
+   somebody had saved filters in does not come back empty after an upgrade. */
+const LEGACY_MIRROR_KEY = "bothandler.filters";
 const ENDPOINT = "/api/filters";
 
 /** The list as last seen, so drawing it never waits on the network. */
@@ -42,7 +46,7 @@ function readMirror(): SavedFilter[] {
   // page keeps there. Reading is harmless; writing somebody else's origin is not, so neither happens.
   if (isEmbedded()) return [];
   try {
-    const raw = localStorage.getItem(MIRROR_KEY);
+    const raw = localStorage.getItem(MIRROR_KEY) ?? localStorage.getItem(LEGACY_MIRROR_KEY);
     const parsed: unknown = raw === null ? [] : JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as SavedFilter[]).filter((entry) => typeof entry?.name === "string" && typeof entry?.query === "string") : [];
   } catch {
@@ -54,6 +58,7 @@ function writeMirror(list: readonly SavedFilter[]): void {
   if (isEmbedded()) return;
   try {
     localStorage.setItem(MIRROR_KEY, JSON.stringify(list));
+    localStorage.removeItem(LEGACY_MIRROR_KEY);
   } catch {
     /* A full or refused store is not a reason to stop showing traffic. */
   }
