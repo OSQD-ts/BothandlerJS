@@ -2591,7 +2591,7 @@ describe("the feed without a mouse", () => {
 
   it("still opens on a click anywhere in the row", async () => {
     const page = await open();
-    await page.locator("tbody tr.row td.edge").first().click();
+    await page.locator("tbody tr.row td.req").first().click();
     await expect.poll(() => page.locator("tr.detail").count()).toBe(1);
     await page.close();
   });

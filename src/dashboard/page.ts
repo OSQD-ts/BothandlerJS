@@ -599,12 +599,19 @@ tbody td { padding: 7px 14px; border-bottom: 1px solid var(--line-soft); vertica
 tbody td.when { color: var(--muted); font-size: 11.5px; white-space: nowrap; width: 1%; padding-right: 4px; }
 /* Date above time rather than beside it: the column is the narrowest on the table and a
    single line of "13-09-2026 09:14:02" pushes the path column into wrapping. */
-tbody td.when .when-date { display: block; opacity: 0.72; }
-tbody td.when .when-time { display: block; }
+/* The date is the quieter of the two lines because the time is what gets read; quieter here
+   means the muted ink the column already uses, not that ink dimmed further — a second 28% off
+   it lands under the contrast floor, which is a real "cannot read this" rather than a taste. */
+tbody td.when .when-date { display: block; }
+tbody td.when .when-time { display: block; color: var(--ink-2); }
 tbody tr.row { cursor: pointer; }
 tbody tr.row:hover { background: color-mix(in srgb, var(--ink) 3.5%, transparent); }
 tbody tr.row.open { background: color-mix(in srgb, var(--s1) 7%, transparent); }
+/* The row's colour, at the row's left edge. Both the time cell and the request cell are
+   marked, and only the leftmost one showing draws it — the column ladder below takes the
+   time column away on a narrow panel, and the accent has to survive that. */
 td.edge { border-left: 3px solid transparent; padding-left: 12px; }
+td.req.edge { border-left-width: 0; padding-left: 14px; }
 tr.a-allow td.edge { border-left-color: var(--good-text); }
 tr.a-mitigate td.edge { border-left-color: var(--s2); }
 tr.a-deny td.edge { border-left-color: var(--crit); }
@@ -635,6 +642,7 @@ tr.a-guard td.edge { border-left-color: var(--warn-text); }
 }
 @container feed (max-width: 119ch) {
   thead th:nth-child(1), tbody td.when { display: none; }
+  td.req.edge { border-left-width: 3px; padding-left: 12px; }
 }
 @container feed (max-width: 107ch) {
   .req .ua { white-space: normal; max-width: none; }

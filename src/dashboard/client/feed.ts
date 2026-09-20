@@ -896,12 +896,15 @@ function buildRow(entry: DashboardEntry, open: boolean): HTMLTableRowElement {
   // last Tuesday is the kind of wrong that nobody catches because it looks right. The
   // date is in its own element so the stylesheet can drop it on a narrow screen, where
   // the column has no room and the rows are all recent anyway.
-  const when = el("td", "num mono tnum when");
+  // The accent for what was done about the request rides the first cell, at the row's left
+  // edge, where it reads as the row's own colour rather than a divider between two columns.
+  const when = el("td", "num mono tnum when edge");
   when.append(el("span", "when-date", clockDate(entry.at)), el("span", "when-time", clockTime(entry.at)));
   when.title = clockStamp(entry.at);
   tr.appendChild(when);
 
-  const request = el("td", "edge req");
+  // Also marked: when the column ladder drops the time column, the accent moves here.
+  const request = el("td", "req edge");
   // The row's one control. It carries the name, the state and the keys; the row itself
   // keeps a click handler for the mouse, which needs no role to be useful.
   const toggle = el("button", "row-toggle", `${entry.method} ${entry.path}`);
