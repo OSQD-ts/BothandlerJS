@@ -31,6 +31,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Six more dashboard files are the same file as hackerpot's,** byte for byte: the DOM and
+  selector helpers, the pager, the saved-filter client and its server-side store, and the feed
+  counts. `FeedCounts` now takes an options object (`{ retainMs, clock }`) and so accepts an
+  injectable clock, the saved-filter store is told which chips this dashboard draws, and the
+  browser's copy of saved filters moved to a shared key — the dashboard's own list is unaffected,
+  and a browser that had a copy re-saves it the first time a dashboard comes up empty.
 - **The internal clock, LRU, emitter, deadline, pattern and DNS helpers are the same files as
   hackerpot's,** byte for byte, each merged from the better of the two copies. What that brings
   here: `ManualClock` accepts a `Date` and refuses to run backwards; the emitter catches a

@@ -107,7 +107,7 @@ export class DashboardFeed {
     this.limit = Math.max(1, Math.min(MAX_FEED_LIMIT, Math.floor(limit)));
     this.maxPerSecond = Math.max(0, Math.floor(limits.maxEventsPerSecond));
     this.ttlMs = Math.max(0, Math.floor(limits.ttlMs));
-    this.counts = new FeedCounts(this.ttlMs);
+    this.counts = new FeedCounts({ retainMs: this.ttlMs, clock: handler.config.clock });
     this.maskIp = redact.maskIp === true;
     // The configured names, plus the service-token header — which is a secret by
     // construction rather than by being remembered. A deployment that sets `serviceTokens`

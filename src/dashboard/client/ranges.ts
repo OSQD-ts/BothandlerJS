@@ -93,7 +93,7 @@ export function drawRanges(): void {
   if (holdsTextEntry(body)) return;
 
   for (const grid of Array.from(body.querySelectorAll<HTMLElement>(".cidrs[data-set]"))) scrolls.set(grid.dataset["set"] ?? "", grid.scrollTop);
-  const active = rootNode().activeElement as HTMLElement | null;
+  const active = (rootNode() as Document | ShadowRoot).activeElement as HTMLElement | null;
   const focusKey = active !== null && body.contains(active) ? active.dataset["focusKey"] : undefined;
   clear(body);
 

@@ -1,23 +1,22 @@
+// Kept identical in hackerpot and bothandlerjs. Change both, or neither.
+
+import { systemClock, type Clock } from "../internal/clock.js";
+
 /**
- * How many requests happened in a stretch of time, kept apart from the requests themselves.
+ * How many entries happened in a stretch of time, kept apart from the entries themselves.
  *
- * The feed's ring is bounded twice over — by a count and by an age — because every entry
- * in it holds an address, a User-Agent, a header set and an evidence list belonging to
- * somebody. That is the right bound for *entries*. It is the wrong bound for *counting*,
- * and the two were the same thing until now: the page said "last 693 requests · 141h",
- * which read as a statement about the last 141 hours and was in fact a statement about the
- * 693 entries that had survived eviction. On a busy origin those are wildly different
- * numbers, and the one on screen was the smaller and less interesting of the two.
+ * The page's count was the length of the list it was holding. That list is bounded — by the
+ * store's retention, by the `limit` the page asked for, by the rows the live feed drops as
+ * newer ones arrive — because every entry in it carries an address, a User-Agent, a header set
+ * and a detection list belonging to somebody. Those are the right bounds for *entries*. They
+ * are the wrong bound for *counting*, and they were the same number: a busy honeypot showed
+ * "100" on the Incidents tab for as long as it ran, because 100 was the page size.
  *
- * So the count is kept separately, in minute buckets. A bucket is an integer and a
- * timestamp — no addresses, no headers, nothing anybody could object to being retained —
- * which is what lets it cover a window far longer than the entries do at a cost that does
- * not depend on traffic. A day of history is 1,440 numbers.
+ * So the count is kept separately, in minute buckets. A bucket is an integer and a timestamp —
+ * no addresses, no headers, nothing anybody could object to retaining — which is what lets it
+ * speak for a window far longer than the entries do, at a cost that does not depend on traffic.
+ * A day of history is 1,440 numbers.
  *
- * What this buys the page: the total for any window is exact, always, whether or not the
- * entries behind it are still held or have yet to be fetched. The pager can then say how
- * many pages there are before it has loaded any of them, and "1,284 requests" stops
- * meaning "1,284 requests that happen to still be in memory".
  */
 
 const MINUTE = 60_000;
@@ -25,18 +24,11 @@ const MINUTE = 60_000;
 /**
  * Most minutes kept, whatever the retention says.
  *
- * A second bound, and it exists because the first one is optional. Retention may be set
- * to zero — in the handler's own configuration, and from the dashboard, where it is
- * documented as "keep them until the capacity bound evicts them". That bound is a *count
- * of entries*, and it says nothing about these: the entries ring stays bounded while the
- * counts behind it grow by one object per minute of traffic, for as long as the process
- * lives. Slowly, and without end, which is the shape of leak that is found in production
- * a year later rather than in a test.
- *
- * Seven days of minutes, matching the longest retention the dashboard will ask for. Past
- * that the oldest minutes go and {@link FeedCounts.oldest} moves forward, so the counts
- * say what they can still speak for rather than quietly answering for a stretch they have
- * forgotten.
+ * A second bound, because the first one is optional: retention may be zero, meaning "keep
+ * them until the capacity bound evicts them" — and that bound is a count of *entries*, which
+ * says nothing about these. The entries stay bounded while the counts behind them grow by one
+ * object per minute of traffic for as long as the process lives. Slowly, and without end,
+ * which is the shape of leak found in production a year later rather than in a test.
  */
 const MAX_BUCKETS = 7 * 24 * 60;
 
@@ -47,53 +39,70 @@ interface Bucket {
   total: number;
 }
 
+export interface FeedCountsOptions {
+  /** How long counts are kept, in ms. 0 keeps them until the ceiling evicts them. */
+  retainMs?: number;
+  clock?: Clock;
+}
+
+/** What the page needs to say something true about a window. */
+export interface CountsSnapshot {
+  /** Incidents counted in the requested window. */
+  total: number;
+  /** The earliest instant these counts can speak for, or undefined when nothing is held. */
+  oldest: number | undefined;
+  /** One entry per minute that saw traffic, oldest first. */
+  series: ReadonlyArray<{ at: number; total: number }>;
+}
+
 export class FeedCounts {
-  /** Oldest first, one per minute that saw at least one request. */
+  /** Oldest first, one per minute that saw at least one incident. */
   private buckets: Bucket[] = [];
   private retainMs: number;
+  private readonly clock: Clock;
 
-  constructor(retainMs: number) {
-    this.retainMs = Math.max(0, Math.floor(retainMs));
+  constructor(options: FeedCountsOptions = {}) {
+    this.clock = options.clock ?? systemClock;
+    this.retainMs = Math.max(0, Math.floor(options.retainMs ?? 24 * 60 * MINUTE));
   }
 
   /**
    * How long counts are kept.
    *
-   * Follows the feed's retention, so "we keep nothing older than an hour" stays one
-   * promise rather than becoming two with different answers.
+   * Follows the entries' own retention, so "we keep nothing older than an hour" stays one promise
+   * rather than becoming two with different answers.
    */
   get retention(): number {
     return this.retainMs;
   }
 
-  setRetention(ms: number, now: number): void {
+  setRetention(ms: number, now: number = this.clock.now()): void {
     this.retainMs = Math.max(0, Math.floor(ms));
     this.prune(now);
   }
 
-  /** Counts one request, at the time it happened. */
-  record(at: number): void {
+  /** Counts one incident, at the time it happened. */
+  record(at: number = this.clock.now()): void {
     const minute = Math.floor(at / MINUTE) * MINUTE;
     const last = this.buckets[this.buckets.length - 1];
-    // Almost always the newest minute, because requests arrive in time order. The scan
-    // below is for the exception — a replayed or back-dated timestamp — rather than the
-    // rule, so this stays O(1) on the path it is actually on.
+    // Almost always the newest minute, because incidents arrive in time order. The scan below
+    // is for the exception — a replayed or back-dated timestamp — rather than the rule, so
+    // this stays O(1) on the path it is actually on.
     if (last !== undefined && last.at === minute) {
-      last.total++;
+      last.total += 1;
       return;
     }
     if (last === undefined || minute > last.at) {
       this.buckets.push({ at: minute, total: 1 });
-      // The ceiling is applied here and only here, because this is the only way a bucket
-      // is ever added — so the array cannot exceed it, and a second trim inside `prune`
-      // would be a branch nothing can reach.
-      this.trim();
+      // The ceiling is applied here and only here, because this is the only way a bucket is
+      // ever added — so the array cannot exceed it.
+      if (this.buckets.length > MAX_BUCKETS) this.buckets.splice(0, this.buckets.length - MAX_BUCKETS);
       return;
     }
-    for (let i = this.buckets.length - 1; i >= 0; i--) {
-      const bucket = this.buckets[i] as Bucket;
+    for (let i = this.buckets.length - 1; i >= 0; i -= 1) {
+      const bucket = this.buckets[i]!;
       if (bucket.at === minute) {
-        bucket.total++;
+        bucket.total += 1;
         return;
       }
       if (bucket.at < minute) {
@@ -105,30 +114,23 @@ export class FeedCounts {
   }
 
   /** Drops buckets older than the retention. Returns how many went. */
-  prune(now: number): number {
+  prune(now: number = this.clock.now()): number {
+    if (this.retainMs <= 0) return 0;
+    const cutoff = now - this.retainMs;
     let expired = 0;
-    if (this.retainMs > 0) {
-      const cutoff = now - this.retainMs;
-      while (expired < this.buckets.length && (this.buckets[expired] as Bucket).at + MINUTE <= cutoff) expired++;
-      if (expired > 0) this.buckets.splice(0, expired);
-    }
+    while (expired < this.buckets.length && this.buckets[expired]!.at + MINUTE <= cutoff) expired += 1;
+    if (expired > 0) this.buckets.splice(0, expired);
     return expired;
   }
 
-  /** Drops the oldest minutes past the ceiling. Returns how many went. */
-  private trim(): number {
-    if (this.buckets.length <= MAX_BUCKETS) return 0;
-    return this.buckets.splice(0, this.buckets.length - MAX_BUCKETS).length;
-  }
-
   /**
-   * How many requests fell in a window, either end open.
+   * How many incidents fell in a window, either end open.
    *
-   * Counted at minute resolution, which is the honest precision: a bucket is included
-   * when any part of it overlaps the window. For the windows this answers — an incident,
-   * an afternoon, "everything so far" — a minute is far finer than the question.
+   * Counted at minute resolution, which is the honest precision: a bucket counts when any part
+   * of it overlaps the window. For the windows this answers — an hour, a shift, "everything so
+   * far" — a minute is far finer than the question.
    */
-  count(from: number | undefined, to: number | undefined): number {
+  count(from?: number, to?: number): number {
     let total = 0;
     for (const bucket of this.buckets) {
       if (from !== undefined && bucket.at + MINUTE <= from) continue;
@@ -138,7 +140,7 @@ export class FeedCounts {
     return total;
   }
 
-  /** The earliest instant these counts can speak for, or `undefined` when empty. */
+  /** The earliest instant these counts can speak for, or undefined when empty. */
   get oldest(): number | undefined {
     return this.buckets[0]?.at;
   }
@@ -149,7 +151,18 @@ export class FeedCounts {
     return sum;
   }
 
-  /** For the traffic chart and anything else that wants the shape rather than the sum. */
+  /** Everything a page needs for a window, pruned first so it never answers for a forgotten stretch. */
+  snapshot(windowMs?: number, now: number = this.clock.now()): CountsSnapshot {
+    this.prune(now);
+    const from = windowMs === undefined || windowMs <= 0 ? undefined : now - windowMs;
+    return {
+      total: this.count(from, now),
+      oldest: this.oldest,
+      series: this.buckets.filter((bucket) => from === undefined || bucket.at + MINUTE > from).map((bucket) => ({ at: bucket.at, total: bucket.total })),
+    };
+  }
+
+  /** For a chart, and anything else that wants the shape rather than the sum. */
   series(): ReadonlyArray<{ at: number; total: number }> {
     return this.buckets.map((bucket) => ({ at: bucket.at, total: bucket.total }));
   }

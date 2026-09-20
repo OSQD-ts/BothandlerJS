@@ -2,6 +2,9 @@
 
 const numbers = new Intl.NumberFormat();
 
+/** The shared client modules ask for this name. */
+export { n as fmtInt };
+
 export function n(value: number | undefined): string {
   return numbers.format(value ?? 0);
 }

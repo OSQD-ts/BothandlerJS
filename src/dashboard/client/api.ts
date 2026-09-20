@@ -40,6 +40,9 @@ const token = ((): string => {
 
 /** The path, plus the token it was opened with. Exported for the stream, which is an
  * `EventSource` rather than a `fetch` and would otherwise be the one request left out. */
+/** The shared client modules ask for this name; `authed` is what the rest of this client calls it. */
+export { authed as apiUrl };
+
 export function authed(path: string): string {
   if (token === "") return API + path;
   const url = API + path;

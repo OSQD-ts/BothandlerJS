@@ -1,50 +1,47 @@
+// Kept identical in hackerpot and bothandlerjs. Change both, or neither.
+
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { safeSummary } from "../internal/text.js";
 
 /**
  * Filters somebody saved, kept by the dashboard rather than by one browser.
  *
- * They used to live in `localStorage`, on the reasoning that a saved filter is a personal
- * working note and so needs no write endpoint. That reasoning held in exactly one place: a
- * normal browser tab on a dashboard whose address never changes. Everywhere else it failed
- * without a word. Embedded as `<bot-dashboard>` the page deliberately never touches the host
- * page's storage, so nothing was ever kept; and the Save button asked for a name with
- * `prompt()`, which a sandboxed frame — VS Code's built-in browser among them — blocks
- * outright, so the button did nothing at all.
- *
- * So the listener keeps them, one list per listener: a dashboard that masks addresses has
- * a different audience from one that does not, and should not be handed that one's
- * filters. In memory by default, so they survive a reload and a change of browser; in a
- * file when `savedFilters.file` is set, so they survive the process restarting too. The page
- * also keeps a copy and hands it back to a listener that comes up empty, so leaving the file
- * unset loses nothing that the browser used to keep.
+ * In `localStorage` alone a saved filter survives only a normal tab on a dashboard whose address
+ * never changes: embedded, the page never touches the host page's storage, and a sandboxed frame
+ * refuses it. So the listener keeps them — one list per listener, since a dashboard that
+ * masks addresses has a different audience from one that does not — in memory by default and in
+ * a file when `savedFilters.file` is set. The page keeps a copy too, and hands it back to a
+ * listener that comes up empty, so leaving the file unset loses nothing.
  */
 export interface SavedFilter {
   name: string;
   /** The query text, exactly as typed. */
   query: string;
-  /** The chip it was saved with, because a filter is usually both. */
+  /** The outcome chip it was saved with — `all`, or a response class — because a filter is usually both. */
   filter: string;
 }
 
 /** Enough for a working set; past this it is a list nobody reads. */
 const MAX_SAVED = 50;
 const MAX_NAME = 60;
-/** The same ceiling the query parser reads to. */
+/** The same ceiling the page's query parser reads to. */
 const MAX_QUERY = 8192;
-/** The chips a filter can be saved with. Anything else is not something the page can show. */
-export const FILTER_CHIPS: ReadonlySet<string> = new Set(["all", "proven", "suspected", "human", "guard", "deny", "mitigate", "allow"]);
+/** C0 controls and DEL, which have no business in a name printed on everybody's screen. */
+const CONTROL = new RegExp(`[${String.fromCharCode(0)}-${String.fromCharCode(31)}${String.fromCharCode(127)}]`, "g");
 
-/** A saved filter as it is kept: bounded, quoted, and `undefined` when it is not one. */
-export function cleanSavedFilter(value: unknown): SavedFilter | undefined {
+/**
+ * A saved filter as it is kept: bounded, printable, and `undefined` when it is not one.
+ *
+ * `chips` is the set this dashboard's page can actually show — its own outcome or verdict chips —
+ * because a filter saved with a chip nothing draws would come back as a view that cannot be shown.
+ */
+export function cleanSavedFilter(value: unknown, chips: ReadonlySet<string>): SavedFilter | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const raw = value as Record<string, unknown>;
   if (typeof raw["name"] !== "string" || typeof raw["query"] !== "string") return undefined;
-  // Quoted like a label: typed by one person, printed on everybody's screen.
-  const name = safeSummary(raw["name"]).trim().slice(0, MAX_NAME);
+  const name = raw["name"].replace(CONTROL, " ").trim().slice(0, MAX_NAME);
   if (name === "") return undefined;
-  const filter = typeof raw["filter"] === "string" && FILTER_CHIPS.has(raw["filter"]) ? raw["filter"] : "all";
+  const filter = typeof raw["filter"] === "string" && chips.has(raw["filter"]) ? raw["filter"] : "all";
   return { name, query: raw["query"].slice(0, MAX_QUERY), filter };
 }
 
@@ -54,6 +51,7 @@ export class SavedFilterStore {
   constructor(
     private readonly file: string | undefined,
     private readonly warn: (message: string) => void,
+    private readonly chips: ReadonlySet<string>,
   ) {
     if (file !== undefined) this.load(file);
   }
@@ -85,10 +83,9 @@ export class SavedFilterStore {
     }
     try {
       const parsed: unknown = JSON.parse(text);
-      const list = Array.isArray(parsed) ? parsed : [];
       const seen = new Set<string>();
-      for (const item of list) {
-        const entry = cleanSavedFilter(item);
+      for (const item of Array.isArray(parsed) ? parsed : []) {
+        const entry = cleanSavedFilter(item, this.chips);
         if (entry === undefined || seen.has(entry.name)) continue;
         seen.add(entry.name);
         this.entries.push(entry);
@@ -100,10 +97,9 @@ export class SavedFilterStore {
   }
 
   /**
-   * Written whole, to a temporary file first and then renamed over the real one, so a
-   * process killed halfway through leaves the previous list rather than half of a new one.
-   * A failure keeps the list in memory and says so; a dashboard that cannot write a file
-   * should still have the filters somebody just saved.
+   * Written whole, to a temporary file first and then renamed over the real one, so a process
+   * killed halfway through leaves the previous list rather than half of a new one. A failure
+   * keeps the list in memory and says so.
    */
   private persist(): void {
     if (this.file === undefined) return;

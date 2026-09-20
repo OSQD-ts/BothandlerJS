@@ -14,6 +14,9 @@ import type { BotHandler } from "../core.js";
 import { createFacts } from "../facts.js";
 import { maskAddresses, networkKey } from "../internal/ip.js";
 import { SavedFilterStore, cleanSavedFilter } from "./saved-filters.js";
+
+/** The chips this dashboard draws, and so the ones a filter may be saved with. */
+const FILTER_CHIPS: ReadonlySet<string> = new Set(["all", "proven", "suspected", "human", "guard", "deny", "mitigate", "allow"]);
 import { ChallengePageStore } from "./challenge-page-store.js";
 import { ChallengePreviews, renderPreviewOutcome } from "./challenge-preview.js";
 import { ChallengeService } from "../challenge/index.js";
@@ -229,7 +232,7 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
   const throttle = createAuthThrottle(options.authThrottle, handler);
   const notices = new DashboardNotices(handler, undefined, { maskIp });
   const changes = new DashboardChanges(handler, undefined, { maskIp });
-  const saved = new SavedFilterStore(options.savedFilters?.file, (message) => handler.warn(message));
+  const saved = new SavedFilterStore(options.savedFilters?.file, (message) => handler.warn(message), FILTER_CHIPS);
   const challengePage = new ChallengePageStore(options.challengePage?.file, (message) => handler.warn(message));
   // A page saved on an earlier run is the page, from the first request. Laid over the
   // service directly rather than through `updateChallengePage`: this is configuration
@@ -448,7 +451,7 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
           }
           saved.delete(payload.name);
         } else {
-          const entry = cleanSavedFilter(payload);
+          const entry = cleanSavedFilter(payload, FILTER_CHIPS);
           if (entry === undefined) {
             sendError(response, 400, "Expected a filter with a `name` and a `query`.");
             return;

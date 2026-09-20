@@ -17,7 +17,7 @@ const T0 = 1_700_000_000_000 - (1_700_000_000_000 % MINUTE);
 
 describe("counting a window", () => {
   it("totals the minutes a window covers", () => {
-    const counts = new FeedCounts(0);
+    const counts = new FeedCounts({ retainMs: 0 });
     for (let i = 0; i < 3; i++) counts.record(T0 + i * MINUTE);
     counts.record(T0 + 2 * MINUTE);
     expect(counts.total).toBe(4);
@@ -27,7 +27,7 @@ describe("counting a window", () => {
   });
 
   it("reads an open end as open rather than as now", () => {
-    const counts = new FeedCounts(0);
+    const counts = new FeedCounts({ retainMs: 0 });
     counts.record(T0);
     counts.record(T0 + 10 * MINUTE);
     expect(counts.count(undefined, undefined), "both ends open is everything").toBe(2);
@@ -35,7 +35,7 @@ describe("counting a window", () => {
   });
 
   it("keeps one bucket per minute rather than one per request", () => {
-    const counts = new FeedCounts(0);
+    const counts = new FeedCounts({ retainMs: 0 });
     for (let i = 0; i < 5000; i++) counts.record(T0 + 30_000);
     expect(counts.total).toBe(5000);
     expect(counts.series()).toHaveLength(1);
@@ -44,7 +44,7 @@ describe("counting a window", () => {
   it("files a back-dated request in the minute it happened", () => {
     // A replay, or a clock that stepped. The common path is append-to-newest; this is
     // the exception, and putting it in the wrong bucket would make a window wrong.
-    const counts = new FeedCounts(0);
+    const counts = new FeedCounts({ retainMs: 0 });
     counts.record(T0 + 5 * MINUTE);
     counts.record(T0);
     counts.record(T0 + 2 * MINUTE);
@@ -55,7 +55,7 @@ describe("counting a window", () => {
   });
 
   it("drops what it is no longer allowed to remember", () => {
-    const counts = new FeedCounts(10 * MINUTE);
+    const counts = new FeedCounts({ retainMs: 10 * MINUTE });
     counts.record(T0);
     counts.record(T0 + 20 * MINUTE);
     counts.prune(T0 + 20 * MINUTE);
@@ -68,7 +68,7 @@ describe("counting a window", () => {
     // past the cutoff. Dropping it as soon as its start is past would lose up to a
     // minute of counts at the boundary on every prune — a small error that repeats,
     // which is the kind that is never noticed and never right.
-    const counts = new FeedCounts(10 * MINUTE);
+    const counts = new FeedCounts({ retainMs: 10 * MINUTE });
     counts.record(T0);
     // Now is ten minutes and thirty seconds after the bucket began, so the cutoff falls
     // *inside* it: thirty seconds of that minute are still within the retention.
@@ -81,7 +81,7 @@ describe("counting a window", () => {
   });
 
   it("keeps everything when retention is off", () => {
-    const counts = new FeedCounts(0);
+    const counts = new FeedCounts({ retainMs: 0 });
     counts.record(T0);
     counts.prune(T0 + 1000 * MINUTE);
     expect(counts.total).toBe(1);
@@ -97,7 +97,7 @@ describe("counting a window", () => {
    * process, is this ceiling.
    */
   it("stops growing even with retention switched off", () => {
-    const counts = new FeedCounts(0);
+    const counts = new FeedCounts({ retainMs: 0 });
     const minutes = 7 * 24 * 60;
     // A fortnight of traffic, a minute at a time, against a seven-day ceiling.
     for (let i = 0; i < minutes * 2; i++) counts.record(T0 + i * MINUTE);
@@ -112,7 +112,7 @@ describe("counting a window", () => {
   });
 
   it("prunes to a retention it is given later", () => {
-    const counts = new FeedCounts(0);
+    const counts = new FeedCounts({ retainMs: 0 });
     counts.record(T0);
     counts.record(T0 + 20 * MINUTE);
     counts.setRetention(10 * MINUTE, T0 + 20 * MINUTE);
