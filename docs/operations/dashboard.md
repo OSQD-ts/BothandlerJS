@@ -61,17 +61,19 @@ ten others:
 ```text
 actor:203.0.113.4 -path:/health      that address, except its health checks
 rule:no-scrapers action:tag          the rule that fired, and what it settled on
-score:>70 -certain                   probabilistic traffic close to the line
+score:>70 certain:false              probabilistic traffic close to the line
 "GET /api/v2/orders"                 a phrase, spaces and all
 ```
 
-The whole language, with every field and worked examples, is in [the filter
-reference](filters.md).
+It is [JQL](https://github.com/OSQD-ts/JQL)'s text syntax, the one every OSQD project's
+search box takes. The whole language, with every field and worked examples, is in [the
+filter reference](filters.md).
 
-Fields: `path` `actor` `ua` `verdict` `action` `rule` `detector` `identity` `method`
-`class` `id` `bypass` `outcome` `certain` `score`. Every term must match — narrowing
-means `AND` — and anything that is not a field term is matched against the whole
-request, so a plain word behaves as it always did. **The filter and the search are in
+Fields: `line` `path` `actor` `ua` `verdict` `action` `outcome` `rule` `detector`
+`evidence` `identity` `method` `class` `id` `bypass` `certain` `score`. Every term must
+match — narrowing means `AND` — and a word that is not a field term is looked for in what
+you would recognise a request by: its method and path, actor and its name, User-Agent,
+verdict, class, identity, action, rule, id and evidence. **The filter and the search are in
 the URL**, along with the view, so a screen is a link rather than a set of
 instructions, and a refresh keeps your place.
 

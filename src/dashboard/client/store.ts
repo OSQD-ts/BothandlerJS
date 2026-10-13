@@ -1,7 +1,7 @@
-import { matches as matchesFilterExpression, matchesFilter, parseFilter, searchableText } from "./query.js";
+import { compileSearch, entryVocabulary, matchesFilter } from "./query.js";
 import { outcome } from "./outcome.js";
 import type { EditorRule } from "./draft.js";
-import type { Filter, FilterName } from "./query.js";
+import type { FilterName } from "./query.js";
 import type { ActorRow, DashboardEntry, Policy, Row, Snapshot, TabName, WindowCount } from "./types.js";
 
 /** Requests the page keeps. The server's ring is smaller; this is the ceiling, not the target. */
@@ -71,8 +71,8 @@ export interface State {
   paused: boolean;
   filter: FilterName;
   search: string;
-  /** The parsed search. A tree, so `$or` means something. */
-  query: Filter;
+  /** The search, compiled. Rebuilt when the search changes, never per row. */
+  query: (entry: DashboardEntry) => boolean;
   /** How the rows are ordered. See {@link FeedOrder}. */
   order: FeedOrder;
   /** What the rows are grouped by, if anything. See {@link FeedGroup}. */
@@ -182,7 +182,7 @@ export const state: State = {
   paused: false,
   filter: "all",
   search: "",
-  query: { kind: "all" },
+  query: () => true,
   tab: "live",
   open: new Set(),
   actor: undefined,
@@ -203,6 +203,17 @@ export const state: State = {
   toMs: undefined,
   caughtUp: 0,
 };
+
+/**
+ * The feed's vocabulary, able to see the names operators have given actors.
+ *
+ * It reads `state.labels` through a function, when the filter runs, rather than taking a
+ * copy: names arrive on every stats frame and replace the map wholesale, and a compiled
+ * search that held the map it was built with would go on missing every name given since.
+ * Reading it at match time is also what lets a name reach requests that arrived before it
+ * was given.
+ */
+const FEED_VOCABULARY = entryVocabulary((actor) => state.labels.get(actor));
 
 /**
  * Files one entry into the ring.
@@ -226,7 +237,6 @@ export function ingest(entry: DashboardEntry): void {
     if (sameEntry(existing.entry, entry)) return;
     existing.entry = entry;
     existing.rev++;
-    existing.text = undefined;
     return;
   }
   const row: Row = { entry, rev: 0 };
@@ -284,7 +294,7 @@ export function clearFeed(): void {
 
 export function setSearch(value: string): void {
   state.search = value;
-  state.query = parseFilter(value);
+  state.query = compileSearch(value, FEED_VOCABULARY);
   // A narrower search over a frozen page-three is somebody reading rows their filter no
   // longer selects. Any change to what matches goes back to the live first page.
   resetPaging();
@@ -304,11 +314,6 @@ export function setTimeframe(from: number | undefined, to: number | undefined): 
 export function resetPaging(): void {
   state.feedPage = 0;
   state.feedFrozen = undefined;
-}
-
-function textOf(row: Row): string {
-  if (row.text === undefined) row.text = searchableText(row.entry);
-  return row.text;
 }
 
 /**
@@ -342,7 +347,7 @@ export function matches(row: Row): boolean {
   // fail on.
   if (state.fromMs !== undefined && row.entry.at < state.fromMs) return false;
   if (state.toMs !== undefined && row.entry.at > state.toMs) return false;
-  return matchesFilter(state.filter, row.entry) && matchesFilterExpression(state.query, row.entry, textOf(row), state.labels.get(row.entry.actor));
+  return matchesFilter(state.filter, row.entry) && state.query(row.entry);
 }
 
 /**

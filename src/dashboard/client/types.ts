@@ -47,8 +47,6 @@ export interface Row {
    * decision lands — and only the second write should cost a rebuild.
    */
   rev: number;
-  /** The searchable text, built on demand and thrown away when the entry changes. */
-  text?: string | undefined;
 }
 
 /** The views, in the order the tab strip and the digit shortcuts use. */

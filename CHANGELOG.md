@@ -31,6 +31,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The dashboard's search is JQL.** The feed filter and the Actors screen's filter used to
+  be a tokenizer, a parser and a matcher of this dashboard's own. The syntax moved into
+  `@osqd/jql`, the query standard the OSQD projects share, and both boxes now parse what is
+  typed into a JQL query and let its engine answer — so there is one set of semantics, and
+  what is left here is the vocabulary: what a request's and an actor's fields are called and
+  how each reads a value. JQL is bundled into the build, so the package still has no runtime
+  dependencies, and saved filters and shared links are still text, read exactly as before.
+  What is different, all of it in [the filter reference](docs/operations/filters.md):
+  - **Comparisons the old parser could not read now work.** `score:>=70` was read as `>`
+    against `=70`, which is not a number, and a range was not a number at all, so both
+    matched nothing; now `score:>=70`, `score:<=20`, `score:40..60`, `score:60..` and
+    `score:..20` compare. A set of scores, `score:$in(0, 100)`, looked in nowhere and matched
+    nothing too. The Actors screen's counts take all of the same.
+  - **`has:<field>` asks whether a field is set**, so `-has:rule` is what is still pending.
+  - **`method:` and `outcome:` match the whole value.** `method:get` and `outcome:deny` work
+    as before; `method:ge` no longer finds every GET, which nobody was asking for.
+  - **`certain:` and the Actors screen's `cleared:` are true or false**, and take `yes`/`no`
+    as well as `true`/`false`. A value that is neither matches nothing — `certain:e` used to
+    be a substring of both words and matched every row.
+  - **`actor:` matches an operator's name for a client a whole word at a time**, as it
+    already matched the key: `actor:partner` finds "partner price feed", `actor:part` no
+    longer does. A bare word still finds any part of a name.
+  - **A bare word looks in each field on its own** rather than in every field joined into
+    one string, so a phrase is found inside one field rather than across two. The request
+    line is a field of its own, `line`, so `"GET /api/v2/orders"` — the phrase the filter
+    reference has always used as its example — still finds its request, and so does a
+    phrase inside an evidence summary.
+  - **Two new fields:** `line`, the method and path as the feed prints them, and `evidence`,
+    what every detector on the request said.
 - **Six more dashboard files are the same file as hackerpot's,** byte for byte: the DOM and
   selector helpers, the pager, the saved-filter client and its server-side store, and the feed
   counts. `FeedCounts` now takes an options object (`{ retainMs, clock }`) and so accepts an

@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseRequest } from "../src/dashboard/parse-request.js";
 import { corpusCase, replayFile, replayLine } from "../src/dashboard/client/replay.js";
 import { draftRule } from "../src/dashboard/client/draft.js";
-import { FIELD_NAMES, OPERATORS, matches as matchesFilterExpression, matchesFilter, parseFilter, searchableText, suggestFor } from "../src/dashboard/client/query.js";
+import { MAX_TEXT_CHARS, parseText, suggest, TEXT_OPERATORS } from "@osqd/jql/text";
+import { ENTRY_VOCABULARY, compileSearch, entryVocabulary, matchesFilter } from "../src/dashboard/client/query.js";
 import { actionKind, outcome, provenBots, verdictBadge } from "../src/dashboard/client/outcome.js";
 import { clearFeed, feedPage, goToFeedPage, groupCounts, groupKeyOf, ingest, matches, matchingRows, resetPaging, setAllGroups, setSearch, setTimeframe, sortRows, state, toggleGroup } from "../src/dashboard/client/store.js";
 import { clockDate, clockStamp, clockTime, n, pct, rangeLabel, uptime, windowLabel } from "../src/dashboard/client/format.js";
@@ -62,10 +63,12 @@ describe("the feed's search", () => {
     }),
   ];
 
-  function search(query: string): string[] {
-    const filter = parseFilter(query);
-    return rows.filter((row) => matchesFilterExpression(filter, row, searchableText(row))).map((row) => row.requestId);
+  function search(query: string, over: DashboardEntry[] = rows): string[] {
+    return over.filter(compileSearch(query, ENTRY_VOCABULARY)).map((row) => row.requestId);
   }
+
+  /** What the text becomes. The engine runs this, so it is the whole of what a query means. */
+  const parse = (query: string): unknown => parseText(query, { vocabulary: ENTRY_VOCABULARY });
 
   it("matches a bare word anywhere, the way it always did", () => {
     expect(search("curl")).toEqual(["a"]);
@@ -97,13 +100,43 @@ describe("the feed's search", () => {
     expect(search("score:12")).toEqual(["b"]);
   });
 
+  /**
+   * The comparisons the old parser could not read: `score:>=70` was taken as `>` with a
+   * value of `=70`, which is not a number, so it matched nothing, and a range had no
+   * spelling at all.
+   */
+  it("takes >=, <= and ranges on the score", () => {
+    expect(search("score:>=71")).toEqual(["a", "c"]);
+    expect(search("score:<=12")).toEqual(["b"]);
+    expect(search("score:10..80")).toEqual(["b", "c"]);
+    expect(search("score:..12")).toEqual(["b"]);
+    // A set of scores used to compare against nothing at all, so it matched no row.
+    expect(search("score:$in(12, 71)")).toEqual(["b", "c"]);
+    // And a score that is not a number is a question with no answer, not every row.
+    expect(search("score:high")).toEqual([]);
+  });
+
   it("keeps a quoted phrase together", () => {
-    expect(parseFilter('"GET /api/v2"')).toEqual({ kind: "term", term: { field: undefined, value: "get /api/v2", negated: false } });
+    expect(parse('"GET /api/v2"')).toEqual({ $text: { $search: "GET /api/v2", $fields: ENTRY_VOCABULARY.text } });
+  });
+
+  /**
+   * The request line, as a phrase.
+   *
+   * The search used to be one string with the method and the path side by side, so a
+   * quoted `"GET /api/items"` found that request — and the filter reference has always
+   * shown exactly that as its example of a phrase. Searching one field at a time finds it
+   * in neither, which is what `line` is for.
+   */
+  it("finds a request by its method and path together", () => {
+    expect(search('"GET /api/items"')).toEqual(["a"]);
+    expect(search('"POST /api/items"')).toEqual([]);
+    expect(search('line:"GET /health"')).toEqual(["b"]);
   });
 
   /** A path can contain a colon, and so can a User-Agent. Only known names make a field. */
   it("treats an unknown prefix as an ordinary word", () => {
-    expect(parseFilter("weird:thing")).toEqual({ kind: "term", term: { field: undefined, value: "weird:thing", negated: false } });
+    expect(parse("weird:thing")).toEqual({ $text: { $search: "weird:thing", $fields: ENTRY_VOCABULARY.text } });
   });
 
   /**
@@ -161,8 +194,8 @@ describe("the feed's search", () => {
 
   /** A comma is a separator only outside quotes — which is what quoting a value is for. */
   it("keeps a comma inside a quoted set value", () => {
-    expect(parseFilter('actor:$in("a,b", c)')).toMatchObject({ term: { values: ["a,b", "c"] } });
-    expect(parseFilter("actor:$in('a,b', c)")).toMatchObject({ term: { values: ["a,b", "c"] } });
+    expect(parse('actor:$in("a,b", c)')).toEqual({ actor: { $word: ["a,b", "c"], $options: "i" } });
+    expect(parse("actor:$in('a,b', c)")).toEqual({ actor: { $word: ["a,b", "c"], $options: "i" } });
   });
 
   /**
@@ -173,8 +206,8 @@ describe("the feed's search", () => {
    * swallow everything typed after it.
    */
   it("leaves an apostrophe in the middle of a word alone", () => {
-    expect(parseFilter("don't")).toEqual({ kind: "term", term: { field: undefined, value: "don't", negated: false } });
-    expect(parseFilter("path:/o'reilly curl")).toMatchObject({ kind: "and" });
+    expect(parse("don't")).toEqual({ $text: { $search: "don't", $fields: ENTRY_VOCABULARY.text } });
+    expect(parse("path:/o'reilly curl")).toMatchObject({ $and: [{ path: { $contains: "/o'reilly" } }, { $text: { $search: "curl" } }] });
   });
 
   /**
@@ -192,8 +225,7 @@ describe("the feed's search", () => {
       entry({ requestId: "wider", actor: "11.2.3.4" }),
       entry({ requestId: "network", actor: "1.2.3.0/24" }),
     ];
-    const pick = (query: string): string[] =>
-      neighbours.filter((row) => matchesFilterExpression(parseFilter(query), row, searchableText(row))).map((row) => row.requestId);
+    const pick = (query: string): string[] => search(query, neighbours);
 
     expect(pick("actor:1.2.3.4")).toEqual(["exact"]);
     expect(pick("actor:$in(1.2.3.4)")).toEqual(["exact"]);
@@ -207,20 +239,29 @@ describe("the feed's search", () => {
   /**
    * A named actor answers to its name.
    *
-   * The name is passed in rather than read off the entry, because it is given after the
+   * The name is looked up rather than read off the entry, because it is given after the
    * fact: to requests already in the feed, which is what makes filtering by it
    * retroactive rather than only working for what arrives next.
    */
   it("finds an actor by the name it was given, as well as by its key", () => {
-    const named = (query: string): string[] =>
-      rows
-        .filter((row) => matchesFilterExpression(parseFilter(query), row, searchableText(row), row.actor === "203.0.113.4" ? "the noisy one" : undefined))
-        .map((row) => row.requestId);
+    const labels = new Map<string, string>();
+    const vocabulary = entryVocabulary((actor) => labels.get(actor));
+    const named = (query: string): string[] => rows.filter(compileSearch(query, vocabulary)).map((row) => row.requestId);
+    // Compiled before the name exists, and run after: the lookup happens when it runs.
+    const noisy = compileSearch("actor:noisy", vocabulary);
+    expect(rows.filter(noisy)).toEqual([]);
+    labels.set("203.0.113.4", "the noisy one");
+    expect(rows.filter(noisy).map((row) => row.requestId)).toEqual(["a", "b"]);
+
     expect(named("actor:noisy").sort()).toEqual(["a", "b"]);
     expect(named('actor:$notin("the noisy one")')).toEqual(["c"]);
     expect(named("noisy").sort(), "and a free word finds it too").toEqual(["a", "b"]);
     // The key still works after the name is given.
     expect(named("actor:203.0.113.4").sort()).toEqual(["a", "b"]);
+    // `actor:` matches a name a whole word at a time, as it matches a key; part of a word
+    // in a name is a bare word's job. The old matcher took any substring of the name here.
+    expect(named("actor:nois")).toEqual([]);
+    expect(named("nois").sort()).toEqual(["a", "b"]);
   });
 
   it("matches nothing for an empty set rather than everything", () => {
@@ -234,7 +275,7 @@ describe("the feed's search", () => {
    * and none may match a set the typed part does not describe.
    */
   it("survives half-written input", () => {
-    for (const half of ["$", "$n", "$not", "$or", "(", "(curl", "curl $or", "path:$in(", "path:$in(/health", ")", "((a)", "$and $and", "-", '"']) {
+    for (const half of ["$", "$n", "$not", "$or", "(", "(curl", "curl $or", "path:$in(", "path:$in(/health", ")", "((a)", "$and $and", "-", '"', "score:>", "score:..", "a) b", "has:"]) {
       expect(() => search(half), half).not.toThrow();
     }
     expect(search("$not")).toEqual(["a", "b", "c"]);
@@ -263,7 +304,7 @@ describe("the feed's search", () => {
     // The reason the operators carry a `$`. "or" and "not" appear in User-Agents and
     // paths, and a language where a search word silently becomes an operator lies about
     // what it matched.
-    expect(OPERATORS.every((name) => name.startsWith("$"))).toBe(true);
+    expect(TEXT_OPERATORS.every((name) => name.startsWith("$"))).toBe(true);
     // "or" is a substring of "header-order", and it stays a search word: the row that
     // mentions it matches, and the two either side of it are not or-ed together.
     expect(search("or")).toEqual(["c"]);
@@ -273,6 +314,69 @@ describe("the feed's search", () => {
   it("matches everything when it is empty", () => {
     expect(search("")).toEqual(["a", "b", "c"]);
     expect(search("   ")).toEqual(["a", "b", "c"]);
+  });
+
+  it("cuts a query past the length cap rather than refusing it", () => {
+    expect(search(`curl ${"x".repeat(MAX_TEXT_CHARS * 2)}`)).toEqual([]);
+    expect(search(`${"curl ".repeat(MAX_TEXT_CHARS)}`)).toEqual(["a"]);
+  });
+
+  /**
+   * One case per field, and every alias.
+   *
+   * The computed fields — `line`, `actor`, `outcome`, `detector`, `evidence` — are the ones
+   * this project wrote itself rather than took from JQL, so each has a case of its own.
+   */
+  it("reaches every field by every name it has", () => {
+    const ids = (query: string): string[] => search(query).sort();
+    expect(ids("url:/health")).toEqual(["b"]);
+    expect(ids("ip:198.51.100.9")).toEqual(["c"]);
+    expect(ids("ua:kube-probe")).toEqual(["b"]);
+    expect(ids("useragent:mozilla")).toEqual(["c"]);
+    expect(ids("agent:curl")).toEqual(["a"]);
+    expect(ids("verdict:suspected-bot")).toEqual(["c"]);
+    // A verdict matches as text, so asking for any kind of bot is one term.
+    expect(ids("verdict:bot")).toEqual(["a", "c"]);
+    expect(ids("class:http-client")).toEqual(["a", "b", "c"]);
+    expect(ids("botclass:http")).toEqual(["a", "b", "c"]);
+    expect(ids("action:challenge")).toEqual(["c"]);
+    expect(ids("id:b")).toEqual(["b"]);
+    expect(ids("request:c")).toEqual(["c"]);
+    expect(ids("method:get")).toEqual(["a", "b", "c"]);
+  });
+
+  it("derives the outcome from the action when the filter runs", () => {
+    expect(search("outcome:deny")).toEqual(["a"]);
+    expect(search("outcome:mitigate")).toEqual(["c"]);
+    expect(search("outcome:allow")).toEqual(["b"]);
+    expect(search("outcome:$in(deny, mitigate)")).toEqual(["a", "c"]);
+    // An outcome is one of four words, and matched as one: `outcome:de` is not a denial.
+    expect(search("outcome:de")).toEqual([]);
+    expect(search("outcome:pending", [entry({ requestId: "p", action: undefined })])).toEqual(["p"]);
+  });
+
+  it("searches the evidence, detector and summary both, from a bare word", () => {
+    expect(search("unusual")).toEqual(["c"]);
+    expect(search("header-order")).toEqual(["c"]);
+    expect(search("evidence:unusual")).toEqual(["c"]);
+    expect(search("detector:unusual"), "detector: is the detector's name alone").toEqual([]);
+  });
+
+  it("reads certain as a boolean and method as one of a set", () => {
+    expect(search("certain:true")).toEqual(["a"]);
+    expect(search("certain:no")).toEqual(["b", "c"]);
+    // A value that does not read as a boolean matches nothing, where it used to be a
+    // substring of "true" or "false" — so `certain:e` matched every row.
+    expect(search("certain:e")).toEqual([]);
+    expect(search("method:$in(post, head)")).toEqual([]);
+    // A method is matched whole: `method:ge` used to find every GET.
+    expect(search("method:ge")).toEqual([]);
+  });
+
+  it("asks whether a field is set with has:", () => {
+    const decided = [entry({ requestId: "ruled", rule: "no-scrapers" }), entry({ requestId: "default" })];
+    expect(search("has:rule", decided)).toEqual(["ruled"]);
+    expect(search("-has:rule", decided)).toEqual(["default"]);
   });
 
   it("still supports the named filter buttons alongside it", () => {
@@ -683,6 +787,8 @@ describe("how the dashboard writes times and dates", () => {
  * does not have.
  */
 describe("suggesting filter terms", () => {
+  const suggestFor = (input: string, caret: number) => suggest(input, caret, ENTRY_VOCABULARY);
+
   it("completes a field name from what has been typed", () => {
     const { options } = suggestFor("ver", 3);
     expect(options).toEqual(["verdict:"]);
@@ -691,6 +797,8 @@ describe("suggesting filter terms", () => {
   it("completes the values of a field whose set is closed", () => {
     const { options } = suggestFor("verdict:con", 11);
     expect(options).toEqual(["verdict:confirmed-bot"]);
+    // An alias completes the values of the field it names.
+    expect(suggestFor("botclass:scr", 12).options).toEqual(["botclass:scraper"]);
   });
 
   it("offers nothing for a field that takes anything", () => {
@@ -713,8 +821,16 @@ describe("suggesting filter terms", () => {
     expect(input.slice(from, to)).toBe("ver");
   });
 
+  it("offers the set forms and the operators", () => {
+    expect(suggestFor("verdict:$", 9).options.slice(0, 2)).toEqual(["verdict:$in(", "verdict:$notin("]);
+    expect(suggestFor("$o", 2).options).toEqual(["$or"]);
+  });
+
   it("only offers names the parser actually accepts", () => {
-    for (const name of FIELD_NAMES) expect(suggestFor(name.slice(0, 2), 2).options.length).toBeGreaterThan(0);
+    for (const name of ENTRY_VOCABULARY.names) {
+      expect(suggestFor(name.slice(0, 2), 2).options.length).toBeGreaterThan(0);
+      expect(Object.keys(parseText(`${name}:x`, { vocabulary: ENTRY_VOCABULARY }))[0], name).not.toBe("$text");
+    }
   });
 });
 

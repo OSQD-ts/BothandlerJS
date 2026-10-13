@@ -22,8 +22,8 @@ import { ChallengePreviews, renderPreviewOutcome } from "./challenge-preview.js"
 import { ChallengeService } from "../challenge/index.js";
 import { cleanAppearance } from "../challenge/appearance.js";
 import { CHALLENGE_PAGE_DEFAULTS } from "../challenge/page.js";
-import { matchesActor, parseActorFilter } from "./actor-filter.js";
-import { MAX_QUERY_CHARS } from "./client/query.js";
+import { MAX_TEXT_CHARS } from "@osqd/jql/text";
+import { compileActorFilter } from "./actor-filter.js";
 import type { ActorSummary } from "../state.js";
 import { parseRequest } from "./parse-request.js";
 import type {
@@ -570,8 +570,8 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
         // registry and then pages what is left. The names are overlaid first, so
         // `label:office` finds an actor named while it was not being tracked.
         const names = handler.actorLabels();
-        const query = (url.searchParams.get("q") ?? "").slice(0, MAX_QUERY_CHARS);
-        const filter = query.trim() === "" ? undefined : parseActorFilter(query);
+        const query = (url.searchParams.get("q") ?? "").slice(0, MAX_TEXT_CHARS);
+        const filter = query.trim() === "" ? undefined : compileActorFilter(query);
         const named = (actor: ActorSummary): ActorSummary => {
           const label = names.get(actor.key) ?? actor.label;
           return label === undefined ? actor : { ...actor, label };
@@ -580,7 +580,7 @@ function buildDashboard(handler: BotHandler, options: DashboardOptions, host: st
           limit,
           now: handler.config.clock.now(),
           offset,
-          ...(filter === undefined ? {} : { where: (actor: ActorSummary) => matchesActor(filter, named(actor)) }),
+          ...(filter === undefined ? {} : { where: (actor: ActorSummary) => filter(named(actor)) }),
         });
         const actors = page.map((actor) => ({
           ...named(actor),

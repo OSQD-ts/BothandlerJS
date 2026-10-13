@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { matchesActor, parseActorFilter } from "../src/dashboard/actor-filter.js";
+import { compileActorFilter } from "../src/dashboard/actor-filter.js";
 import type { FilterableActor } from "../src/dashboard/actor-filter.js";
 
 /**
  * The feed's query language, read over actors.
  *
- * The operators, quoting, negation and precedence are the language and are tested against
- * the feed in `dashboard-client.test.ts`; what matters here is that they reach this screen
- * at all, and that the vocabulary is the one an actor has. A second dialect one tab away
- * would be worse than no filter.
+ * The operators, quoting, negation and precedence are the language — JQL's text syntax —
+ * and are tested against the feed in `dashboard-client.test.ts` and in JQL itself; what
+ * matters here is that they reach this screen at all, and that the vocabulary is the one an
+ * actor has. A second dialect one tab away would be worse than no filter.
  */
 const actor = (overrides: Partial<FilterableActor> = {}): FilterableActor => ({
   key: "203.0.113.4",
@@ -23,7 +23,7 @@ const actor = (overrides: Partial<FilterableActor> = {}): FilterableActor => ({
   ...overrides,
 });
 
-const keep = (query: string, subject: FilterableActor): boolean => matchesActor(parseActorFilter(query), subject);
+const keep = (query: string, subject: FilterableActor): boolean => compileActorFilter(query)(subject);
 
 describe("filtering actors", () => {
   it("matches a bare word against what somebody would recognise", () => {
@@ -39,6 +39,23 @@ describe("filtering actors", () => {
     expect(keep("label:office", actor())).toBe(false);
     expect(keep("cleared:yes", actor({ cleared: true }))).toBe(true);
     expect(keep("cleared:no", actor())).toBe(true);
+    expect(keep("cleared:true", actor({ cleared: true })), "true and false read as well as yes and no").toBe(true);
+    expect(keep("cleared:yes", actor())).toBe(false);
+    // Every alias reaches the field it names.
+    expect(keep("ip:203.0.113.4", actor())).toBe(true);
+    expect(keep("key:203.0.113.4", actor())).toBe(true);
+    expect(keep("name:office", actor({ label: "office egress" }))).toBe(true);
+  });
+
+  /**
+   * A value that does not read as its kind matches nothing. The old matcher agreed for a
+   * number and disagreed for a boolean: `cleared:maybe` was a substring search of the words
+   * "no false", so it matched nothing too, but `cleared:e` matched every actor.
+   */
+  it("matches nothing for a value that is not of the field's kind", () => {
+    expect(keep("requests:many", actor())).toBe(false);
+    expect(keep("cleared:maybe", actor())).toBe(false);
+    expect(keep("cleared:e", actor())).toBe(false);
   });
 
   it("compares the numbers as numbers", () => {
@@ -51,6 +68,21 @@ describe("filtering actors", () => {
     // Too few gaps to say is not a zero, and must not answer a comparison as though it were.
     expect(keep("cadence:<0.5", actor({ cadenceCv: undefined }))).toBe(false);
     expect(keep("cadence:>0.5", actor({ cadenceCv: undefined }))).toBe(false);
+    expect(keep("-cadence:<0.5", actor({ cadenceCv: undefined })), "so its negation holds").toBe(true);
+  });
+
+  /**
+   * The comparisons the old matcher could not read. `requests:>=120` was taken as `>` with a
+   * value of `=120`, which is not a number, so it matched nothing; a set of numbers compared
+   * only its first member; and a range had no spelling at all.
+   */
+  it("takes >=, <=, ranges and sets of numbers", () => {
+    expect(keep("requests:>=120", actor())).toBe(true);
+    expect(keep("requests:<=119", actor())).toBe(false);
+    expect(keep("requests:100..200", actor())).toBe(true);
+    expect(keep("requests:..100", actor())).toBe(false);
+    expect(keep("paths:$in(3, 9)", actor())).toBe(true);
+    expect(keep("rate:>10 permin:<13 agents:1 confirmations:0 proven:0 unsolved:0", actor())).toBe(true);
   });
 
   /** An address is an identifier here too: excluding one must not exclude its neighbours. */

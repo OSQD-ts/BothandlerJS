@@ -1,8 +1,14 @@
 # The feed filter
 
 The search box above the live feed takes a small query language. It is the same language
-everywhere it appears — the feed, the export, a shared link — so a filter that finds
-something can be sent to somebody else and will find the same thing.
+everywhere it appears — the feed, the export, a shared link, the Actors screen — so a filter
+that finds something can be sent to somebody else and will find the same thing.
+
+It is the text syntax of [JQL](https://github.com/OSQD-ts/JQL), the query standard the OSQD
+projects share, rather than a language of this dashboard's own. What you type is turned into
+a JQL query and JQL's engine runs it, so the operators, the quoting and the precedence below
+are the same in every project that has a search box. What is particular to this dashboard is
+the vocabulary: the [fields](#fields) a request has, and how each one reads a value.
 
 An empty query matches everything. Adjacent terms mean `AND`, because that is what
 narrowing means — and `$or`, `$not` and set membership are there for when it is not.
@@ -16,6 +22,7 @@ narrowing means — and `$or`, `$not` and set membership are there for when it i
 | `-path:/health` | the path does **not** contain `/health` |
 | `"GET /api/v2/orders"` | the phrase, spaces and all |
 | `score:>70` | a numeric comparison |
+| `has:rule` | the field has a value — here, the request has been decided (`-has:rule` is what is still pending) |
 
 Negation is `-` or `!`, and works on any term. Quoting keeps spaces together, which is the
 only way to search for a phrase.
@@ -37,7 +44,7 @@ Inside a set, a comma separates values only outside quotes: `$in("a,b", c)` is t
 | `a $or b` | either |
 | `$not a` | not — the same as `-a`, spelled out |
 | `path:$in(/health, /metrics)` | the path contains any of these |
-| `action:$notin(allow, tag)` | the action contains none of these |
+| `action:$notin(allow, tag)` | the action matches none of these |
 | `(a $or b) $and c` | grouping |
 
 `$not` binds tightest, then `$and`, then `$or` — the conventional precedence, so
@@ -57,28 +64,57 @@ An empty set matches nothing rather than everything, for the same reason — `$i
 query somebody is halfway through, and a filter that widens while you are still typing it
 is a filter that lies.
 
+So does a value that cannot be read as its field's kind: `score:high` and `certain:maybe`
+match nothing, rather than everything.
+
 A colon with an unknown name in front of it is *not* a field term — a path can contain a
-colon and so can a User-Agent — so `foo:bar` searches for the text `foo:bar`.
+colon and so can a User-Agent — so `foo:bar` searches for the text `foo:bar`. The same goes
+for `has:` with a name that is not a field.
 
 ## Fields
 
-| Field | Also | Matches against |
-| --- | --- | --- |
-| `path` | `url` | the request path |
-| `actor` | `ip` | the actor key, usually the address — or the name an operator gave it |
-| `ua` | `useragent`, `agent` | the User-Agent string |
-| `verdict` | | `confirmed-bot`, `verified-bot`, `suspected-bot`, `human`, `unknown` |
-| `class` | `botclass` | `scanner`, `scraper`, `impersonator`, `http-client`, `automation`, … |
-| `action` | | what was decided: `allow`, `challenge`, `block`, `tag`, … |
-| `outcome` | | the coarse version: `deny`, `mitigate`, `allow`, `pending` |
-| `rule` | | the rule id that decided it |
-| `detector` | | any detector that produced evidence on this request |
-| `identity` | | the named bot, such as `googlebot` |
-| `method` | | `GET`, `POST`, … |
-| `certain` | | `true` or `false` — whether the verdict rests on proof |
-| `bypass` | | why detection was skipped, when it was |
-| `id` | `request` | the request id |
-| `score` | | 0–100. Takes `>` and `<` as well as `=` |
+| Field | Also | Matches against | Reads a value as |
+| --- | --- | --- | --- |
+| `line` | | the request line as the feed prints it: `GET /api/v2/orders` | text |
+| `path` | `url` | the request path | text |
+| `actor` | `ip` | the actor key, usually the address — or the name an operator gave it | a whole word |
+| `ua` | `useragent`, `agent` | the User-Agent string | text |
+| `verdict` | | `confirmed-bot`, `verified-bot`, `suspected-bot`, `human`, `unknown` | text |
+| `class` | `botclass` | `scanner`, `scraper`, `impersonator`, `http-client`, `automation`, … | text |
+| `action` | | what was decided: `allow`, `challenge`, `block`, `tag`, … | text |
+| `outcome` | | the coarse version: `deny`, `mitigate`, `allow`, `pending` | one of the set |
+| `rule` | | the rule id that decided it | text |
+| `detector` | | any detector that produced evidence on this request | text |
+| `evidence` | | any detector's name or what it said — `unusual header order` | text |
+| `identity` | | the named bot, such as `googlebot` | text |
+| `method` | | `GET`, `POST`, … | one of the set |
+| `certain` | | whether the verdict rests on proof | `true`/`false`, `yes`/`no` |
+| `bypass` | | why detection was skipped, when it was | text |
+| `id` | `request` | the request id | a whole word |
+| `score` | | 0–100 | a number |
+
+**Text** contains the value, ignoring case, which is right for most fields: `path:/api` is a
+prefix search people rely on, a User-Agent is prose, and `verdict:bot` finds all three kinds
+of bot. **One of the set** is equality, ignoring case — `method:get`, `outcome:deny` — because
+on a short closed set a substring is never what was meant: `method:p` is not a way anybody
+asks for POST, PUT and PATCH, and it finds nothing. **A number** compares:
+
+| Query | Means |
+| --- | --- |
+| `score:>70` `score:>=70` | above, or at least |
+| `score:<20` `score:<=20` | below, or at most |
+| `score:60` `score:=60` | exactly |
+| `score:40..60` | between, both ends included |
+| `score:60..` `score:..20` | a range open at one end |
+| `score:$in(0, 100)` | any of these |
+
+**A bare word** searches what somebody would recognise a request by: the request line, the
+actor (and its name), the User-Agent, the verdict, the class, the identity, the action, the
+rule, the request id and the evidence. Not the score, the outcome or why detection was
+skipped — a stray `7` matching every score with a seven in it would be noise, not search.
+Each of those is searched separately, so a phrase is found inside one of them rather than
+across two; `line` is there so that `"GET /api/v2/orders"`, the phrase people actually
+reach for, still finds its request.
 
 ### How an actor matches
 
@@ -97,27 +133,56 @@ A value now has to start and end on a boundary between runs of letters and digit
 So a network prefix still finds the whole network, and an address can still be found by its
 tail. `id:` matches the same way.
 
-**By its name, too.** Once somebody has named an actor, `actor:` answers to either — the key
-or any part of the name — and so does a bare word. The name is looked up at the moment the
-filter runs, so it reaches requests that arrived before the name was given.
+**By its name, too.** Once somebody has named an actor, `actor:` answers to either — the key,
+or a whole word of the name, so `actor:partner` finds "partner price feed" — and a bare word
+finds any part of the name. The name is looked up at the moment the filter runs, so it
+reaches requests that arrived before the name was given.
 
 **On a listener that masks addresses**, every actor is a network — `203.0.113.0/24` — because
 that is all the feed was sent. A full address typed into the filter matches nothing there,
 because the page never had it; filter by the network instead.
-
-`score` is the only numeric field. `score:>70`, `score:<20` and `score:60` all work;
-everything else matches a substring, case-insensitively.
 
 ## Worked examples
 
 ```text
 actor:203.0.113.4 -path:/health      that address, except its health checks
 rule:no-scrapers action:tag          the rule that fired, and what it settled on
-score:>70 -certain                   probabilistic traffic close to the line
+score:>70 certain:false              probabilistic traffic close to the line
 detector:trap                        everything that touched a trap
 class:impersonator verdict:confirmed-bot   proven forgeries
 outcome:deny -class:scanner          denials that were not scanners
+score:40..60 rule:default            the middle band, left to the shipped ladder
+evidence:"header order"              anything a detector said about header order
 "GET /api/v2/orders"                 a phrase
+```
+
+## The Actors screen
+
+The Actors screen's own filter box takes the same language, over actors rather than
+requests. The table is paged on the server, so the server filters the whole registry and
+pages what is left, with the same code the page uses for the feed-derived list.
+
+| Field | Also | Matches against | Reads a value as |
+| --- | --- | --- | --- |
+| `actor` | `ip`, `key` | the actor key | a whole word |
+| `label` | `name` | the name an operator gave it | text |
+| `requests` | | requests seen | a number |
+| `rate` | `permin` | requests per minute, recently | a number |
+| `paths` | | distinct paths | a number |
+| `agents` | | distinct User-Agents | a number |
+| `confirmations` | `proven` | prior confirmations | a number |
+| `unsolved` | | unsolved challenges | a number |
+| `cadence` | | cadence regularity — near zero is a metronome | a number |
+| `cleared` | | whether it holds clearance | `yes`/`no`, `true`/`false` |
+
+A bare word searches the key and the name, not the numbers. A number this actor does not
+have yet — a cadence needs a few gaps to measure — answers no comparison, rather than being
+read as zero: `cadence:<0.5` does not find an actor nobody has measured.
+
+```text
+requests:>=1000 -cleared:yes         busy, and not cleared
+cadence:<0.1 paths:..3               a metronome on a handful of paths
+label:partner $or actor:198.51.100   named partners, or anything in that network
 ```
 
 ## The chips

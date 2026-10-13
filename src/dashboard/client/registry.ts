@@ -1,7 +1,7 @@
 import { $, byId, clear, el } from "./dom.js";
 import { SECTIONS } from "./boot.js";
 import { actorActions, isConfirming } from "./actions.js";
-import { matchesActor, parseActorFilter } from "../actor-filter.js";
+import { compileActorFilter } from "../actor-filter.js";
 import { app } from "./app.js";
 import { clockStamp, n } from "./format.js";
 import { getJson } from "./api.js";
@@ -269,7 +269,7 @@ export function drawActors(): void {
   let actors: ActorRow[];
   if (fromFeed) {
     // Filtered and paged here, because this list is built from rows the page already has.
-    const all = query === "" ? feedActors() : feedActors().filter((actor) => matchesActor(parseActorFilter(query), actor));
+    const all = query === "" ? feedActors() : feedActors().filter(compileActorFilter(query));
     state.actorsMatching = all.length;
     const size = state.actorsPageSize;
     // A page that no longer exists — the feed moved on under a deep page — lands on the

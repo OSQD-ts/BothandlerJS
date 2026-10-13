@@ -3,7 +3,8 @@ import { referenceLink } from "./reference.js";
 import { feedPage, goToFeedPage, hiddenCount, ingest, labelOf, matchingCount, matchingRows, refreshFrozenPage, resetPaging, setAllGroups, setSearch, setTimeframe, sortRows, state, toggleGroup } from "./store.js";
 import type { FeedGroup, FeedOrder } from "./store.js";
 import { deleteFilter, refreshSavedFilters, saveFilter, savedFilters } from "./saved.js";
-import { suggestFor } from "./query.js";
+import { suggest } from "@osqd/jql/text";
+import { ENTRY_VOCABULARY } from "./query.js";
 import { getJson } from "./api.js";
 import { fetchFeedEntries, refreshWindowCount } from "./window-count.js";
 import { renderPager } from "./pager.js";
@@ -254,7 +255,7 @@ function closeSuggestions(input: HTMLInputElement): void {
 
 function showSuggestions(input: HTMLInputElement): void {
   const caret = input.selectionStart ?? input.value.length;
-  const { options, from, to } = suggestFor(input.value, caret);
+  const { options, from, to } = suggest(input.value, caret, ENTRY_VOCABULARY);
   const list = suggestionList();
   if (options.length === 0 || input.value.slice(from, to) === options[0]) {
     closeSuggestions(input);
@@ -313,7 +314,7 @@ function initSuggestions(input: HTMLInputElement): void {
     if ((event.key === "Enter" || event.key === "Tab") && highlighted >= 0) {
       const chosen = items[highlighted]?.textContent ?? "";
       const caret = input.selectionStart ?? input.value.length;
-      const { from, to } = suggestFor(input.value, caret);
+      const { from, to } = suggest(input.value, caret, ENTRY_VOCABULARY);
       event.preventDefault();
       apply(input, chosen, from, to);
     }

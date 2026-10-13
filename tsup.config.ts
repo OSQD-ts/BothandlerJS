@@ -1,4 +1,30 @@
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { defineConfig } from "tsup";
+import type { Plugin } from "esbuild";
+
+// `@osqd/jql` is bundled rather than depended on, so the package keeps its zero runtime
+// dependencies — and its own sourcemaps come with it. esbuild follows the
+// `sourceMappingURL` in each file it bundles, so every map that bundles the dashboard (the
+// main entry and the element, each ESM and CJS) embedded JQL's entire TypeScript
+// source: a megabyte across the four, uncompressed, which alone took the tarball past the
+// 4 MB CI holds it to. This hands esbuild the same map without its `sourcesContent`. The mappings
+// stay, so a stack trace through JQL still names the line of its source it came from; only
+// the copy of that source is left out, and it lives in JQL's own repository.
+const jqlMapsWithoutSources: Plugin = {
+  name: "jql-maps-without-sources",
+  setup(build) {
+    build.onLoad({ filter: /[\\/]@osqd[\\/]jql[\\/]dist[\\/][^\\/]+\.c?js$/ }, async (args) => {
+      const code = await readFile(args.path, "utf8");
+      const link = /\/\/# sourceMappingURL=(\S+)\s*$/.exec(code);
+      if (link === null) return undefined;
+      const map = JSON.parse(await readFile(join(dirname(args.path), link[1] as string), "utf8")) as { sourcesContent?: unknown };
+      delete map.sourcesContent;
+      const inline = Buffer.from(JSON.stringify(map)).toString("base64");
+      return { contents: `${code.slice(0, link.index)}//# sourceMappingURL=data:application/json;base64,${inline}\n`, loader: "js" };
+    });
+  },
+};
 
 // Five entries, five import paths. `adapters` and `client` are split out of the main
 // bundle on purpose: an edge deployment that imports only the Fetch adapter should
@@ -27,4 +53,5 @@ export default defineConfig({
   target: "es2022",
   splitting: false,
   clean: true,
+  esbuildPlugins: [jqlMapsWithoutSources],
 });
