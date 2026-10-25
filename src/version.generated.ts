@@ -5,4 +5,4 @@
  */
 
 /* eslint-disable */
-export const VERSION = "0.12.4";
+export const VERSION = "0.13.0";
