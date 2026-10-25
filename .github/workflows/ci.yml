@@ -95,8 +95,19 @@ jobs:
             --include="*.js" --include="*.mjs" --include="*.cjs" \
             "^\s*(import|export)[^'\"]*from ['\"][^'\"]+['\"]" src bin \
             | grep -oE "['\"][^'\"]+['\"]$" | tr -d "\"'" \
-            | grep -vE '^(node:|\.)' | sort -u | grep .; then
+            | grep -vE '^(node:|\.|@osqd/jql(/|$))' | sort -u | grep .; then
             echo "::error::the above are imported at runtime but are neither node: builtins nor local files"
+            exit 1
+          fi
+
+      # @osqd/jql is the one package the sources import that is not node: or local, and it is
+      # allowed above only because it is a devDependency that tsup inlines into every bundle.
+      # This is the half that proves it: no built file imports or requires it.
+      - name: "@osqd/jql is bundled, not imported at runtime"
+        run: |
+          npm run build
+          if grep -rlE "(from|require\()\s*['\"]@osqd/jql" dist --include="*.js" --include="*.cjs" --include="*.mjs"; then
+            echo "::error::the files above import @osqd/jql at runtime; it must be bundled"
             exit 1
           fi
 
