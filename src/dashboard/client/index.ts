@@ -75,27 +75,35 @@ function initHeader(): void {
     box.appendChild(anchor);
   }
 
+  // The seven OSQD UI themes plus "auto", which follows the system's light or dark setting.
+  // "light" and "dark" are two of them, so a choice stored by the old two-way toggle still works.
   let stored: string | null = null;
   try {
     stored = localStorage.getItem("bothandler-dashboard-theme");
   } catch {
     stored = null;
   }
-  if (stored === "dark" || stored === "light") themeElement().setAttribute("data-theme", stored);
-  labelThemeButton();
-  // Following the system scheme, the button's destination changes when the system's does.
-  if (typeof matchMedia === "function") matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", labelThemeButton);
-  $("theme").addEventListener("click", () => {
-    const next = currentScheme() === "dark" ? "light" : "dark";
+  // Only a stored choice is applied. Otherwise the theme stays whatever is already there: the
+  // page's own "auto", or — embedded — whatever the host element was configured with.
+  const picker = $("theme") as HTMLSelectElement;
+  if (stored !== null && THEMES.includes(stored)) themeElement().setAttribute("data-theme", stored);
+  const current = themeElement().getAttribute("data-theme") ?? "auto";
+  picker.value = THEMES.includes(current) ? current : "auto";
+  // Following the system, the colours change when the system's setting does, and the charts
+  // read theirs from the CSS custom properties, so they have to be redrawn rather than restyled.
+  if (typeof matchMedia === "function") {
+    matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
+      if (themeElement().getAttribute("data-theme") === "auto") drawNow();
+    });
+  }
+  picker.addEventListener("change", () => {
+    const next = THEMES.includes(picker.value) ? picker.value : "auto";
     themeElement().setAttribute("data-theme", next);
-    labelThemeButton();
     try {
       localStorage.setItem("bothandler-dashboard-theme", next);
     } catch {
       /* private mode */
     }
-    // The charts read their colours from the CSS custom properties, so they have to be
-    // redrawn rather than restyled.
     drawNow();
   });
 
@@ -556,22 +564,8 @@ function settleScrollAnchoring(): void {
 }
 
 
-function currentScheme(): "dark" | "light" {
-  const explicit = themeElement().getAttribute("data-theme");
-  if (explicit === "dark" || explicit === "light") return explicit;
-  return typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
-/**
- * Named for where it goes, the way hackerpot's dashboard names it. "Theme" said a scheme would
- * change without saying to which, and a screen reader heard only that there was a switch.
- */
-function labelThemeButton(): void {
-  const button = $("theme");
-  const next = currentScheme() === "dark" ? "light" : "dark";
-  button.textContent = next === "dark" ? "Dark" : "Light";
-  button.setAttribute("aria-label", `Switch to the ${next} colour scheme`);
-}
+/** The OSQD UI kit's themes, in the order the picker lists them. */
+const THEMES: readonly string[] = ["auto", "light", "dark", "graphite", "midnight", "contrast", "paper", "slate"];
 
 /** Each chart's "table view" shows or hides the table its draw writes. */
 function initTableToggles(): void {

@@ -1,4 +1,5 @@
 import { CLIENT_SCRIPT } from "./client.generated.js";
+import { UI_CSS } from "./ui-css.generated.js";
 import { VERSION } from "../version.generated.js";
 import type { DashboardSections } from "./types.js";
 
@@ -131,86 +132,41 @@ export const DASHBOARD_CSS = String.raw`/* -------------------------------------
    series colour — the ink tokens below are all at least 4.5:1 on their surface.
 --------------------------------------------------------------------------- */
 :root, :host {
-  color-scheme: light;
-  --page: #f4f5f7;
-  --surface: #ffffff;
-  --surface-2: #fafafa;
-  --raised: #ffffff;
-  --line: #e4e6ea;
-  --line-soft: #eef0f3;
-  --ink: #0b0d12;
-  --ink-2: #3c414b;
-  --muted: #5f646e;
-  --s1: #2a78d6;
-  --s2: #eb6834;
-  --crit: #d03b3b;
-  /* The series blue carries white text at about 3.9:1, which is under the 4.5 floor —
-     fine for a bar, not for a label. Solid buttons get a darker blue of their own
-     rather than a lighter series colour, because the series colour is validated for
-     charts and moving it would move every chart with it. */
-  --accent-solid: #1b5fb0;
-  --good-text: #006300;
-  /* Darker than it looks like it needs to be, and measured rather than judged. This ink
-     appears on a 16%-amber chip, and that chip can sit on the open row's blue tint —
-     three layers, each lightening the background under the same text. At #8a5a00 the
-     suspected badge measured 3.52:1 there, under the 4.5 floor for 11px bold. */
-  --warn-text: #6d4700;
-  --crit-text: #b02525;
-  --info-text: #1c5cab;
-  --proven-text: #5b34a8;
-  --grid: #eceef1;
-  --shadow: 0 1px 2px rgba(11,13,18,.06), 0 1px 8px rgba(11,13,18,.04);
-  --focus: #2a78d6;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]), :host(:not([data-theme="light"])) {
-    color-scheme: dark;
-    --page: #0d0f12;
-    --surface: #16181d;
-    --surface-2: #1b1e24;
-    --raised: #1f232a;
-    --line: #272b33;
-    --line-soft: #202329;
-    --ink: #f2f4f7;
-    --ink-2: #c4cad3;
-    --muted: #8b929c;
-    --s1: #3987e5;
-    --s2: #d95926;
-    --crit: #d03b3b;
-    --accent-solid: #2364b4;
-    --good-text: #4ec97a;
-    --warn-text: #fab219;
-    --crit-text: #ff8078;
-    --info-text: #86b6ef;
-    --proven-text: #b3a4f5;
-    --grid: #23272e;
-    --shadow: none;
-    --focus: #86b6ef;
-  }
-}
-:root[data-theme="dark"], :host([data-theme="dark"]) {
-  color-scheme: dark;
-  --page: #0d0f12;
-  --surface: #16181d;
-  --surface-2: #1b1e24;
-  --raised: #1f232a;
-  --line: #272b33;
-  --line-soft: #202329;
-  --ink: #f2f4f7;
-  --ink-2: #c4cad3;
-  --muted: #8b929c;
-  --s1: #3987e5;
-  --s2: #d95926;
-  --crit: #d03b3b;
-  --accent-solid: #2364b4;
-  --good-text: #4ec97a;
-  --warn-text: #fab219;
-  --crit-text: #ff8078;
-  --info-text: #86b6ef;
-  --proven-text: #b3a4f5;
-  --grid: #23272e;
-  --shadow: none;
-  --focus: #86b6ef;
+  /* The colours come from the OSQD UI kit (UI_CSS, stamped ahead of these rules): seven themes,
+     each held by the kit's tests to 7:1 body text and 4.5:1 for every intent on every layer.
+     These names are this page's own vocabulary and the documented embedding API, so they stay —
+     as aliases of the kit's tokens, which is what makes every theme apply to them for free.
+     Deprecated as an override surface: set the kit's --oq-* tokens instead (see embedding.md).
+     Charts read --s1, --s2, --crit, --grid, --muted, --line, --ink and --proven-text at draw
+     time, so those stay plain aliases: a color-mix() would reach an SVG attribute unresolved. */
+  --page: var(--oq-bg);
+  --surface: var(--oq-surface);
+  --surface-2: var(--oq-raised);
+  --raised: var(--oq-raised);
+  --line: var(--oq-border);
+  --line-soft: color-mix(in srgb, var(--oq-border) 55%, var(--oq-surface));
+  --ink: var(--oq-text);
+  --ink-2: var(--oq-text-muted);
+  --muted: var(--oq-text-faint);
+  --s1: var(--oq-series-1);
+  --s2: var(--oq-series-2);
+  --crit: var(--oq-danger);
+  --accent: var(--oq-primary);
+  --accent-solid: var(--oq-primary);
+  --on-accent: var(--oq-on-primary);
+  /* The three status inks are mixed a little toward the body ink. They sit on their own tints
+     (pills, chips, the open row), where the kit's intent colours alone measured 3.86:1 (a block pill on a rule card) in the
+     dark theme; the mix moves them away from any background in every theme. In srgb, so the
+     computed value stays an rgb() colour — the contrast checks in the browser suite read it.
+     The charts read --crit, not these. */
+  --good-text: color-mix(in srgb, var(--oq-success) 72%, var(--oq-text));
+  --warn-text: color-mix(in srgb, var(--oq-warning) 72%, var(--oq-text));
+  --crit-text: color-mix(in srgb, var(--oq-danger) 72%, var(--oq-text));
+  --info-text: var(--oq-info);
+  --proven-text: var(--oq-secondary);
+  --grid: var(--oq-border);
+  --shadow: var(--oq-shadow-sm);
+  --focus: var(--oq-focus);
 }
 
 * { box-sizing: border-box; }
@@ -223,12 +179,12 @@ body { min-height: 100%; }
 html.settling { overflow-anchor: none; }
 body {
   margin: 0; background: var(--page); color: var(--ink);
-  font: 14px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: var(--oq-text-md)/var(--oq-line-height) var(--oq-font-sans);
   -webkit-font-smoothing: antialiased;
 }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.mono { font-family: var(--oq-font-mono); }
 .tnum { font-variant-numeric: tabular-nums; }
-:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--oq-radius-sm); }
 
 /* --- header -------------------------------------------------------------
    Two rows, and the split is the whole idea.
@@ -293,28 +249,34 @@ header {
 /* Secondary by definition, so it is the first thing to go when room runs out. */
 @media (max-width: 900px) { .facts { display: none; } }
 @media (max-width: 560px) { .brand span { display: none; } }
-button, .linkbtn {
-  font: inherit; font-size: 12.5px; line-height: 1.4; padding: 6px 11px; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--surface); color: var(--ink-2);
-  cursor: pointer; white-space: nowrap; text-decoration: none; display: inline-block;
+/* Buttons in the markup carry the UI kit's classes (oq-btn and its variants). The ones the
+   client builds in script get the same quiet button — outline, neutral, small — from this
+   rule, which is held at zero specificity with :where() so that a kit class, or any rule
+   below that names a class, always wins over it. */
+:where(button, .linkbtn) {
+  font: inherit; font-size: var(--oq-text-sm); line-height: 1.4; padding: 5px calc(var(--oq-space) * 2.5);
+  min-height: var(--oq-control-sm); border-radius: var(--oq-radius-md);
+  border: 1px solid var(--oq-border-strong); background: transparent; color: var(--oq-text);
+  font-weight: 500; cursor: pointer; white-space: nowrap; text-decoration: none; display: inline-block;
 }
-button:hover, .linkbtn:hover { background: var(--surface-2); color: var(--ink); border-color: color-mix(in srgb, var(--ink) 22%, var(--line)); }
-button[aria-pressed="true"] { background: color-mix(in srgb, var(--s1) 12%, var(--surface)); border-color: color-mix(in srgb, var(--s1) 45%, var(--line)); color: var(--ink); }
-button[disabled] { opacity: .5; cursor: default; }
+/* States inside :where() too — a :hover outside it would count as a class and beat the kit's. */
+@media (hover: hover) {
+  :where(button:hover, .linkbtn:hover) { background: var(--oq-hover); color: var(--ink); }
+}
+:where(button[aria-pressed="true"]), .oq-btn[aria-pressed="true"] { background: var(--oq-soft); border-color: color-mix(in srgb, var(--oq-primary) 45%, var(--oq-border-strong)); color: var(--ink); }
+:where(button[disabled]) { opacity: .5; cursor: default; }
+/* A link dressed as a button keeps the button's ink, not the kit's link colour and underline. */
+a.linkbtn { color: var(--oq-text); text-decoration: none; }
 
-.tabs { display: flex; gap: 2px; margin-bottom: -1px; flex: none; }
-.tab {
-  border: 0; background: none; border-bottom: 2px solid transparent; border-radius: 0;
-  padding: 9px 12px; font-size: 13px; color: var(--muted); font-weight: 500;
-}
-.tab:hover { background: none; color: var(--ink); }
-.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--s1); }
+/* The UI kit's tab strip (oq-tabs, oq-tab). The header draws the rule under it, so the
+   strip's own border is dropped and the selected tab's line sits on the header's. */
+.tabs.oq-tabs { border-bottom: 0; margin-bottom: -1px; flex: 0 1 auto; min-width: 0; }
 /* Five tabs are wider than a phone. Tightened first, and past that the strip scrolls on its
    own rather than pushing the whole document sideways. */
 @media (max-width: 640px) {
   .tabs { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
-  .tab { padding: 9px 7px; font-size: 12.5px; flex: none; }
+  .oq-tab { padding: 0 7px; flex: none; }
 }
 
 /* --- layout ------------------------------------------------------------- */
@@ -334,32 +296,30 @@ main { padding: 28px 20px 64px; max-width: 1680px; margin: 0 auto; }
    the top, and anchoring is exactly what keeps somebody's place while they read a screen
    that grows above them. */
 .tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); }
-.tile {
-  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
-  padding: 8px 12px 9px; box-shadow: var(--shadow);
-}
-.tile .v { font-size: 21px; font-weight: 620; letter-spacing: -.025em; line-height: 1.15; }
-.tile .k { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .055em; margin-top: 2px; font-weight: 560; }
+/* The UI kit's stat tile (oq-stat), tightened: nine of them share a row. */
+.tile.oq-stat { padding: 8px 12px 9px; gap: 1px; }
+.tile .v { font-size: var(--oq-text-xl); }
+.tile .k { text-transform: uppercase; letter-spacing: .06em; font-size: var(--oq-text-xs); font-weight: 600; }
 /* One line, always. These are grid items, so the tallest sets the height of all nine —
    two captions wrapping to a second line was costing every tile forty pixels of nothing.
    The full text stays available on hover rather than being cut from the page. */
-.tile .s { font-size: 11px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .s { font-size: var(--oq-text-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* A tile that navigates is a real button, so it arrives carrying the browser's own
    font, centring and chrome. Reset to match its inert neighbours exactly, then given
    back the one thing a div must not have: something that says it can be pressed. */
 button.tile {
-  font: inherit; color: inherit; text-align: left; width: 100%; display: block;
+  font: inherit; color: inherit; text-align: left; width: 100%; min-height: 0;
   cursor: pointer; appearance: none; transition: border-color .12s, box-shadow .12s;
 }
-button.tile:hover { border-color: var(--focus); }
+@media (hover: hover) { button.tile:hover { border-color: var(--focus); background: var(--oq-surface); } }
 /* The suggestion list under the search box, positioned against the search wrapper. */
 .search { position: relative; }
 .suggest {
   position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; margin: 0; padding: 4px;
   list-style: none; min-width: 220px; max-height: 260px; overflow-y: auto;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 9px; box-shadow: var(--shadow);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--oq-radius-lg); box-shadow: var(--shadow);
 }
-.suggest li { padding: 4px 9px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.suggest li { padding: 4px 9px; border-radius: var(--oq-radius-sm); cursor: pointer; font-size: 12px; }
 .suggest li[aria-selected="true"] { background: color-mix(in srgb, var(--focus) 18%, transparent); }
 
 /* Saved filters: a list of small removable things. Quiet, because it is not what
@@ -369,7 +329,7 @@ button.tile:hover { border-color: var(--focus); }
    { width: 100% } has the same specificity as input.saved-name and comes later in this
    sheet, so it won the tie and the box filled the bar. A selector that outranks it wins
    wherever the two happen to sit. */
-.saved input.saved-name { width: 18ch; flex: 0 0 auto; font: inherit; font-size: 12px; padding: 4px 8px; }
+.saved input.saved-name { width: 18ch; flex: 0 0 auto; }
 .saved-confirm { border-color: var(--accent); color: var(--accent); }
 /* Two open-ended bounds rather than a list of durations: "from the incident until now",
    "everything up to when it stopped" and "between these two moments" are the same control
@@ -379,21 +339,14 @@ button.tile:hover { border-color: var(--focus); }
    From/To narrow what this reader is looking at, this changes what the server keeps for
    everybody. */
 .retention { border-left: 1px solid var(--line); padding-left: 10px; }
-.retention select { font-size: 11.5px; }
+
 .timeframe label { display: inline-flex; align-items: center; gap: 4px; }
-.timeframe input {
-  font: inherit; font-size: 11.5px; padding: 2px 5px; border-radius: 6px;
-  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
-}
-.timeframe button { font: inherit; font-size: 11.5px; padding: 3px 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
-.saved select { font: inherit; font-size: 11.5px; padding: 3px 6px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); max-width: 170px; }
-.saved button { font: inherit; font-size: 11.5px; padding: 3px 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
-.saved button:hover { border-color: var(--focus); }
+.saved select { max-width: 170px; }
 
 /* The badge's companion: fetches the entries the stream skipped. Sits inline with the
    heading, so it is styled to read as part of the sentence rather than as a form control. */
 .load-skipped {
-  font: inherit; margin-left: 6px; padding: 1px 8px; border-radius: 6px; cursor: pointer;
+  font: inherit; margin-left: 6px; padding: 1px 8px; border-radius: var(--oq-radius-sm); cursor: pointer;
   border: 1px solid var(--warn-text); background: transparent; color: var(--warn-text);
 }
 .load-skipped:hover { background: color-mix(in srgb, var(--warn-text) 12%, transparent); }
@@ -403,7 +356,7 @@ button.tile:hover { border-color: var(--focus); }
 /* How the feed is arranged, beside what it is filtered to. */
 .arrange { display: flex; gap: 6px; align-items: center; }
 .arrange label { font-size: 11.5px; color: var(--muted); }
-.arrange select { font-size: 12px; padding: 4px 6px; }
+
 /* A group's heading row. It is a table heading rather than a styled cell, so a screen
    reader announces the rows under it as belonging to something. */
 tbody tr.grp th {
@@ -415,28 +368,23 @@ tbody tr.grp:first-child th { border-top: 0; }
 /* The heading is the control: a chevron on a row this wide is a small target, and there is
    nothing else on the row to click. */
 .grp-toggle {
-  display: inline-flex; align-items: baseline; gap: 8px; border: 0; background: none; border-radius: 6px;
+  display: inline-flex; align-items: baseline; gap: 8px; border: 0; background: none; border-radius: var(--oq-radius-sm);
   padding: 4px 8px; font: inherit; font-weight: 650; color: var(--ink-2); text-align: left;
 }
 .grp-toggle:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); border-color: transparent; }
 .grp-toggle .chev { color: var(--muted); width: 9px; display: inline-block; }
 .grp-only {
-  border: 0; background: none; padding: 3px 8px; font-size: 11px; color: var(--muted); border-radius: 6px; opacity: 0;
+  border: 0; background: none; padding: 3px 8px; font-size: 11px; color: var(--muted); border-radius: var(--oq-radius-sm); opacity: 0;
 }
 tr.grp:hover .grp-only, .grp-only:focus-visible { opacity: 1; }
 .grp-only:hover { background: color-mix(in srgb, var(--s1) 14%, transparent); color: var(--ink); border-color: transparent; }
-.grp-key { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.grp-key { font-family: var(--oq-font-mono); }
 .grp-n { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 
 .pager {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 9px 2px 2px; font-size: 12px; color: var(--muted);
 }
-.pager button {
-  font: inherit; padding: 4px 11px; border-radius: 7px;
-  border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer;
-}
-.pager button:hover:not(:disabled) { border-color: var(--focus); }
 .pager button:disabled { opacity: .45; cursor: default; }
 .pager .where { font-variant-numeric: tabular-nums; }
 /* A labelled actor leads with its name and keeps the key underneath: whoever named it did
@@ -450,10 +398,7 @@ td.who .sub { color: var(--muted); font-size: 11px; }
 .pager.pager-inline .size { margin-left: 0; }
 .pager .step { min-width: 30px; font-size: 15px; line-height: 1; padding: 3px 8px 5px; }
 .pager .size { display: flex; align-items: center; gap: 6px; margin-left: auto; }
-.pager .size select {
-  font: inherit; padding: 3px 6px; border-radius: 6px;
-  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
-}
+
 .pager .held { color: var(--warn-text); }
 .tile.good .v { color: var(--good-text); }
 .tile.warn .v { color: var(--warn-text); }
@@ -467,10 +412,11 @@ td.who .sub { color: var(--muted); font-size: 11px; }
    since they were written; the hard-coded offset above them was dead code. "clip"
    clips without creating a scrollport, so the headers stick to the viewport, under
    the page header, where they were always meant to. */
-.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow: clip; }
+/* Every panel is the UI kit's card (oq-card); this only keeps its content clipped to it. */
+.panel { overflow: clip; }
 .panel > h2 {
-  margin: 0; padding: 9px 14px; font-size: 11.5px; font-weight: 620; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .055em; border-bottom: 1px solid var(--line);
+  margin: 0; padding: 9px 14px; font-size: var(--oq-text-xs); font-weight: 600; color: var(--oq-text-faint);
+  text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid var(--oq-border);
   display: flex; align-items: center; gap: 10px;
 }
 .panel > h2 .sub { font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11.5px; margin-left: auto; }
@@ -556,12 +502,9 @@ td.who .sub { color: var(--muted); font-size: 11px; }
 /* --- feed table --------------------------------------------------------- */
 .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 15px; border-bottom: 1px solid var(--line); }
 .filters { display: flex; gap: 5px; flex-wrap: wrap; }
-.filters button { font-size: 11.5px; padding: 3px 10px; border-radius: 999px; }
-input[type="search"] {
-  font: inherit; font-size: 12.5px; padding: 5px 10px; min-width: 180px; flex: 1 1 180px;
-  border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); color: var(--ink);
-}
-input[type="search"]::placeholder { color: var(--muted); }
+/* Filter toggles read as the UI kit's chips: pill-shaped, pressed when on. */
+.filters button { font-size: var(--oq-text-sm); padding: 3px 10px; border-radius: 999px; }
+#search { min-width: 180px; flex: 1 1 180px; }
 
 /* separate with zero spacing rather than collapse, and the difference is the whole
    reason the column headers work in Safari.
@@ -585,15 +528,20 @@ input[type="search"]::placeholder { color: var(--muted); }
    edge and leaves half of it outside the box, while separating puts all of it inside.
    Measured rather than assumed, and the leftmost column starting two pixels earlier is
    both imperceptible and the more correct of the two. */
-table { width: 100%; border-collapse: separate; border-spacing: 0; }
-thead th {
-  /* Measured at runtime — see trackHeaderHeight(). The literal is the fallback for
-     the instant before the first measurement, and for the tab strip wrapping. */
-  position: sticky; top: var(--header-h, 91px); z-index: 2; background: var(--surface);
-  text-align: left; font-size: 11px; font-weight: 600; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .05em; padding: 9px 15px; border-bottom: 1px solid var(--line);
+/* Tables in the markup are the UI kit's (oq-table). Tables the client builds get the same
+   header and row rules here, at zero specificity so the kit's classes and the per-column
+   rules below win. */
+:where(table) { width: 100%; border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
+:where(thead th) {
+  background: var(--oq-raised); text-align: left; font-size: var(--oq-text-xs); font-weight: 600; color: var(--oq-text-faint);
+  text-transform: uppercase; letter-spacing: .06em; padding: 9px 15px; border-bottom: 1px solid var(--oq-border); white-space: nowrap;
 }
-tbody td { padding: 7px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+:where(tbody td) { padding: 7px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+/* Under the sticky page header rather than at the very top. Measured at runtime — see
+   trackHeaderHeight(); the literal is the fallback for the instant before the first
+   measurement, and for the tab strip wrapping. */
+main thead th, main .oq-table thead th { position: sticky; top: var(--header-h, 91px); z-index: 2; }
+main .oq-table td { vertical-align: top; }
 /* Narrow, quiet, and never the reason a row wraps: the time is for scanning down, not
    for reading across. */
 tbody td.when { color: var(--muted); font-size: 11.5px; white-space: nowrap; width: 1%; padding-right: 4px; }
@@ -624,13 +572,13 @@ tr.a-guard td.edge { border-left-color: var(--warn-text); }
    a convenience rather than a role; the keyboard gets this, which is one control with
    one name and one job. */
 .row-toggle {
-  border: 0; background: none; padding: 0; margin: 0; border-radius: 4px;
-  font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  border: 0; background: none; padding: 0; margin: 0; border-radius: var(--oq-radius-sm);
+  font: inherit; font-family: var(--oq-font-mono);
   font-size: 12.5px; color: inherit; text-align: left; cursor: pointer; display: block; width: 100%;
 }
 .row-toggle:hover { background: none; color: inherit; border-color: transparent; }
 .req .ua { color: var(--muted); font-size: 11.5px; display: block; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 64ch; }
-.req .ua a { color: inherit; text-decoration: none; border-bottom: 1px dotted color-mix(in srgb, var(--muted) 60%, transparent); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.req .ua a { color: inherit; text-decoration: none; border-bottom: 1px dotted color-mix(in srgb, var(--muted) 60%, transparent); font-family: var(--oq-font-mono); }
 .req .ua a:hover { color: var(--ink); border-bottom-color: var(--ink); }
 .num { text-align: right; }
 
@@ -651,13 +599,9 @@ tr.a-guard td.edge { border-left-color: var(--warn-text); }
   .feed-scroll { overflow-x: auto; }
 }
 
-.badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; border: 1px solid transparent; }
-.b-proven { background: color-mix(in srgb, var(--proven-text) 14%, transparent); color: var(--proven-text); }
-.b-suspected { background: color-mix(in srgb, var(--warn-text) 16%, transparent); color: var(--warn-text); }
-.b-human { background: color-mix(in srgb, var(--good-text) 14%, transparent); color: var(--good-text); }
-/* The secondary ink rather than the muted one, for the same reason as the weak tier:
-   muted ink on its own muted chip is 4.31:1 on a plain row and 3.70:1 on an open one. */
-.b-unknown { background: color-mix(in srgb, var(--muted) 14%, transparent); color: var(--ink-2); }
+/* Verdict badges are the UI kit's chips (BADGE_CHIP in client/outcome.ts): proof solid,
+   suspicion dashed. */
+.badge { font-weight: 600; }
 .act { font-weight: 600; font-size: 12.5px; }
 .act-allow { color: var(--good-text); }
 .act-mitigate { color: var(--warn-text); }
@@ -669,27 +613,17 @@ tr.a-guard td.edge { border-left-color: var(--warn-text); }
 tr.detail > td { background: var(--surface-2); padding: 14px 15px 16px; border-bottom: 1px solid var(--line); }
 .ev { display: grid; gap: 9px; }
 .ev-item { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 12px; align-items: start; font-size: 12.5px; }
-.tier { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 3px 6px; border-radius: 6px; text-align: center; }
-.t-certain { background: color-mix(in srgb, var(--proven-text) 15%, transparent); color: var(--proven-text); }
-.t-strong { background: color-mix(in srgb, var(--crit-text) 14%, transparent); color: var(--crit-text); }
-.t-moderate { background: color-mix(in srgb, var(--warn-text) 16%, transparent); color: var(--warn-text); }
-/* The secondary ink rather than the muted one: muted ink on its own muted chip clears
-   4.5:1 on the light surface and does not on the dark one, and this is 10px bold text
-   saying how much a piece of evidence is worth. It still reads as the quiet tier — the
-   only one with no hue — without being the one nobody can read at night. */
-.t-weak { background: color-mix(in srgb, var(--muted) 14%, transparent); color: var(--ink-2); }
-.ev-item.human .tier { background: color-mix(in srgb, var(--good-text) 14%, transparent); color: var(--good-text); }
+/* Evidence tiers are the UI kit's chips too (TIER_CHIP), squared off and centred in their column. */
+.tier { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; justify-content: center; }
+.ev-item.human .tier { --oq-c: var(--oq-success); --oq-on-c: var(--oq-on-success); }
 .ev-meta { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
 .basis { margin-top: 5px; color: var(--ink-2); font-size: 12px; border-left: 2px solid color-mix(in srgb, var(--proven-text) 40%, transparent); padding: 2px 0 2px 9px; }
 .detail-foot { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11.5px; display: flex; gap: 14px; flex-wrap: wrap; }
 
 /* --- bars --------------------------------------------------------------- */
-.bars { padding: 12px 15px 14px; display: grid; gap: 8px; }
-.bar { display: grid; grid-template-columns: minmax(0, 1fr) 46px; gap: 10px; align-items: center; font-size: 12.5px; }
-.bar .track { position: relative; height: 20px; background: color-mix(in srgb, var(--ink) 5%, transparent); border-radius: 6px; overflow: hidden; }
-.bar .fill { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--s1) 26%, transparent); border-radius: 0 5px 5px 0; }
-.bar .lbl { position: relative; padding: 0 8px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bar .v { text-align: right; color: var(--ink-2); font-size: 12px; }
+/* The UI kit's ranked bar list (oq-bars): label, bar, count. Only the panel padding is ours. */
+.bars { padding: 12px 15px 14px; }
+.oq-bars > .note { grid-column: 1 / -1; padding: 0; }
 
 /* --- charts ------------------------------------------------------------- */
 .chart { padding: 12px 15px 14px; position: relative; }
@@ -711,10 +645,10 @@ tr.detail > td { background: var(--surface-2); padding: 14px 15px 16px; border-b
 /* The marker for a runtime change. A line rather than a swatch, because it is an
    instant rather than a quantity. */
 .legend .mark { width: 2px; height: 11px; background: var(--proven-text); border-radius: 1px; flex: none; }
-.swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.swatch { width: 10px; height: 10px; border-radius: var(--oq-radius-sm); flex: none; }
 .tip {
   position: absolute; pointer-events: none; opacity: 0; transition: opacity .1s;
-  background: var(--raised); border: 1px solid var(--line); border-radius: 8px;
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--oq-radius-md);
   padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.16); z-index: 10; min-width: 128px;
 }
 .tip .t { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
@@ -734,14 +668,14 @@ tr.detail > td { background: var(--surface-2); padding: 14px 15px 16px; border-b
 .note p:last-child { margin: 0; }
 .note b { color: var(--ink); }
 .empty { padding: 40px 15px; text-align: center; color: var(--muted); font-size: 13px; }
-.empty code { background: color-mix(in srgb, var(--ink) 7%, transparent); padding: .15em .4em; border-radius: 5px; }
+.empty code { background: color-mix(in srgb, var(--ink) 7%, transparent); padding: .15em .4em; border-radius: var(--oq-radius-sm); }
 .detectors { padding: 4px 0; }
 .det { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; padding: 8px 15px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
 .det:last-child { border-bottom: 0; }
 .det .d { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
 .det .n { color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rules { padding: 10px 15px; display: flex; gap: 6px; flex-wrap: wrap; }
-.rules .chip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.rules .chip { font-family: var(--oq-font-mono); }
 [hidden] { display: none !important; }
 /* Present to a screen reader, absent to everyone else. Clipped rather than moved
    off-screen or hidden with display:none, both of which take an element out of the
@@ -753,7 +687,7 @@ tr.detail > td { background: var(--surface-2); padding: 14px 15px 16px; border-b
 .skip {
   position: absolute; left: 10px; top: 10px; z-index: 40;
   background: var(--raised); color: var(--ink); border: 1px solid var(--line);
-  border-radius: 8px; padding: 8px 13px; font-size: 12.5px; text-decoration: none;
+  border-radius: var(--oq-radius-md); padding: 8px 13px; font-size: 12.5px; text-decoration: none;
   /* Hidden by clipping rather than by being moved off-screen. An element parked
      above the viewport has its whole border box outside it, and Chrome's sequential
      focus navigation skips those — so a skip link done that way is invisible to the
@@ -771,9 +705,9 @@ tbody tr.row:focus-visible td.edge { border-left-color: var(--focus); }
 .search input[type="search"] { flex: 1 1 auto; padding-right: 26px; }
 .search kbd {
   position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
-  font: 500 10.5px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 500 10.5px/1 var(--oq-font-mono);
   color: var(--muted); background: color-mix(in srgb, var(--ink) 6%, transparent);
-  border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; pointer-events: none;
+  border: 1px solid var(--line); border-radius: var(--oq-radius-sm); padding: 3px 5px; pointer-events: none;
 }
 /* The hint is an affordance for a mouse user who has not found the key yet. Once the
    box is in use it is noise, and it sits where the clear button wants to be. */
@@ -787,7 +721,7 @@ tbody tr.row:focus-visible td.edge { border-left-color: var(--focus); }
 .kv dd { margin: 0; font-variant-numeric: tabular-nums; }
 
 .hdr { width: 100%; border-collapse: collapse; margin-top: 10px; }
-.hdr td { padding: 3px 8px 3px 0; vertical-align: top; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; border: 0; }
+.hdr td { padding: 3px 8px 3px 0; vertical-align: top; font-family: var(--oq-font-mono); font-size: 11.5px; border: 0; }
 .hdr td.n { color: var(--muted); white-space: nowrap; width: 1%; }
 .hdr td.v { overflow-wrap: anywhere; }
 .hdr td.v.red { color: var(--muted); font-style: italic; }
@@ -824,7 +758,9 @@ tbody tr.row:focus-visible td.edge { border-left-color: var(--focus); }
 .stat-duo { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
 .bars.cols { display: block; columns: 2 240px; column-gap: 28px; }
 .bars.cols.wide { columns: 4 260px; }
-.bars.cols > .bar { break-inside: avoid; margin-bottom: 8px; }
+/* In columns each row has to be a box of its own (the kit's rows are grid "contents"), laid
+   out the way the kit lays a row out: label, bar, count. */
+.bars.cols > .bar { break-inside: avoid; margin-bottom: 8px; display: grid; grid-template-columns: minmax(0, 18ch) minmax(40px, 1fr) max-content; gap: 10px; align-items: center; }
 .bars.cols > .bar:last-child { margin-bottom: 0; }
 /* A short list in two columns reads as two lists, so a half-width panel waits until there is
    enough to fill them. A full-width one never does: one column across the whole screen
@@ -869,13 +805,12 @@ tbody tr.row:focus-visible td.edge { border-left-color: var(--focus); }
 
 .editor { padding: 12px 15px 14px; display: grid; gap: 10px; }
 textarea {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5;
+  font-family: var(--oq-font-mono); font-size: 12px; line-height: 1.5;
   width: 100%; min-height: 320px; resize: vertical; padding: 11px 12px; tab-size: 2;
-  border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); color: var(--ink);
 }
 textarea[readonly] { opacity: .8; }
 .editor-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.result { font-size: 12.5px; border-radius: 9px; padding: 10px 12px; border: 1px solid var(--line); background: var(--surface-2); }
+.result { font-size: 12.5px; border-radius: var(--oq-radius-lg); padding: 10px 12px; border: 1px solid var(--line); background: var(--surface-2); }
 .result.ok { border-color: color-mix(in srgb, var(--good-text) 45%, var(--line)); }
 .result.bad { border-color: color-mix(in srgb, var(--crit-text) 45%, var(--line)); color: var(--crit-text); }
 .result.warn { border-color: color-mix(in srgb, var(--warn-text) 45%, var(--line)); }
@@ -887,11 +822,7 @@ textarea[readonly] { opacity: .8; }
 .diff .to { font-weight: 600; }
 .diff .to.deny { color: var(--crit-text); }
 .diff .to.allow { color: var(--good-text); }
-pre.code {
-  margin: 0; padding: 11px 12px; border-radius: 9px; border: 1px solid var(--line);
-  background: var(--surface-2); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11.5px; line-height: 1.5; overflow-x: auto; white-space: pre; color: var(--ink-2);
-}
+pre.code { font-size: 11.5px; white-space: pre; color: var(--ink-2); }
 .notice { display: grid; grid-template-columns: 74px 1fr; gap: 10px; padding: 8px 15px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
 .notice:last-child { border-bottom: 0; }
 /* Repeats are counted on the row rather than drawn again. The count sits in the time
@@ -904,24 +835,25 @@ pre.code {
 .notice.error .tag { color: var(--crit-text); font-weight: 600; }
 .dead { color: var(--muted); }
 .dead .lbl { text-decoration: line-through; }
+.tab-badge { margin-left: 6px; }
 .pill { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); margin-left: 6px; }
 .actor-head { display: flex; align-items: center; gap: 10px; padding: 12px 15px; border-bottom: 1px solid var(--line); }
-.actor-head .who { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 600; }
+.actor-head .who { font-family: var(--oq-font-mono); font-size: 13px; font-weight: 600; }
 /* --- the rule editor ----------------------------------------------------- */
 .bar-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 10px 15px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .bar-actions + .bar-actions, .rulelist + .bar-actions { border-bottom: 0; border-top: 1px solid var(--line); }
 .bar-actions .grow { flex: 1 1 auto; }
-button.primary { background: var(--accent-solid); border-color: var(--accent-solid); color: #fff; font-weight: 560; }
-button.primary:hover { background: color-mix(in srgb, var(--accent-solid) 86%, #000); border-color: transparent; color: #fff; }
-button.danger { color: var(--crit-text); }
-button.danger:hover { border-color: color-mix(in srgb, var(--crit-text) 50%, var(--line)); }
+/* .primary and .danger buttons made in script, in the kit's colours. Static ones carry
+   oq-btn / oq-danger themselves. */
+button.primary:not(.oq-btn) { background: var(--oq-primary); border-color: var(--oq-primary); color: var(--oq-on-primary); font-weight: 560; }
+button.danger:not(.oq-btn) { color: var(--crit-text); }
 button.icon { padding: 3px 8px; font-size: 12px; line-height: 1.2; }
 .dirty { font-size: 11.5px; color: var(--warn-text); font-weight: 560; display: inline-flex; align-items: center; gap: 6px; }
 .dirty::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--warn-text); }
 
 .rulelist { display: grid; gap: 12px; padding: 14px 15px 16px; }
 .rule {
-  border: 1px solid var(--line); border-radius: 11px; background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: var(--oq-radius-lg); background: var(--surface-2);
   transition: border-color .12s, box-shadow .12s;
 }
 .rule:focus-within { border-color: color-mix(in srgb, var(--s1) 55%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--s1) 12%, transparent); }
@@ -938,9 +870,9 @@ button.icon { padding: 3px 8px; font-size: 12px; line-height: 1.2; }
 .rule-summary .t { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink-2); white-space: nowrap; }
 .rule-summary .none { font-size: 11px; color: var(--muted); font-style: italic; }
 .act-pill { font-size: 11px; font-weight: 620; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
-.act-pill.deny { background: color-mix(in srgb, var(--crit-text) 14%, transparent); color: var(--crit-text); }
-.act-pill.mitigate { background: color-mix(in srgb, var(--warn-text) 16%, transparent); color: var(--warn-text); }
-.act-pill.allow { background: color-mix(in srgb, var(--good-text) 14%, transparent); color: var(--good-text); }
+.act-pill.deny { background: color-mix(in srgb, var(--crit-text) 9%, transparent); color: var(--crit-text); }
+.act-pill.mitigate { background: color-mix(in srgb, var(--warn-text) 10%, transparent); color: var(--warn-text); }
+.act-pill.allow { background: color-mix(in srgb, var(--good-text) 9%, transparent); color: var(--good-text); }
 .act-pill.tag { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink-2); }
 .rule-body { padding: 11px 12px 13px; display: grid; gap: 11px; }
 .rule.collapsed .rule-body { display: none; }
@@ -949,15 +881,19 @@ button.icon { padding: 3px 8px; font-size: 12px; line-height: 1.2; }
 .field-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .hint { color: var(--muted); font-size: 11px; }
 
-input[type="text"], input[type="number"], select {
-  font: inherit; font-size: 12.5px; padding: 5px 9px; border-radius: 7px;
-  border: 1px solid var(--line); background: var(--surface); color: var(--ink); min-width: 0;
+/* Fields in the markup are the UI kit's (oq-input, oq-select). Fields the client builds get
+   the same look here, at zero specificity. */
+:where(input[type="text"], input[type="number"], input[type="search"], input[type="datetime-local"], select) {
+  font: inherit; font-size: var(--oq-text-sm); padding: 0 9px; height: var(--oq-control-sm); border-radius: var(--oq-radius-md);
+  border: 1px solid var(--oq-border-strong); background: var(--oq-surface); color: var(--oq-text); min-width: 0;
 }
-input[type="text"] { width: 100%; }
-input[type="number"] { width: 92px; }
-select { cursor: pointer; }
-input::placeholder { color: color-mix(in srgb, var(--muted) 80%, transparent); }
-.mono-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+:where(input[type="text"]) { width: 100%; }
+:where(input[type="number"]) { width: 92px; }
+:where(select) { cursor: pointer; }
+input::placeholder { color: var(--oq-text-faint); }
+.mono-input { font-family: var(--oq-font-mono); }
+.oq-input, .oq-select { width: auto; }
+input.oq-input[type="text"] { width: 100%; }
 
 .chips-select { display: flex; gap: 4px; flex-wrap: wrap; }
 .chips-select button {
@@ -966,7 +902,7 @@ input::placeholder { color: color-mix(in srgb, var(--muted) 80%, transparent); }
 }
 .chips-select button[aria-pressed="true"] { background: color-mix(in srgb, var(--s1) 14%, var(--surface)); border-color: color-mix(in srgb, var(--s1) 50%, var(--line)); color: var(--ink); font-weight: 560; }
 
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--oq-radius-md); overflow: hidden; }
 .seg button { border: 0; border-radius: 0; padding: 4px 10px; font-size: 11.5px; background: var(--surface); }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button[aria-pressed="true"] { background: color-mix(in srgb, var(--s1) 14%, var(--surface)); color: var(--ink); font-weight: 560; }
@@ -976,7 +912,7 @@ input::placeholder { color: color-mix(in srgb, var(--muted) 80%, transparent); }
 /* --- the actors table, the tester and the range sets --------------------- */
 .warn-text { color: var(--warn-text); }
 #actor-rows td { font-size: 12.5px; }
-#actor-rows td.who { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+#actor-rows td.who { font-family: var(--oq-font-mono); overflow-wrap: anywhere; }
 #actor-rows td.acts { text-align: right; white-space: nowrap; }
 /* The tracked/shown toggle above the actors table. A segmented pair rather than a
    dropdown: there are two answers and both are worth reading at a glance. */
@@ -1009,7 +945,7 @@ input::placeholder { color: color-mix(in srgb, var(--muted) 80%, transparent); }
    whatever it was in — which is what put Save and Cancel outside the panel. */
 input.label-input {
   font: inherit; font-size: 11px; padding: 3px 8px; width: 15ch; flex: 0 0 auto; box-sizing: border-box;
-  color: var(--ink); background: var(--surface); border: 1px solid var(--accent); border-radius: 6px;
+  color: var(--ink); background: var(--surface); border: 1px solid var(--accent); border-radius: var(--oq-radius-sm);
 }
 input.label-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -1044,7 +980,7 @@ input.label-input:focus { outline: 2px solid var(--accent); outline-offset: 1px;
 .rangeset h3 { margin: 0; font-size: 12.5px; font-weight: 620; display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; }
 .rs-toggle {
   display: inline-flex; align-items: baseline; gap: 7px; min-width: 0; border: 0; background: none;
-  padding: 2px 6px 2px 2px; margin-left: -2px; font: inherit; color: var(--ink); border-radius: 6px;
+  padding: 2px 6px 2px 2px; margin-left: -2px; font: inherit; color: var(--ink); border-radius: var(--oq-radius-sm);
 }
 .rs-toggle:hover { background: var(--surface-2); color: var(--ink); border-color: transparent; }
 .rs-toggle .chev { color: var(--muted); display: inline-block; width: 9px; }
@@ -1052,7 +988,7 @@ input.label-input:focus { outline: 2px solid var(--accent); outline-offset: 1px;
 .rs-count { font-weight: 400; color: var(--muted); font-size: 11.5px; }
 .rs-split { margin-left: auto; font-weight: 400; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .rs-preview {
-  margin: 3px 0 0 18px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px;
+  margin: 3px 0 0 18px; font-family: var(--oq-font-mono); font-size: 11px;
   color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .rs-body { display: grid; gap: 7px; margin-top: 7px; }
@@ -1062,13 +998,13 @@ input.label-input:focus { outline: 2px solid var(--accent); outline-offset: 1px;
 .cidrs.long {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 4px; align-content: start;
   max-height: 236px; overflow-y: auto; overscroll-behavior: contain; padding: 6px;
-  border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface-2);
+  border: 1px solid var(--line-soft); border-radius: var(--oq-radius-md); background: var(--surface-2);
 }
 .cidr {
-  display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-family: var(--oq-font-mono);
   font-size: 11px; background: color-mix(in srgb, var(--ink) 6%, transparent); border-radius: 999px; padding: 2px 4px 2px 9px;
 }
-.cidrs.long .cidr { justify-content: space-between; border-radius: 6px; }
+.cidrs.long .cidr { justify-content: space-between; border-radius: var(--oq-radius-sm); }
 .cidr-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cidr button { border: 0; background: none; padding: 0 4px; font-size: 12px; line-height: 1; color: var(--muted); border-radius: 999px; }
 .cidr button:hover { background: none; color: var(--crit-text); }
@@ -1088,22 +1024,22 @@ input.label-input:focus { outline: 2px solid var(--accent); outline-offset: 1px;
 .field-stack { display: grid; gap: 3px; min-width: 0; }
 .field-stack > input, .field-stack > textarea { width: 100%; box-sizing: border-box; }
 textarea.challenge-text { min-height: 0; resize: vertical; padding: 6px 9px; font-family: inherit; font-size: 12.5px; }
-textarea.challenge-text.mono-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
-input[type="color"] { width: 38px; height: 30px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); cursor: pointer; flex: none; }
+textarea.challenge-text.mono-input { font-family: var(--oq-font-mono); font-size: 12px; }
+input[type="color"] { width: 38px; height: 30px; padding: 2px; border: 1px solid var(--line); border-radius: var(--oq-radius-md); background: var(--surface); cursor: pointer; flex: none; }
 /* The swatch and its hex value are one control, so they share a line; the general rule
    that stretches a text box across its column would otherwise push the value under it. */
 .field-stack .field-row { flex-wrap: nowrap; }
 .field-stack .field-row input.colour-text { width: 96px; flex: none; }
 #challenge-status { padding-top: 12px; }
 .challenge-group > button { justify-self: start; }
-.translation { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--surface-2); }
+.translation { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: var(--oq-radius-lg); background: var(--surface-2); }
 .translation-head { display: flex; gap: 8px; align-items: center; }
 .translation-head input.translation-tag { width: 110px; flex: none; }
 .translation-head { justify-content: space-between; }
 .inline-label { font-size: 12px; color: var(--muted); }
 .challenge-frame-wrap { padding: 12px 15px 4px; }
-#challenge-frame { display: block; width: 100%; height: 520px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
-.challenge-outcome { margin: 0 15px 14px; padding: 9px 12px; border-radius: 8px; font-size: 12.5px; color: var(--ink-2); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+#challenge-frame { display: block; width: 100%; height: 520px; border: 1px solid var(--line); border-radius: var(--oq-radius-lg); background: var(--surface-2); }
+.challenge-outcome { margin: 0 15px 14px; padding: 9px 12px; border-radius: var(--oq-radius-md); font-size: 12.5px; color: var(--ink-2); background: color-mix(in srgb, var(--ink) 5%, transparent); }
 .challenge-outcome:empty { display: none; }
 .challenge-outcome.ok { color: var(--good-text); background: color-mix(in srgb, var(--good-text) 12%, transparent); }
 .challenge-outcome.bad { color: var(--crit-text); background: color-mix(in srgb, var(--crit-text) 12%, transparent); }
@@ -1125,7 +1061,7 @@ input[type="color"] { width: 38px; height: 30px; padding: 2px; border: 1px solid
 }
 .ref-item:hover { background: var(--surface-2); border-color: transparent; }
 .ref-item[aria-current="true"] { background: color-mix(in srgb, var(--s1) 12%, var(--surface)); color: var(--ink); box-shadow: inset 2px 0 0 var(--s1); }
-.ref-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ref-id { font-family: var(--oq-font-mono); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ref-tag { font-size: 10.5px; color: var(--good-text); }
 .ref-article header { padding: 18px 22px 14px; border-bottom: 1px solid var(--line-soft); }
 .ref-kicker { font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 4px; }
@@ -1141,8 +1077,8 @@ input[type="color"] { width: 38px; height: 30px; padding: 2px; border: 1px solid
 .ref-body h3 { margin: 22px 0 4px; font-size: 13.5px; font-weight: 650; }
 .ref-body ul { margin: 8px 0; padding-left: 20px; }
 .ref-body li { margin: 3px 0; }
-.ref-body code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em; background: color-mix(in srgb, var(--ink) 7%, transparent); padding: 1px 5px; border-radius: 5px; }
-.ref-body pre { background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px 13px; overflow-x: auto; font-size: 12px; line-height: 1.55; }
+.ref-body code { font-family: var(--oq-font-mono); font-size: .88em; background: color-mix(in srgb, var(--ink) 7%, transparent); padding: 1px 5px; border-radius: var(--oq-radius-sm); }
+.ref-body pre { background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: var(--oq-radius-md); padding: 10px 13px; overflow-x: auto; font-size: 12px; line-height: 1.55; }
 .ref-body pre code { background: none; padding: 0; font-size: inherit; }
 .ref-table { overflow-x: auto; margin: 10px 0; }
 .ref-table table { border-collapse: collapse; font-size: 12.5px; line-height: 1.45; }
@@ -1160,19 +1096,8 @@ input[type="color"] { width: 38px; height: 30px; padding: 2px; border: 1px solid
 .ref-body .ref-link { border-bottom-color: color-mix(in srgb, var(--s1) 70%, transparent); }
 button.act-pill { border: 0; line-height: inherit; }
 button.act-pill:hover { text-decoration: underline; }
-.toasts { position: fixed; right: 18px; bottom: 18px; z-index: 60; display: grid; gap: 8px; max-width: 380px; }
-.toast {
-  background: var(--raised); border: 1px solid var(--line); border-left: 3px solid var(--s1);
-  border-radius: 9px; padding: 10px 12px; font-size: 12.5px; box-shadow: 0 6px 22px rgba(0,0,0,.18);
-  animation: toast-in .16s ease-out;
-}
-.toast.ok { border-left-color: var(--good-text); }
-.toast.bad { border-left-color: var(--crit-text); }
-.toast.warn { border-left-color: var(--warn-text); }
-.toast b { display: block; margin-bottom: 2px; }
-.toast span { color: var(--muted); }
-@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce) { .toast { animation: none; } * { transition: none !important; } }
+/* The UI kit's toast region and toasts (oq-toasts, oq-toast). */
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
 /* Forced colours — Windows High Contrast and the like.
    The browser repaints text, backgrounds and borders from the user's palette but leaves
@@ -1194,7 +1119,7 @@ button.act-pill:hover { text-decoration: underline; }
  * render it *into* differs.
  */
 export const DASHBOARD_MARKUP = String.raw`
-<a class="skip" href="#view-live">Skip to the feed</a>
+<a class="skip oq-skip-link" href="#view-live">Skip to the feed</a>
 
 <header>
   <div class="head-row">
@@ -1203,19 +1128,28 @@ export const DASHBOARD_MARKUP = String.raw`
     <div class="grow"></div>
     <nav class="head-links" id="links" aria-label="Related"></nav>
     <div class="head-actions">
-      <button id="theme" type="button">Theme</button>
-      <button id="pause" aria-pressed="false">Pause</button>
-      <button id="reset" class="danger" hidden>Reset</button>
+      <select id="theme" class="oq-select oq-sm" aria-label="Colour theme">
+        <option value="auto">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+        <option value="graphite">Graphite</option>
+        <option value="midnight">Midnight</option>
+        <option value="contrast">Contrast</option>
+        <option value="paper">Paper</option>
+        <option value="slate">Slate</option>
+      </select>
+      <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="pause" aria-pressed="false">Pause</button>
+      <button id="reset" class="danger oq-btn oq-btn--outline oq-danger oq-sm" hidden>Reset</button>
     </div>
   </div>
   <div class="nav-row">
-    <div class="tabs" role="tablist" aria-label="Dashboard views">
-      <button class="tab" id="tab-live" role="tab" aria-selected="true" aria-controls="view-live">Live feed</button>
-      <button class="tab" id="tab-actors" role="tab" aria-selected="false" aria-controls="view-actors">Actors</button>
-      <button class="tab" id="tab-stats" role="tab" aria-selected="false" aria-controls="view-stats">Statistics</button>
-      <button class="tab" id="tab-policy" role="tab" aria-selected="false" aria-controls="view-policy">Policy<span id="notice-badge" class="pill" hidden></span></button>
-      <button class="tab" id="tab-challenge" role="tab" aria-selected="false" aria-controls="view-challenge">Challenge</button>
-      <button class="tab" id="tab-reference" role="tab" aria-selected="false" aria-controls="view-reference">Reference</button>
+    <div class="tabs oq-tabs" role="tablist" aria-label="Dashboard views">
+      <button class="tab oq-tab" id="tab-live" role="tab" aria-selected="true" aria-controls="view-live">Live feed</button>
+      <button class="tab oq-tab" id="tab-actors" role="tab" aria-selected="false" aria-controls="view-actors">Actors</button>
+      <button class="tab oq-tab" id="tab-stats" role="tab" aria-selected="false" aria-controls="view-stats">Statistics</button>
+      <button class="tab oq-tab" id="tab-policy" role="tab" aria-selected="false" aria-controls="view-policy">Policy<span id="notice-badge" class="tab-badge oq-badge oq-neutral" hidden></span></button>
+      <button class="tab oq-tab" id="tab-challenge" role="tab" aria-selected="false" aria-controls="view-challenge">Challenge</button>
+      <button class="tab oq-tab" id="tab-reference" role="tab" aria-selected="false" aria-controls="view-reference">Reference</button>
     </div>
     <div class="facts" id="chips"></div>
     <div class="peers" id="peers"></div>
@@ -1226,44 +1160,44 @@ export const DASHBOARD_MARKUP = String.raw`
   <section class="tiles" id="tiles"></section>
 
   <div id="view-live" role="tabpanel" aria-labelledby="tab-live" class="stack">
-    <section class="panel" id="actor-panel" hidden>
+    <section class="panel oq-card" id="actor-panel" hidden>
       <div class="actor-head">
         <span class="actor-label" id="actor-label" hidden></span>
         <span class="who" id="actor-key"></span>
         <span class="grow"></span>
-        <button id="actor-close">Close</button>
+        <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="actor-close">Close</button>
       </div>
       <div class="two">
-        <dl class="kv" id="actor-stats"></dl>
-        <div class="bars" id="actor-mix"></div>
+        <dl class="kv oq-dl" id="actor-stats"></dl>
+        <div class="bars oq-bars" id="actor-mix"></div>
       </div>
       <div class="bar-actions" id="actor-actions"></div>
     </section>
 
     <div class="two">
-      <section class="panel feed-panel">
+      <section class="panel feed-panel oq-card">
         <h2>Requests <span class="sub" id="feed-count"></span><span class="sub win" id="feed-window"></span><span class="sub warn-text" id="feed-skipped" hidden></span><button class="sub load-skipped" id="feed-load-skipped" type="button" hidden>Load them</button><span class="sub" id="feed-hidden" hidden></span><button class="sub load-skipped" id="feed-show-hidden" type="button" aria-pressed="false" hidden>Show</button></h2>
         <div class="toolbar">
           <div class="filters" id="filters"></div>
           <div class="search">
-            <input type="search" id="search" placeholder="path:/api  actor:203.0.113.4  -rule:allow-crawlers" spellcheck="false" autocomplete="off"
+            <input class="oq-input oq-sm" type="search" id="search" placeholder="path:/api  actor:203.0.113.4  -rule:allow-crawlers" spellcheck="false" autocomplete="off"
                    role="combobox" aria-expanded="false" aria-controls="search-suggest" aria-autocomplete="list">
-            <kbd aria-hidden="true">/</kbd>
+            <kbd class="oq-kbd" aria-hidden="true">/</kbd>
             <ul class="suggest" id="search-suggest" role="listbox" aria-label="Filter suggestions" hidden></ul>
           </div>
           <div class="saved" id="saved-filters"></div>
           <div class="timeframe" id="timeframe">
-            <label>From <input type="datetime-local" id="from-at" step="1"></label>
-            <label>To <input type="datetime-local" id="to-at" step="1"></label>
-            <button type="button" id="timeframe-clear" hidden>Clear</button>
+            <label>From <input class="oq-input oq-sm" type="datetime-local" id="from-at" step="1"></label>
+            <label>To <input class="oq-input oq-sm" type="datetime-local" id="to-at" step="1"></label>
+            <button class="oq-btn oq-btn--outline oq-neutral oq-sm" type="button" id="timeframe-clear" hidden>Clear</button>
           </div>
           <div class="timeframe retention" id="retention" hidden>
             <label for="retention-pick">Keep</label>
-            <select id="retention-pick"></select>
+            <select class="oq-select oq-sm" id="retention-pick"></select>
           </div>
           <div class="arrange">
             <label for="feed-order">Order</label>
-            <select id="feed-order">
+            <select class="oq-select oq-sm" id="feed-order">
               <option value="newest">Newest first</option>
               <option value="oldest">Oldest first</option>
               <option value="score-high">Highest score</option>
@@ -1272,7 +1206,7 @@ export const DASHBOARD_MARKUP = String.raw`
               <option value="fastest">Fastest</option>
             </select>
             <label for="feed-group">Group</label>
-            <select id="feed-group">
+            <select class="oq-select oq-sm" id="feed-group">
               <option value="none">No grouping</option>
               <option value="actor">Actor</option>
               <option value="verdict">Verdict</option>
@@ -1281,13 +1215,13 @@ export const DASHBOARD_MARKUP = String.raw`
               <option value="rule">Rule</option>
               <option value="path">Path</option>
             </select>
-            <button id="feed-roll" type="button" aria-pressed="false" hidden>Roll up all</button>
+            <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="feed-roll" type="button" aria-pressed="false" hidden>Roll up all</button>
           </div>
-          <button id="feed-export" title="Download every request matching this filter as replay JSONL">Export</button>
+          <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="feed-export" title="Download every request matching this filter as replay JSONL">Export</button>
           <div class="pager pager-inline" id="feed-pager-top" hidden></div>
         </div>
         <div class="feed-scroll">
-        <table>
+        <table class="oq-table oq-table--hover">
           <thead>
             <tr>
               <th class="num">Time</th><th>Request</th><th>Verdict</th><th class="num">Score</th><th>Action</th><th class="num">ms</th>
@@ -1301,29 +1235,29 @@ export const DASHBOARD_MARKUP = String.raw`
       </section>
 
       <div class="stack">
-        <section class="panel">
+        <section class="panel oq-card">
           <h2>Detectors firing <span class="sub win"></span></h2>
-          <div class="bars" id="live-detectors"></div>
+          <div class="bars oq-bars" id="live-detectors"></div>
         </section>
-        <section class="panel" id="live-actors-panel">
+        <section class="panel oq-card" id="live-actors-panel">
           <h2>Busiest actors <span class="sub win"></span></h2>
-          <div class="bars" id="live-actors"></div>
+          <div class="bars oq-bars" id="live-actors"></div>
         </section>
-        <section class="panel" id="tester-panel">
+        <section class="panel oq-card" id="tester-panel">
           <h2>Test a request <span class="sub">nothing is recorded</span></h2>
           <div class="editor">
-            <textarea id="test-input" rows="4" spellcheck="false" autocomplete="off" aria-label="A User-Agent, a curl command, or a block of request headers"
+            <textarea class="oq-textarea" id="test-input" rows="4" spellcheck="false" autocomplete="off" aria-label="A User-Agent, a curl command, or a block of request headers"
               placeholder="Paste a User-Agent, a curl command, or a block of request headers"></textarea>
             <div class="field-row">
-              <input type="text" id="test-ip" class="mono-input" placeholder="client address (optional)" aria-label="Client address">
-              <input type="text" id="test-url" class="mono-input" placeholder="/path (optional)" aria-label="Path">
-              <button id="test-run" class="primary">Assess</button>
+              <input type="text" id="test-ip" class="mono-input oq-input oq-sm" placeholder="client address (optional)" aria-label="Client address">
+              <input type="text" id="test-url" class="mono-input oq-input oq-sm" placeholder="/path (optional)" aria-label="Path">
+              <button id="test-run" class="primary oq-btn oq-sm">Assess</button>
             </div>
             <div class="result" id="test-result" hidden></div>
           </div>
         </section>
 
-        <section class="panel" id="evidence-legend">
+        <section class="panel oq-card" id="evidence-legend">
           <h2>Reading this</h2>
           <div class="note">
             <p><b>Purple</b> evidence is <em>proven</em>: a self-declaration, a refuted
@@ -1340,24 +1274,24 @@ export const DASHBOARD_MARKUP = String.raw`
   </div>
 
   <div id="view-actors" role="tabpanel" aria-labelledby="tab-actors" class="stack" hidden>
-    <section class="panel">
+    <section class="panel oq-card">
       <h2>Actors in the registry <span class="sub" id="actors-count"></span></h2>
       <div class="note" id="actors-note">Everyone the engine is currently remembering, busiest first — a far larger
          population than the feed's ring, which holds requests rather than clients. This is
          what <code>cadence</code>, <code>crawl-breadth</code> and <code>rate-anomaly</code> are reading.</div>
       <div class="scope" role="group" aria-label="Which actors to list">
-        <button id="actors-scope-tracked" class="on" aria-pressed="true"
+        <button id="actors-scope-tracked" class="on oq-btn oq-btn--outline oq-neutral oq-sm" aria-pressed="true"
           title="Every client the engine is remembering, busiest first">Tracked</button>
-        <button id="actors-scope-feed" aria-pressed="false"
+        <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="actors-scope-feed" aria-pressed="false"
           title="Only the clients that appear in the feed you are looking at, after its filter">Shown in the feed</button>
       </div>
       <div class="search actors-search">
-        <input type="search" id="actors-search" placeholder="actor:203.0.113.4  label:office  requests:&gt;100  -cleared:yes" spellcheck="false" autocomplete="off"
+        <input class="oq-input oq-sm" type="search" id="actors-search" placeholder="actor:203.0.113.4  label:office  requests:&gt;100  -cleared:yes" spellcheck="false" autocomplete="off"
           aria-label="Filter the actors">
       </div>
       <div class="pager pager-top" id="actors-pager-top" hidden></div>
       <div class="feed-scroll">
-        <table>
+        <table class="oq-table oq-table--hover">
           <thead>
             <tr>
               <th>Actor</th><th class="num">Requests</th><th class="num">Per min</th><th class="num">Paths</th>
@@ -1379,14 +1313,14 @@ export const DASHBOARD_MARKUP = String.raw`
         <p>What arrived over time, and where the scored requests landed against the threshold.</p>
       </div>
       <div class="stat-pair">
-        <section class="panel">
+        <section class="panel oq-card">
           <h2>Traffic <span class="range" id="traffic-range"></span><span class="sub" id="traffic-window"></span><button type="button" class="tabletoggle" data-table="traffic-table">table view</button></h2>
           <div class="chart" id="traffic-chart"><svg id="traffic" role="img" aria-labelledby="traffic-alt"></svg><div class="tip" id="traffic-tip"></div></div>
           <p class="sr-only" id="traffic-alt"></p>
           <div class="legend" id="traffic-legend"></div>
           <div class="datatable" id="traffic-table" hidden></div>
         </section>
-        <section class="panel">
+        <section class="panel oq-card">
           <h2>Score distribution <span class="range" id="score-scope"></span><span class="sub" id="score-window"></span><button type="button" class="tabletoggle" data-table="score-table">table view</button></h2>
           <div class="chart" id="score-chart"><svg id="scores" role="img" aria-labelledby="score-alt"></svg><div class="tip" id="score-tip"></div></div>
           <p class="sr-only" id="score-alt"></p>
@@ -1403,11 +1337,11 @@ export const DASHBOARD_MARKUP = String.raw`
       </div>
       <div class="stat-rows">
         <div class="stat-trio">
-          <section class="panel"><h2>Verdicts <span class="sub">since start</span></h2><div class="bars" id="stat-verdicts"></div></section>
-          <section class="panel"><h2>Actions taken <span class="sub">since start</span></h2><div class="bars" id="stat-actions"></div></section>
-          <section class="panel"><h2>Bot classes <span class="sub">since start</span></h2><div class="bars" id="stat-classes"></div></section>
+          <section class="panel oq-card"><h2>Verdicts <span class="sub">since start</span></h2><div class="bars oq-bars" id="stat-verdicts"></div></section>
+          <section class="panel oq-card"><h2>Actions taken <span class="sub">since start</span></h2><div class="bars oq-bars" id="stat-actions"></div></section>
+          <section class="panel oq-card"><h2>Bot classes <span class="sub">since start</span></h2><div class="bars oq-bars" id="stat-classes"></div></section>
         </div>
-        <section class="panel"><h2>Detector firings <span class="sub">since start</span></h2><div class="bars cols wide" id="stat-detectors"></div></section>
+        <section class="panel oq-card"><h2>Detector firings <span class="sub">since start</span></h2><div class="bars cols wide" id="stat-detectors"></div></section>
       </div>
     </div>
 
@@ -1418,19 +1352,19 @@ export const DASHBOARD_MARKUP = String.raw`
       </div>
       <div class="stat-rows">
         <div class="stat-duo">
-          <section class="panel"><h2>Busiest paths <span class="sub win"></span></h2><div class="bars cols" id="stat-paths"></div></section>
-          <section class="panel"><h2>Denied paths <span class="sub win"></span></h2><div class="bars cols" id="stat-denied-paths"></div></section>
+          <section class="panel oq-card"><h2>Busiest paths <span class="sub win"></span></h2><div class="bars cols" id="stat-paths"></div></section>
+          <section class="panel oq-card"><h2>Denied paths <span class="sub win"></span></h2><div class="bars cols" id="stat-denied-paths"></div></section>
         </div>
         <div class="stat-trio">
-          <section class="panel">
+          <section class="panel oq-card">
             <h2>Rules that fired <span class="sub win"></span></h2>
-            <div class="bars" id="stat-rule-hits"></div>
+            <div class="bars oq-bars" id="stat-rule-hits"></div>
           </section>
-          <section class="panel">
+          <section class="panel oq-card">
             <h2>Guard stops by rule <span class="sub win"></span></h2>
-            <div class="bars" id="stat-guard"></div>
+            <div class="bars oq-bars" id="stat-guard"></div>
           </section>
-          <section class="panel" id="identities-panel"><h2>Identities seen <span class="sub win"></span></h2><div class="bars" id="stat-identities"></div></section>
+          <section class="panel oq-card" id="identities-panel"><h2>Identities seen <span class="sub win"></span></h2><div class="bars oq-bars" id="stat-identities"></div></section>
         </div>
       </div>
     </div>
@@ -1441,37 +1375,37 @@ export const DASHBOARD_MARKUP = String.raw`
         <p>Whether detection is running, what it costs, and how the window compares with its baseline.</p>
       </div>
       <div class="stat-flow">
-        <section class="panel">
+        <section class="panel oq-card">
           <h2>Health</h2>
           <div id="stat-health"></div>
         </section>
-        <section class="panel">
+        <section class="panel oq-card">
           <h2>Assessment latency <span class="sub">since start</span><button type="button" class="tabletoggle" data-table="latency-table">table view</button></h2>
           <div class="chart" id="latency-chart"><svg id="latency" role="img" aria-labelledby="latency-alt"></svg><div class="tip" id="latency-tip"></div></div>
           <p class="sr-only" id="latency-alt"></p>
           <div class="legend"><span id="latency-summary"></span></div>
           <div class="datatable" id="latency-table" hidden></div>
         </section>
-        <section class="panel">
+        <section class="panel oq-card">
           <h2>Challenges</h2>
           <div id="stat-challenges"></div>
         </section>
-        <section class="panel">
+        <section class="panel oq-card">
           <h2>Bypassed <span class="sub">detection never ran</span></h2>
-          <div class="bars" id="stat-bypassed"></div>
+          <div class="bars oq-bars" id="stat-bypassed"></div>
         </section>
-        <section class="panel" id="audit-panel">
+        <section class="panel oq-card" id="audit-panel">
           <h2>Audit <span class="sub" id="audit-spans"></span></h2>
           <div id="audit-body"></div>
         </section>
-        <section class="panel" id="audit-checks-panel">
+        <section class="panel oq-card" id="audit-checks-panel">
           <h2>Checks installed</h2>
           <div class="detectors" id="audit-checks"></div>
         </section>
       </div>
     </div>
 
-    <section class="panel detectors-panel">
+    <section class="panel detectors-panel oq-card">
       <h2>Installed detectors <span class="sub" id="detector-count"></span></h2>
       <div class="detectors detector-grid" id="stat-detector-list"></div>
     </section>
@@ -1480,31 +1414,31 @@ export const DASHBOARD_MARKUP = String.raw`
   <div id="view-policy" role="tabpanel" aria-labelledby="tab-policy" class="stack" hidden>
     <div class="policy-layout">
       <div class="stack policy-main">
-        <section class="panel" id="editor-panel">
+        <section class="panel oq-card" id="editor-panel">
           <h2>Rules <span class="sub" id="policy-mode"></span></h2>
           <div class="bar-actions">
             <div class="seg" id="editor-mode">
-              <button id="mode-gui" aria-pressed="true">Editor</button>
-              <button id="mode-json" aria-pressed="false">JSON</button>
+              <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="mode-gui" aria-pressed="true">Editor</button>
+              <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="mode-json" aria-pressed="false">JSON</button>
             </div>
-            <button id="policy-preview">Preview</button>
-            <button id="policy-apply" class="primary" hidden>Apply</button>
-            <button id="policy-revert">Revert</button>
+            <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="policy-preview">Preview</button>
+            <button id="policy-apply" class="primary oq-btn oq-sm" hidden>Apply</button>
+            <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="policy-revert">Revert</button>
             <span class="grow"></span>
-            <button id="policy-import">Import…</button>
-            <button id="policy-export">Export</button>
+            <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="policy-import">Import…</button>
+            <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="policy-export">Export</button>
             <span class="dirty" id="policy-dirty" hidden>unsaved</span>
           </div>
           <div id="editor-gui">
             <div class="rulelist" id="rulelist"></div>
             <div class="bar-actions">
-              <button id="rule-add">+ Add rule</button>
-              <button id="rule-expand">Expand all</button>
+              <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="rule-add">+ Add rule</button>
+              <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="rule-expand">Expand all</button>
               <span class="hint" id="policy-note"></span>
             </div>
           </div>
           <div class="editor" id="editor-json" hidden>
-            <textarea id="policy-json" spellcheck="false" autocomplete="off" aria-label="Policy rules as JSON"></textarea>
+            <textarea class="oq-textarea" id="policy-json" spellcheck="false" autocomplete="off" aria-label="Policy rules as JSON"></textarea>
           </div>
           <div class="bar-actions preset-row">
             <span class="preset-label" id="preset-label">Preview a shipped preset</span>
@@ -1521,12 +1455,12 @@ export const DASHBOARD_MARKUP = String.raw`
             <p>What no rule can go past, and which addresses are never judged at all.</p>
           </div>
           <div class="policy-pair">
-            <section class="panel" id="guard-panel">
+            <section class="panel oq-card" id="guard-panel">
               <h2>Guard <span class="sub" id="guard-mode"></span></h2>
               <div id="stat-policy"></div>
               <div class="note" id="guard-note"></div>
             </section>
-            <section class="panel" id="ranges-panel">
+            <section class="panel oq-card" id="ranges-panel">
               <h2>Range sets <span class="sub" id="ranges-mode"></span></h2>
               <div id="ranges-body"></div>
               <div class="note aside" id="ranges-note"></div>
@@ -1536,11 +1470,11 @@ export const DASHBOARD_MARKUP = String.raw`
       </div>
 
       <div class="stack policy-side">
-        <section class="panel" id="notices-panel">
+        <section class="panel oq-card" id="notices-panel">
           <h2 id="notices-title">Notices <span class="sub" id="notice-count"></span></h2>
           <div id="stat-notices" tabindex="0" role="region" aria-labelledby="notices-title"></div>
         </section>
-        <section class="panel" id="changes-panel">
+        <section class="panel oq-card" id="changes-panel">
           <h2>Changes <span class="sub" id="change-count"></span></h2>
           <div id="stat-changes"></div>
           <div class="note aside">What was applied to this process at runtime, and by whom when the dashboard's
@@ -1548,13 +1482,13 @@ export const DASHBOARD_MARKUP = String.raw`
                <code>policy-change</code>, <code>guard-change</code>, <code>range-change</code> and
                <code>actor-change</code> events.</div>
         </section>
-        <section class="panel" id="running-panel">
+        <section class="panel oq-card" id="running-panel">
           <h2>Running now</h2>
           <h3 class="panel-sub">Rules, first match wins</h3>
           <div id="stat-rules"></div>
           <div id="robots-panel">
             <h3 class="panel-sub">The robots.txt they imply</h3>
-            <div class="editor"><pre class="code" id="robots-preview"></pre><div id="robots-notes"></div></div>
+            <div class="editor"><pre class="code oq-pre" id="robots-preview"></pre><div id="robots-notes"></div></div>
           </div>
         </section>
       </div>
@@ -1563,29 +1497,29 @@ export const DASHBOARD_MARKUP = String.raw`
 
   <div id="view-challenge" role="tabpanel" aria-labelledby="tab-challenge" class="stack" hidden>
     <div class="challenge-layout">
-      <section class="panel" id="challenge-editor-panel">
+      <section class="panel oq-card" id="challenge-editor-panel">
         <h2>Challenge page <span class="sub" id="challenge-mode"></span></h2>
         <div class="note aside" id="challenge-status"></div>
         <form class="challenge-form" id="challenge-form" autocomplete="off"></form>
         <div class="bar-actions">
-          <button id="challenge-save" class="primary" hidden disabled>Save</button>
-          <button id="challenge-revert" disabled>Revert</button>
+          <button id="challenge-save" class="primary oq-btn oq-sm" hidden disabled>Save</button>
+          <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="challenge-revert" disabled>Revert</button>
           <span class="grow"></span>
-          <button id="challenge-reset" hidden>Reset to code</button>
+          <button class="oq-btn oq-btn--outline oq-neutral oq-sm" id="challenge-reset" hidden>Reset to code</button>
           <span class="dirty" id="challenge-dirty" hidden>unsaved</span>
         </div>
       </section>
-      <section class="panel" id="challenge-preview-panel" aria-labelledby="challenge-preview-title">
+      <section class="panel oq-card" id="challenge-preview-panel" aria-labelledby="challenge-preview-title">
         <h2 id="challenge-preview-title">Preview <span class="sub" id="challenge-preview-state">follows the form</span></h2>
         <div class="bar-actions">
           <label class="inline-label" for="challenge-lang">Language</label>
-          <select id="challenge-lang"></select>
+          <select class="oq-select oq-sm" id="challenge-lang"></select>
           <div class="seg" id="challenge-scheme" role="group" aria-label="Colour scheme">
-            <button data-scheme="light" aria-pressed="true">Light</button>
-            <button data-scheme="dark" aria-pressed="false">Dark</button>
+            <button class="oq-btn oq-btn--outline oq-neutral oq-sm" data-scheme="light" aria-pressed="true">Light</button>
+            <button class="oq-btn oq-btn--outline oq-neutral oq-sm" data-scheme="dark" aria-pressed="false">Dark</button>
           </div>
           <span class="grow"></span>
-          <button id="challenge-try" class="primary">Try the check</button>
+          <button id="challenge-try" class="primary oq-btn oq-sm">Try the check</button>
         </div>
         <div class="challenge-frame-wrap"><iframe id="challenge-frame" title="Challenge page preview"></iframe></div>
         <div class="challenge-outcome" id="challenge-outcome" role="status" aria-live="polite"></div>
@@ -1595,28 +1529,29 @@ export const DASHBOARD_MARKUP = String.raw`
 
   <div id="view-reference" role="tabpanel" aria-labelledby="tab-reference" class="stack" hidden>
     <div class="ref-layout">
-      <section class="panel ref-index-panel" aria-labelledby="ref-index-title">
+      <section class="panel ref-index-panel oq-card" aria-labelledby="ref-index-title">
         <h2 id="ref-index-title">Detectors and actions <span class="sub" id="ref-count"></span></h2>
-        <div class="ref-search"><input type="search" id="ref-filter" placeholder="Filter by name or what it does" aria-label="Filter detectors and actions" autocomplete="off" spellcheck="false"></div>
+        <div class="ref-search"><input class="oq-input oq-sm" type="search" id="ref-filter" placeholder="Filter by name or what it does" aria-label="Filter detectors and actions" autocomplete="off" spellcheck="false"></div>
         <nav id="ref-index" aria-label="Detectors and actions"></nav>
         <div class="note" id="ref-empty" hidden>Nothing matches that filter.</div>
       </section>
-      <article class="panel ref-article" id="ref-article"></article>
+      <article class="panel ref-article oq-card" id="ref-article"></article>
     </div>
   </div>
 </main>
 
-<div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="toasts oq-toasts" id="toasts" aria-live="polite"></div>
 `;
 
 const PAGE = String.raw`<!doctype html>
-<html lang="en">
+<html lang="en" class="oq" data-theme="auto">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>__TITLE__ · bot dashboard</title>
 <style nonce="__NONCE__">
+${UI_CSS}
 ${DASHBOARD_CSS}
 </style>
 </head>

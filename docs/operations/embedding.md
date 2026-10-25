@@ -177,40 +177,52 @@ whoever is reading; `sections` on the handler is what withholds data.
 
 ## Theming
 
+The dashboard's look comes from the [OSQD UI kit](https://www.npmjs.com/package/@osqd/ui)
+(`@osqd/ui`): its components, its type and spacing, and its seven themes — `light`, `dark`,
+`graphite`, `midnight`, `contrast`, `paper` and `slate` — plus `auto`, which follows the
+viewer's light or dark setting and is what you get by default. The kit's stylesheet is bundled
+into this package at build time, so there is still nothing to install and nothing fetched.
+
 ```js
 config = {
   theme: {
-    scheme: "light",              // or "dark"; omit to follow the page and the OS
+    scheme: "midnight",           // any of the seven, or "auto" (the default)
     density: "compact",           // or "comfortable"
     tokens: {
-      accent: "#7c3aed",
-      surface: "#ffffff",
-      ink: "#1a1a2e",
+      "--oq-primary": "#7c3aed",
+      "--oq-surface": "#ffffff",
     },
   },
 };
 ```
 
-Tokens are set on the host element and inherit into the shadow root, which is why every
-token block in the stylesheet is written `:root, :host` — `:root` matches nothing inside a
-shadow tree, and an element styled only against it renders with no colours at all.
+Tokens are set on the host element and inherit into the shadow root. The kit's palette is
+declared on `:root` and on `:host` (with `:host([data-theme=…])` for each theme), so the same
+stylesheet themes the page and the element alike.
 
 `scheme` and `density` are also attributes, if a template is easier than a script:
 
 ```html
-<bot-dashboard src="/_bots" scheme="dark" density="compact"></bot-dashboard>
+<bot-dashboard src="/_bots" scheme="paper" density="compact"></bot-dashboard>
 ```
 
-Either way they take the two values above and nothing else; anything else is ignored and
-says so in the console once, rather than being written onto the element where it would
-match no rule and look like a dashboard disregarding its configuration. A token dropped
-from `tokens` on a later render is removed from the element, so switching themes gives you
-the new theme rather than the union of every theme you have set.
+Either way they take the values above and nothing else; anything else is ignored and says so
+in the console once, rather than being written onto the element where it would match no rule
+and look like a dashboard disregarding its configuration. A token dropped from `tokens` on a
+later render is removed from the element, so switching themes gives you the new theme rather
+than the union of every theme you have set.
 
-**One caution.** The shipped palette was measured: every ink is at least 4.5:1 on its
-surface, and the two series colours clear every colour-vision gate as an adjacent pair.
-Replace a token and that measurement is yours to redo. The dashboard is a page people read
-all day, sometimes during an incident.
+**The page's own token names are deprecated as an override surface.** `--page`, `--surface`,
+`--ink`, `--muted`, `--line`, `--s1`, `--s2`, `--accent` and the rest still exist — they are
+now aliases of the kit's `--oq-*` tokens, so overriding one still works for this minor
+release — but set the kit's tokens instead: `--oq-bg`, `--oq-surface`, `--oq-text`,
+`--oq-text-faint`, `--oq-border`, `--oq-series-1`, `--oq-series-2`, `--oq-primary`, and so on.
+The old names will be removed in a later release.
+
+**One caution.** Every kit theme was measured: body text at 7:1, muted and faint text and
+every status colour at 4.5:1 on every layer, and the chart series checked for colour-vision
+separation. Replace a token and that measurement is yours to redo. The dashboard is a page
+people read all day, sometimes during an incident.
 
 ---
 
@@ -267,7 +279,7 @@ fails: no violations, and nothing rendered differently.
 
 ## Accessibility
 
-Audited with axe inside a host page, in both themes and at phone width, on every release —
+Audited with axe inside a host page, in the light and dark themes and at phone width, on every release —
 the same bar the standalone page is held to.
 
 Three things only go wrong once the dashboard is a section of somebody else's page rather
@@ -350,7 +362,7 @@ the console says which of these it was:
 | "panel `x` asks for screen `y`, which this dashboard does not have" | A typo in `screen`; the message lists the screens that exist. |
 | "two panels share the id `x`" | Ids identify a panel. The second was ignored. |
 | "`tabs` and `panels` are read once" | They are settled at mount. `theme` is the one that updates live. |
-| "scheme `x` is not `light` or `dark`" | Likewise `density`, which takes `comfortable` or `compact`. |
+| "scheme `x` is not one of auto, light, dark, …" | `scheme` takes one of the UI kit's seven themes or `auto`. Likewise `density`, which takes `comfortable` or `compact`. |
 | "src `…` has a query string on it" | The element asks for `<src>/api/bootstrap`, so only the path can mean anything. It used the path. |
 | "this page is framed by another origin" | Clickjacking risk your page must close itself — see [above](#what-running-it-in-your-page-costs-you). |
 | "this element is … and the handler at … is …" | Version skew. See below. |

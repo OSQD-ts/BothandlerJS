@@ -12,18 +12,22 @@ export function drawBars(target: HTMLElement, rows: Iterable<[string, number]>, 
   filtered.sort((a, b) => b[1] - a[1]);
   const max = filtered[0]?.[1] ?? 1;
   for (const [label, value] of filtered.slice(0, 14)) {
-    const bar = el("div", "bar");
-    const track = el("div", "track");
-    const fill = el("div", "fill");
-    fill.style.width = `${Math.max(2, Math.round((value / max) * 100))}%`;
-    track.appendChild(fill);
-    const name = el("div", "lbl");
+    // The UI kit's ranked bar list: the container carries `oq-bars`, each row is label,
+    // track and count. The bar's length is a custom property set through the CSSOM, which
+    // the page's CSP allows where a style attribute would not be.
+    const bar = el("div", "bar oq-bars__item");
+    const name = el("span", "oq-bars__label");
     // A link when the label names something the Reference screen explains.
     if (link === undefined) name.textContent = label;
     else name.appendChild(link(label));
-    track.appendChild(name);
+    name.title = label;
+    const track = el("span", "oq-bars__track");
+    const fill = el("span", "oq-bars__bar");
+    fill.style.setProperty("--value", `${Math.max(2, Math.round((value / max) * 100))}%`);
+    track.appendChild(fill);
+    bar.appendChild(name);
     bar.appendChild(track);
-    bar.appendChild(el("div", "v tnum", n(value)));
+    bar.appendChild(el("span", "oq-bars__value tnum", n(value)));
     target.appendChild(bar);
   }
 }

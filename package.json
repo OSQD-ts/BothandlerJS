@@ -114,6 +114,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.0",
     "@osqd/jql": "^0.1.2",
+    "@osqd/ui": "^0.5.0",
     "@types/express": "^5.0.6",
     "@types/node": "^26.3.0",
     "@vitest/coverage-v8": "^4.1.11",

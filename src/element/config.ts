@@ -58,8 +58,11 @@ export interface BotDashboardTheme {
    * guarantees the built-in palette was measured against are yours to keep once you do.
    */
   tokens?: Record<string, string>;
-  /** Force a scheme instead of following the host page and the OS. */
-  scheme?: "light" | "dark";
+  /**
+   * One of the OSQD UI kit's themes instead of following the OS. "auto" (the default) follows
+   * the viewer's light or dark setting; "light" and "dark" are two of the seven.
+   */
+  scheme?: "auto" | "light" | "dark" | "graphite" | "midnight" | "contrast" | "paper" | "slate";
   /** `compact` tightens the row and panel padding. */
   density?: "comfortable" | "compact";
 }

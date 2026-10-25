@@ -109,6 +109,62 @@ async function open(width = 1440, hash = "", settled = ""): Promise<Page> {
   return page;
 }
 
+/**
+ * What the two dashboards agreed on: the look both take from the OSQD UI kit, read off the page
+ * as the browser computes it. Adapted from hackerpot, whose suite holds its own dashboard to the
+ * same values: a rule that stops applying — a kit class dropped, a selector renamed, a token
+ * overridden — fails here in either repository rather than being noticed in a screenshot.
+ * The values are the kit's dark theme.
+ */
+const CONTRACT: ReadonlyArray<readonly [label: string, selector: string, property: string, expected: string]> = [
+  ["body type", "body", "fontFamily", 'Inter, "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif'],
+  ["body line height", "body", "lineHeight", "20.3px"],
+  ["page background", "body", "backgroundColor", "rgb(34, 31, 34)"],
+  ["panel surface", ".feed-panel", "backgroundColor", "rgb(45, 42, 46)"],
+  ["panel border", ".feed-panel", "borderTopColor", "rgb(64, 62, 65)"],
+  ["panel radius", ".feed-panel", "borderRadius", "8px"],
+  ["panel heading", ".feed-panel > h2", "fontSize", "11px"],
+  ["panel heading weight", ".feed-panel > h2", "fontWeight", "600"],
+  ["toolbar padding", ".feed-panel .toolbar", "paddingLeft", "15px"],
+  ["toolbar gap", ".feed-panel .toolbar", "gap", "8px"],
+  ["button size", "#feed-export", "fontSize", "13px"],
+  ["button radius", "#feed-export", "borderRadius", "5px"],
+  ["chip shape", "#filters button", "borderRadius", "999px"],
+  ["chip size", "#filters button", "fontSize", "13px"],
+  ["search field", "#search", "fontSize", "13px"],
+  ["tile value", "#tiles .tile .v", "fontSize", "18px"],
+  ["tile label", "#tiles .tile .k", "fontSize", "11px"],
+  ["table header", ".feed-panel thead th", "paddingLeft", "12px"],
+  ["bar row type", "#live-detectors .bar", "fontSize", "13px"],
+  ["bars gap", "#live-detectors", "gap", "6px 12px"],
+];
+
+describe("the shared look", () => {
+  // Engines serialise the same computed style differently: WebKit drops the quotes around a font
+  // name and prints 20.299999px for 20.3px. Those are the same value, so compare them as one.
+  const normalised = (value: string) => value.replace(/"/g, "").replace(/(\d+\.\d+)px/g, (_, n: string) => `${Number(Number(n).toFixed(2))}px`);
+
+  it("keeps the shared visual contract", async () => {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: "dark" });
+    await page.goto(url);
+    await page.waitForSelector("tbody tr.row");
+    await page.waitForSelector("#live-detectors .bar");
+    const wrong: string[] = [];
+    for (const [label, selector, property, expected] of CONTRACT) {
+      const actual = await page.evaluate(
+        ({ selector, property }) => {
+          const node = document.querySelector(selector);
+          return node === null ? null : ((getComputedStyle(node) as unknown as Record<string, string>)[property] ?? null);
+        },
+        { selector, property },
+      );
+      if (actual === null || normalised(actual) !== normalised(expected)) wrong.push(`${label} (${selector} ${property}): ${actual ?? "no such element"} — expected ${expected}`);
+    }
+    expect(wrong).toEqual([]);
+    await page.close();
+  });
+});
+
 describe("moving between views", () => {
   it("switches with the arrow keys, which is what its tablist role promises", async () => {
     const page = await open();
@@ -574,20 +630,44 @@ describe("the toolbar", () => {
   it("switches theme and remembers it across a reload", async () => {
     const page = await open();
     const themeOf = () => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
-    const first = await themeOf();
-    await page.locator("#theme").click();
-    const second = await themeOf();
-    expect(second, "the toggle actually moves").not.toBe(first);
-    expect(["light", "dark"]).toContain(second);
-    // Named for where it goes next, so the label is never a guess about which way it switches.
-    expect(await page.locator("#theme").textContent()).toBe(second === "dark" ? "Light" : "Dark");
-    expect(await page.locator("#theme").getAttribute("aria-label")).toBe(`Switch to the ${second === "dark" ? "light" : "dark"} colour scheme`);
+    // Follows the system until somebody picks: "auto" is the UI kit's light-or-dark-by-OS theme.
+    expect(await themeOf()).toBe("auto");
+    expect(await page.locator("#theme").inputValue()).toBe("auto");
+    // Every one of the kit's themes is offered, with its name on it.
+    expect(await page.locator("#theme option").evaluateAll((options) => options.map((o) => (o as HTMLOptionElement).value))).toEqual([
+      "auto",
+      "light",
+      "dark",
+      "graphite",
+      "midnight",
+      "contrast",
+      "paper",
+      "slate",
+    ]);
+    expect(await page.locator("#theme").getAttribute("aria-label")).toBe("Colour theme");
+
+    await page.locator("#theme").selectOption("midnight");
+    expect(await themeOf()).toBe("midnight");
+    const page2bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    await page.locator("#theme").selectOption("paper");
+    expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "the page actually changes").not.toBe(page2bg);
 
     // Kept in this browser, because it is a preference belonging to whoever is reading
     // rather than a fact about the server.
     await page.reload();
     await page.waitForSelector("tbody tr.row");
-    expect(await themeOf()).toBe(second);
+    expect(await themeOf()).toBe("paper");
+    expect(await page.locator("#theme").inputValue()).toBe("paper");
+    await page.close();
+  });
+
+  it("still honours a scheme stored by the old light/dark toggle", async () => {
+    const page = await open();
+    await page.evaluate(() => localStorage.setItem("bothandler-dashboard-theme", "dark"));
+    await page.reload();
+    await page.waitForSelector("tbody tr.row");
+    expect(await page.evaluate(() => document.documentElement.getAttribute("data-theme"))).toBe("dark");
+    await page.evaluate(() => localStorage.removeItem("bothandler-dashboard-theme"));
     await page.close();
   });
 
@@ -3571,8 +3651,10 @@ describe("accessibility", () => {
   }
 
   /** Opens a page in a theme, lands it on a view, and puts the view in its busiest state. */
-  async function openFor(scheme: "light" | "dark", width: number, hash: string): Promise<Page> {
+  async function openFor(scheme: "light" | "dark", width: number, hash: string, theme?: string): Promise<Page> {
     const page = await browser.newPage({ viewport: { width, height: 950 }, colorScheme: scheme });
+    // A UI kit theme other than the system's light or dark, picked the way a reader picks one.
+    if (theme !== undefined) await page.addInitScript((name) => localStorage.setItem("bothandler-dashboard-theme", name), theme);
     await page.goto(url.replace(/\/$/, "/") + hash);
     if (hash === "") {
       await page.waitForSelector("tbody tr.row");
@@ -3603,6 +3685,19 @@ describe("accessibility", () => {
     for (const [name, hash] of screens) {
       it(`has nothing to report on ${name}, in ${scheme}`, async () => {
         const page = await openFor(scheme, 1440, hash);
+        expect(await audit(page)).toBe("");
+        await page.close();
+      });
+    }
+  }
+
+  // The kit's other themes are held to the same contrast rules as light and dark by the kit's
+  // own tests; these check the page's own colours (the tints, the mixed inks) on top of them.
+  for (const theme of ["contrast", "midnight", "paper"] as const) {
+    for (const [name, hash] of [screens[0], screens[3]] as Array<[string, string]>) {
+      it(`has nothing to report on ${name}, in the ${theme} theme`, async () => {
+        const page = await openFor(theme === "paper" ? "light" : "dark", 1440, hash, theme);
+        expect(await page.evaluate(() => document.documentElement.getAttribute("data-theme"))).toBe(theme);
         expect(await audit(page)).toBe("");
         await page.close();
       });
@@ -3664,7 +3759,14 @@ describe("accessibility", () => {
           }) as [number, number, number];
           return 0.2126 * r + 0.7152 * g + 0.0722 * b;
         };
-        const parse = (value: string): number[] => (value.match(/[\d.]+/g) ?? ["0", "0", "0", "1"]).map(Number);
+        // rgb()/rgba() as 0–255, and the `color(srgb r g b / a)` a color-mix() in srgb computes to,
+        // whose channels are 0–1: read as 0–255 they made every mixed ink look nearly black.
+        const parse = (value: string): number[] => {
+          const numbers = (value.match(/[\d.]+/g) ?? ["0", "0", "0", "1"]).map(Number);
+          if (!value.startsWith("color(srgb")) return numbers;
+          const [r = 0, g = 0, b = 0, a = 1] = numbers;
+          return [r * 255, g * 255, b * 255, a];
+        };
         const over = (fg: number[], bg: number[]): number[] => {
           const alpha = fg[3] ?? 1;
           return [0, 1, 2].map((i) => (fg[i] ?? 0) * alpha + (bg[i] ?? 0) * (1 - alpha));

@@ -13,7 +13,7 @@ import { app, download, today, toast } from "./app.js";
 import { clockDate, clockStamp, clockTime, feedCountLabel, n } from "./format.js";
 import { corpusCase, replayFile, replayLine } from "./replay.js";
 import { openActor } from "./actor.js";
-import { outcome, verdictBadge } from "./outcome.js";
+import { BADGE_CHIP, TIER_CHIP, outcome, verdictBadge } from "./outcome.js";
 import { draftIntoEditor } from "./policy.js";
 import type { FilterName } from "./query.js";
 import type { DashboardEntry } from "./types.js";
@@ -842,7 +842,7 @@ function groupHeading(key: string, count: number, collapsed: boolean): HTMLTable
   const cached = headings.get(key);
   if (cached !== undefined && cached.count === count && cached.label === label && cached.collapsed === collapsed) return cached.node;
 
-  const row = el("tr", `grp${collapsed ? " rolled" : ""}`);
+  const row = el("tr", `grp oq-table__group${collapsed ? " rolled" : ""}`);
   const cell = el("th");
   cell.colSpan = 6;
   cell.scope = "colgroup";
@@ -941,7 +941,7 @@ function buildRow(entry: DashboardEntry, open: boolean): HTMLTableRowElement {
 
   const verdictCell = el("td");
   const [badgeClass, badgeLabel] = verdictBadge(entry);
-  verdictCell.appendChild(el("span", `badge ${badgeClass}`, badgeLabel));
+  verdictCell.appendChild(el("span", `badge ${badgeClass} ${BADGE_CHIP[badgeClass] ?? ""}`, badgeLabel));
   if (entry.identity !== undefined) verdictCell.appendChild(el("span", "sub", entry.identity));
   tr.appendChild(verdictCell);
 
@@ -984,7 +984,7 @@ function buildRow(entry: DashboardEntry, open: boolean): HTMLTableRowElement {
 }
 
 function buildDetail(entry: DashboardEntry): HTMLTableRowElement {
-  const tr = el("tr", "detail");
+  const tr = el("tr", "detail oq-table__detail");
   const cell = el("td");
   cell.colSpan = 6;
 
@@ -1021,7 +1021,7 @@ function buildDetail(entry: DashboardEntry): HTMLTableRowElement {
     const list = el("div", "ev");
     for (const item of entry.evidence) {
       const row = el("div", `ev-item${item.direction === "human" ? " human" : ""}${item.shadow === true ? " shadow" : ""}`);
-      row.appendChild(el("div", `tier t-${item.certainty}`, item.certainty));
+      row.appendChild(el("div", `tier t-${item.certainty} ${TIER_CHIP[item.certainty] ?? ""}`, item.certainty));
       const body = el("div");
       body.appendChild(el("div", null, item.summary));
       let meta = ` · points to ${item.direction}`;

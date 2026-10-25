@@ -28,6 +28,24 @@ export function actionKind(action: string | undefined): Outcome {
   return "allow";
 }
 
+/**
+ * The UI kit's chip for each verdict badge and evidence tier. Proof is a solid chip, suspicion a
+ * dashed one, so the difference the whole library is built on survives a colour-blind reader
+ * and a greyscale print — colour is never the only thing that says it.
+ */
+export const BADGE_CHIP: Readonly<Record<string, string>> = {
+  "b-proven": "oq-chip oq-sm oq-chip--proven oq-secondary",
+  "b-suspected": "oq-chip oq-sm oq-chip--suspected oq-warning",
+  "b-human": "oq-chip oq-sm oq-success",
+  "b-unknown": "oq-chip oq-sm oq-neutral",
+};
+export const TIER_CHIP: Readonly<Record<string, string>> = {
+  certain: "oq-chip oq-chip--square oq-chip--proven oq-secondary",
+  strong: "oq-chip oq-chip--square oq-danger",
+  moderate: "oq-chip oq-chip--square oq-chip--suspected oq-warning",
+  weak: "oq-chip oq-chip--square oq-neutral",
+};
+
 /** The verdict badge: its class, and the word on it. */
 export function verdictBadge(entry: Pick<DashboardEntry, "verdict" | "bypass">): [className: string, label: string] {
   if (entry.verdict === "verified-bot" || entry.verdict === "confirmed-bot") return ["b-proven", entry.verdict];

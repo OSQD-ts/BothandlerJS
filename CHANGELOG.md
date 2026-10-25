@@ -6,6 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The dashboard is built from the OSQD UI kit (`@osqd/ui`).** Its stylesheet is read from the
+  kit at build time (a devDependency, like `@osqd/jql`) and stamped ahead of the page's own rules
+  in the same nonced `<style>`, so the CSP, the zero-runtime-dependency rule and the offline page
+  are unchanged. Panels are the kit's cards, the counters its stat tiles, the bar lists its ranked
+  bars, verdict badges and evidence tiers its chips — proof solid, suspicion dashed — and tables,
+  buttons, fields, tabs and toasts its own. hackerpot's dashboard takes the same look, and both
+  browser suites hold it to one computed-style contract.
+- **Seven themes instead of two.** The theme button is a picker: `auto` (the default, following
+  the system's light or dark setting), `light`, `dark`, `graphite`, `midnight`, `contrast`,
+  `paper` and `slate`. A choice stored by the old toggle still applies. `<bot-dashboard>`'s
+  `scheme` takes the same names.
+
+### Deprecated
+
+- **The page's own colour tokens as an override surface** (`--page`, `--surface`, `--ink`,
+  `--muted`, `--line`, `--s1`, `--s2`, `--accent`, …). They still work in this release — they are
+  aliases of the kit's `--oq-*` tokens now — but set the kit's tokens instead; see
+  [embedding](docs/operations/embedding.md#theming). The old names will be removed in a later
+  release.
+
 ### Added
 
 - **Every chart on the Statistics screen has a table view.** Traffic, score distribution and

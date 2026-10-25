@@ -97,10 +97,10 @@ export function drawTiles(force = false): void {
     // A real button where it navigates, so it is in the tab order, answers Enter and
     // Space, and is announced as something to press — none of which a div with a click
     // handler gets, and all of which somebody expects from a thing that moves the page.
-    const tile = goes === undefined ? el("div", `tile ${kind}`) : el("button", `tile ${kind} go`);
-    tile.appendChild(el("div", "v tnum", value));
-    tile.appendChild(el("div", "k", key));
-    tile.appendChild(el("div", "s", sub));
+    const tile = goes === undefined ? el("div", `tile oq-stat ${kind}`) : el("button", `tile oq-stat ${kind} go`);
+    tile.appendChild(el("div", "v oq-stat__value tnum", value));
+    tile.appendChild(el("div", "k oq-stat__label", key));
+    tile.appendChild(el("div", "s oq-stat__delta", sub));
     if (goes !== undefined) {
       (tile as HTMLButtonElement).type = "button";
       // Appended rather than an `aria-label`, which would replace the count and the

@@ -2,7 +2,7 @@ import { $, byId, clear, el } from "./dom.js";
 import { referenceLink } from "./reference.js";
 import { SECTIONS } from "./boot.js";
 import { ms } from "./format.js";
-import { outcome, verdictBadge } from "./outcome.js";
+import { BADGE_CHIP, TIER_CHIP, outcome, verdictBadge } from "./outcome.js";
 import { postJson } from "./api.js";
 import { toast } from "./app.js";
 import type { DashboardEntry } from "./types.js";
@@ -69,7 +69,7 @@ async function run(): Promise<void> {
 
   const head = el("div");
   const [badgeClass, badgeLabel] = verdictBadge(entry);
-  head.appendChild(el("span", `badge ${badgeClass}`, badgeLabel));
+  head.appendChild(el("span", `badge ${badgeClass} ${BADGE_CHIP[badgeClass] ?? ""}`, badgeLabel));
   head.appendChild(document.createTextNode(" "));
   head.appendChild(el("b", null, entry.action ?? "no decision"));
   if (entry.rule !== undefined) head.appendChild(el("span", "ev-meta", ` via ${entry.rule}`));
@@ -87,7 +87,7 @@ async function run(): Promise<void> {
     const list = el("div", "ev");
     for (const item of entry.evidence) {
       const row = el("div", `ev-item${item.direction === "human" ? " human" : ""}`);
-      row.appendChild(el("div", `tier t-${item.certainty}`, item.certainty));
+      row.appendChild(el("div", `tier t-${item.certainty} ${TIER_CHIP[item.certainty] ?? ""}`, item.certainty));
       const detail = el("div");
       detail.appendChild(el("div", null, item.summary));
       const meta = el("div", "ev-meta");

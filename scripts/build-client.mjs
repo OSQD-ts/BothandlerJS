@@ -21,10 +21,12 @@ import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { buildReference } from "./build-reference.mjs";
+import { buildUiCss } from "./build-ui-css.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const target = join(root, "src", "dashboard", "client.generated.ts");
 const referenceTarget = join(root, "src", "dashboard", "client", "reference.generated.ts");
+const uiCssTarget = join(root, "src", "dashboard", "ui-css.generated.ts");
 
 /**
  * Sequences that would end the `<script>` element early, or open a comment the HTML
@@ -147,6 +149,7 @@ const reference = await buildReference(root);
 const outputs = [
   [referenceTarget, reference, "reference data", "src/dashboard/client/reference.generated.ts", true],
   [target, await buildClient(reference), "dashboard client bundle", "src/dashboard/client.generated.ts", true],
+  [uiCssTarget, await buildUiCss(root), "UI kit stylesheet", "src/dashboard/ui-css.generated.ts", true],
   [versionTarget, await buildVersion(), "version constant", "src/version.generated.ts", false],
 ];
 

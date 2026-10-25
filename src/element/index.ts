@@ -33,6 +33,7 @@ import { cellText, explainStatus, parseMount, resolveSections, resolveView, shap
 import type { BotDashboardConfig, BotDashboardPanel, BotDashboardRows, BotDashboardTab, BotDashboardTabId, BotDashboardTheme } from "./config.js";
 import { VERSION } from "../version.generated.js";
 import { DASHBOARD_CSS, DASHBOARD_MARKUP } from "../dashboard/page.js";
+import { UI_CSS } from "../dashboard/ui-css.generated.js";
 
 /** One screen of the dashboard. */
 export type { BotDashboardConfig, BotDashboardPanel, BotDashboardRows, BotDashboardTab, BotDashboardTabId, BotDashboardTheme };
@@ -436,7 +437,8 @@ export class BotDashboardElement extends ElementBase {
     adoptStyles(shadow);
 
     const frame = document.createElement("div");
-    frame.className = "bd-root";
+    // `oq` scopes the UI kit inside the shadow root; its colours come from the host's data-theme.
+    frame.className = "bd-root oq";
     // The markup is this package's own, built from a template literal in `page.ts` and
     // containing no interpolation of anything a request supplied. It is the one place the
     // no-innerHTML rule does not apply, and a test asserts that rather than trusting it.
@@ -537,21 +539,28 @@ export class BotDashboardElement extends ElementBase {
   }
 
   /**
-   * `scheme` and `density` take two values each, and until now anything else was accepted
-   * in silence — a mis-typed `scheme` did nothing, and a mis-typed `density` was written
-   * onto the element as `data-density="cozy"`, matching no rule and looking, from the
-   * outside, exactly like a dashboard that ignores its configuration.
+   * `scheme` takes a UI kit theme name (or "auto", which follows the viewer's light or dark
+   * setting); `density` takes two values. Anything else used to be accepted in silence — a
+   * mis-typed `scheme` did nothing, and a mis-typed `density` was written onto the element as
+   * `data-density="cozy"`, matching no rule and looking, from the outside, exactly like a
+   * dashboard that ignores its configuration.
+   *
+   * Left unset, the host carries `data-theme="auto"`, which is what it always did: follow the
+   * viewer's own setting.
    *
    * Warned once per bad value per element, because `applyTheme` runs on every re-render
    * and a typo that repeats a hundred times is a typo the console has stopped conveying.
    */
   private applyScheme(value: string | null | undefined): void {
-    if (value === null || value === undefined) return;
-    if (value === "light" || value === "dark") {
+    if (value === null || value === undefined) {
+      if (!this.hasAttribute("data-theme")) this.setAttribute("data-theme", "auto");
+      return;
+    }
+    if (SCHEMES.includes(value)) {
       this.setAttribute("data-theme", value);
       return;
     }
-    this.warnOnce(`bot-dashboard: scheme "${value}" is not "light" or "dark", so it was ignored. Leave it unset to follow the viewer's own setting.`);
+    this.warnOnce(`bot-dashboard: scheme "${value}" is not one of ${SCHEMES.join(", ")}, so it was ignored. Leave it unset to follow the viewer's own setting.`);
   }
 
   private applyDensity(value: string | null | undefined): void {
@@ -732,11 +741,14 @@ export class BotDashboardElement extends ElementBase {
  */
 let sheet: CSSStyleSheet | undefined;
 
+/** The UI kit's themes a `scheme` may name, and "auto". */
+const SCHEMES: readonly string[] = ["auto", "light", "dark", "graphite", "midnight", "contrast", "paper", "slate"];
+
 function adoptStyles(shadow: ShadowRoot): void {
   if (typeof CSSStyleSheet !== "undefined" && "replaceSync" in CSSStyleSheet.prototype && "adoptedStyleSheets" in shadow) {
     if (sheet === undefined) {
       sheet = new CSSStyleSheet();
-      sheet.replaceSync(`${DASHBOARD_CSS}\n${EXTRA_CSS}`);
+      sheet.replaceSync(`${UI_CSS}\n${DASHBOARD_CSS}\n${EXTRA_CSS}`);
     }
     shadow.adoptedStyleSheets = [...shadow.adoptedStyleSheets, sheet];
     return;
@@ -744,7 +756,7 @@ function adoptStyles(shadow: ShadowRoot): void {
   // Older engines without constructable stylesheets. Blocked by a strict style-src, which
   // is the trade those browsers get rather than no dashboard at all.
   const style = document.createElement("style");
-  style.textContent = `${DASHBOARD_CSS}\n${EXTRA_CSS}`;
+  style.textContent = `${UI_CSS}\n${DASHBOARD_CSS}\n${EXTRA_CSS}`;
   shadow.append(style);
 }
 

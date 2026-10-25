@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { defineConfig } from "tsup";
 import type { Plugin } from "esbuild";
@@ -25,6 +25,29 @@ const jqlMapsWithoutSources: Plugin = {
     });
   },
 };
+
+// The generated modules — the dashboard's bundled client and the UI kit's stylesheet, each one
+// JSON string of a few hundred kilobytes — are embedded whole in every map that bundles the
+// dashboard, and a map's copy of them helps nobody: there is nothing in a string literal to
+// step through, and the real sources are `src/dashboard/client/` and `@osqd/ui`. Leaving their
+// text out of the maps (the mappings stay) is what keeps the tarball under the 4 MB CI holds it
+// to now that the kit's stylesheet is one of them. Each map's other sources are untouched.
+async function generatedSourcesOutOfMaps(): Promise<void> {
+  for (const file of await readdir("dist", { recursive: true })) {
+    if (!file.endsWith(".map")) continue;
+    const path = join("dist", file);
+    const map = JSON.parse(await readFile(path, "utf8")) as { sources?: string[]; sourcesContent?: Array<string | null> };
+    if (map.sources === undefined || map.sourcesContent === undefined) continue;
+    let changed = false;
+    map.sources.forEach((source, index) => {
+      if (source.endsWith(".generated.ts") && map.sourcesContent?.[index] !== null) {
+        (map.sourcesContent as Array<string | null>)[index] = null;
+        changed = true;
+      }
+    });
+    if (changed) await writeFile(path, JSON.stringify(map));
+  }
+}
 
 // Five entries, five import paths. `adapters` and `client` are split out of the main
 // bundle on purpose: an edge deployment that imports only the Fetch adapter should
@@ -54,4 +77,5 @@ export default defineConfig({
   splitting: false,
   clean: true,
   esbuildPlugins: [jqlMapsWithoutSources],
+  onSuccess: generatedSourcesOutOfMaps,
 });

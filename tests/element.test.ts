@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { DASHBOARD_CSS, DASHBOARD_MARKUP, bootFor } from "../src/dashboard/page.js";
+import { UI_CSS } from "../src/dashboard/ui-css.generated.js";
 import { cellText, explainStatus, parseMount, resolveSections, resolveView, shapeOf } from "../src/element/config.js";
 import { VERSION } from "../src/version.generated.js";
 
@@ -15,10 +16,13 @@ describe("the shared stylesheet and markup", () => {
   it("defines its tokens against a shadow host as well as a document", () => {
     // `:root` matches the document element and matches *nothing* inside a shadow tree, so
     // an element styled only against :root renders unthemed — no surface, no ink, no
-    // accent. Every token block has to name :host too.
+    // accent. Every token block has to name :host too: the page's own aliases, and the
+    // UI kit's palette under each of its themes.
     expect(DASHBOARD_CSS).toContain(":root, :host {");
-    expect(DASHBOARD_CSS).toContain(':host([data-theme="dark"])');
-    expect(DASHBOARD_CSS).toContain(':host(:not([data-theme="light"]))');
+    expect(UI_CSS).toContain(":root,:host,");
+    for (const theme of ["light", "dark", "graphite", "midnight", "contrast", "paper", "slate", "auto"]) {
+      expect(UI_CSS, theme).toContain(`:host([data-theme="${theme}"])`);
+    }
   });
 
   it("carries the whole page's markup, and only the title as a placeholder", () => {

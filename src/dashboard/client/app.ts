@@ -40,10 +40,15 @@ export const app: App = {
  * exporter and the stream all raise them now, and three copies of a six-line function
  * is how they end up looking different from each other.
  */
+const TOAST_INTENT = { ok: "oq-success", bad: "oq-danger", warn: "oq-warning" } as const;
+
 export function toast(kind: "ok" | "bad" | "warn", title: string, detail = ""): void {
-  const node = el("div", `toast ${kind}`);
-  node.appendChild(el("b", null, title));
-  if (detail !== "") node.appendChild(el("span", null, detail));
+  // The UI kit's toast: an intent class colours its edge, title above the detail.
+  const node = el("div", `toast oq-toast ${kind} ${TOAST_INTENT[kind]}`);
+  const body = el("div", "oq-toast__body");
+  body.appendChild(el("b", "oq-toast__title", title));
+  if (detail !== "") body.appendChild(el("span", "oq-toast__message", detail));
+  node.appendChild(body);
   const host = rootNode().querySelector<HTMLElement>("#toasts");
   if (host === null) return;
   host.appendChild(node);
